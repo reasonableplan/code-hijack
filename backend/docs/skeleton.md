@@ -47,13 +47,76 @@
 
 ### MVP 범위 (/plan-ceo-review 반영 — 범위 축소)
 
-| 항목 | MVP (Phase 1) | Phase 2 |
-|------|--------------|---------|
-| 카테고리 | architecture, coding_style, api_design | 나머지 7개 |
-| 적용력 강화 | ✅/❌ 예시, 참조 파일, 체크리스트 | 안티패턴, 신뢰도, 우선순위, 파일유형별 |
-| 출력 | CLAUDE.md + system-prompt.md | conventions, architecture, checklist 등 |
-| 인터페이스 | Claude Code Skill | CLI (API 호출) |
-| 세션 | 단일 세션 | 세션 관리, diff, 통합 |
+| 항목 | MVP (Phase 1) | Phase 1.5 (layer 축) | Phase 2 |
+|------|--------------|---------------------|---------|
+| 카테고리 (aspect) | architecture, coding_style, api_design | 동일 | 나머지 7개 |
+| 레이어 (layer) | 없음 (혼합 출력) | **frontend / backend / db / devops / shared** | — |
+| 적용력 강화 | ✅/❌ 예시, 참조 파일, 체크리스트 | + 레이어별 스코프 | 안티패턴, 신뢰도, 우선순위, 파일유형별 |
+| 출력 | CLAUDE.md + system-prompt.md | **레이어별 파일 분리** (frontend.md, backend.md 등) | conventions, architecture, checklist 등 |
+| 인터페이스 | Claude Code Skill | 동일 | CLI (API 호출) |
+| 세션 | 단일 세션 | 단일 세션 | 세션 관리, diff, 통합 |
+
+### Phase 1.5 — 레이어 축 도입 (결정됨)
+
+**문제**: Phase 1 MVP는 aspect 축(architecture/coding_style/api_design)만 있음. 프론트/백엔드/DB 규칙이 한 CLAUDE.md에 뒤섞여서 AI가 프론트 파일 수정할 때 DB 규칙까지 로드. 또한 일부 규칙은 특정 레이어 전용(예: `.data` 래퍼 = 프론트, 마이그레이션 네이밍 = DB)인데 구분 안 됨.
+
+**해결**: 5개 레이어 태깅 + 레이어별 출력 파일 분리.
+
+| 레이어 | 감지 규칙 | 포함 예시 |
+|--------|----------|----------|
+| `frontend` | `.tsx/.jsx`, 경로에 `frontend/`, `client/`, `web/`, `app/`, `ui/`, `components/`; `package.json`에 react/vue/svelte/next | React 컴포넌트, 페이지, 스타일, 프론트 훅 |
+| `backend` | `.py` + 경로에 `backend/`, `server/`, `api/`, `routes/`; `package.json`에 express/fastify; `pyproject.toml`에 fastapi/django | API 핸들러, 서비스 로직, 서버 엔트리 |
+| `db` | 경로에 `migrations/`, `schemas/`, `models/`, `prisma/`; 확장자 `.sql`, `.prisma`; SQLAlchemy/TypeORM 패턴 | 마이그레이션, ORM 모델, 스키마 정의 |
+| `devops` | `Dockerfile`, `docker-compose*`, `.github/`, `.gitlab-ci*`, `terraform/`, `k8s/`, `Makefile`, `.env*` | CI/CD, 인프라, 배포 스크립트 |
+| `shared` | 위 4개 어디에도 속하지 않음 or 경로에 `shared/`, `common/`, `lib/`, `utils/` (단일 레이어 종속 아닌 경우) | 공통 타입, 유틸, 상수, 커밋 규칙 등 |
+
+**LLM 호출 전략 (비용 절충)**:
+- 호출 수는 Phase 1과 동일하게 **카테고리당 1회 유지** (3 카테고리 = 3 호출)
+- 각 호출 시 5개 레이어 파일을 모두 제공하되, 프롬프트가 **레이어별 섹션으로 나눠서 출력**하도록 강제
+- 레이어별 파일이 적거나 없으면 해당 섹션은 "N/A — 이 레이어 파일 없음" 표기
+
+**출력 구조**:
+```
+docs/hijacked/<session-id>/
+  meta.md
+  architecture.md                # raw LLM 출력 (카테고리별)
+  coding_style.md
+  api_design.md
+  session.json
+  integrated/
+    CLAUDE.md                    # 진입점 + 전체 개요 + layer 네비게이션
+    frontend.md                  # frontend 전용 규칙 (3 카테고리 합본)
+    backend.md                   # backend 전용 규칙
+    database.md                  # db 전용 규칙
+    devops.md                    # devops 전용 규칙
+    shared.md                    # 공통 규칙
+    system-prompt.md             # 레이어 구분 없는 통합 에이전트 프롬프트
+```
+
+**CLAUDE.md 진입점 역할**:
+```markdown
+# 코드 스타일 규칙
+> 프로젝트/파일에 따라 해당 레이어 문서만 로드하라.
+
+## 레이어 가이드
+- 프론트 파일 작업 (.tsx/.jsx, frontend/) → frontend.md + shared.md
+- 백엔드 파일 작업 (.py, backend/) → backend.md + shared.md
+- DB 파일 작업 (migrations/, models/) → database.md + shared.md
+- CI/인프라 작업 (.github/, Dockerfile) → devops.md + shared.md
+
+## 최우선 규칙 (레이어 무관)
+[모든 레이어의 MUST 규칙 요약 5~7개]
+```
+
+**구현 임팩트**:
+- `fetcher.py`: `SourceFile`에 `layer: str` 필드 추가, 감지 함수 추가
+- `preprocessor.py`: 2D 분류 (role × layer), 레이어별 파일 수 요약
+- `prompts.py`: 카테고리 프롬프트에 "각 레이어별 섹션으로 출력" 지시 추가
+- `analyzer.py`: LLM 출력 파싱 시 `layer` 필드 추출
+- `models.py`: `AnalysisRule`에 `layer: str` 필드 추가
+- `generator.py`: 레이어별 파일 분리 렌더러 + CLAUDE.md 진입점 재작성
+
+**평가 기준**: `tests/fixtures/senior_wisdom/ground_truth.md`의 5개 규칙이 올바른 레이어에 배치되는지 확인.
 
 ### 추가 기능 (후순위)
 - [ ] 나머지 7개 카테고리 (testing, dependencies, security, performance, devops, state_management, data_model)
@@ -62,6 +125,9 @@
 - [ ] 여러 레포 비교 분석
 - [ ] 언어 확장 (Go, Rust 등)
 - [ ] 규칙 위반 자동 감지/경고
+- [ ] Critic 레이어 (뽑은 규칙의 타당성 재평가)
+- [ ] AI trap score (AI가 규칙을 어길 위험도 태깅)
+- [ ] Git/PR 히스토리 마이닝 (시니어의 실제 설명 추출)
 
 ## 3. 기술 스택
 
