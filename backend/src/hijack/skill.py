@@ -1,37 +1,12 @@
-"""Claude Code skill entry point for /code-hijack command.
+"""Claude Code skill 진입점 — `/code-hijack <target>` 호출 시 실행된다.
 
-This module defines the skill that runs inside a Claude Code session.
-The analysis uses the current session's Claude instance (no API cost).
-
-Usage in Claude Code:
-  /code-hijack https://github.com/fastapi/fastapi
-  /code-hijack /path/to/local/project
+Skill 모드에서는 ANTHROPIC_API_KEY 없이 현재 Claude Code 세션을 사용한다.
+CLI 모드와 동일한 파이프라인을 실행하되, LLM 호출은 세션 컨텍스트 내에서 처리된다.
 """
 
-# NOTE: This file serves as documentation and the skill prompt template.
-# The actual skill execution happens through Claude Code's skill system,
-# which reads the SKILL.md file and executes the analysis using the
-# session's built-in Claude instance.
-#
-# The core/ modules (fetcher, preprocessor, analyzer, generator) contain
-# all shared logic. In skill mode, the LLM calls are replaced by
-# Claude Code's own analysis capabilities.
+from __future__ import annotations
 
-SKILL_PROMPT = """\
-You are running the code-hijack skill. Analyze the target codebase and extract \
-coding style rules that an AI agent can follow.
+from hijack.cli import main
 
-## Steps
-
-1. **Fetch**: Read the project files and build a structure map
-2. **Preprocess**: Identify key files by role (entry point, model, API, test, etc.)
-3. **Analyze**: For each category (architecture, coding_style, api_design), deeply \
-analyze the code and extract rules with:
-   - ✅/❌ example code from the actual project
-   - Reference files to read before writing similar code
-   - MUST/SHOULD priority
-   - Checklist items for self-verification
-4. **Generate**: Create output files in docs/hijacked/
-
-Show results for each category and ask for feedback before moving to the next.
-"""
+if __name__ == "__main__":
+    main()

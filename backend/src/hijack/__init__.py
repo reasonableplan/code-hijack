@@ -1,1 +1,3 @@
-"""code-hijack: Analyze code style/structure and generate HarnessAI-compatible rules."""
+"""code-hijack — 시니어 개발자 코드베이스를 분석해 AI 에이전트용 규칙을 추출."""
+
+__version__ = "0.1.0"

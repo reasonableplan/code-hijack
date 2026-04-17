@@ -1,64 +1,118 @@
-"""분석 결과 데이터 모델 — skeleton Section 7 기반."""
-
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
-from typing import Any, Literal
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
 class AnalysisRule:
-    """하나의 추출된 규칙."""
-
     rule: str
-    priority: Literal["MUST", "SHOULD"] = "SHOULD"
-    confidence: Literal["high", "medium", "low"] = "medium"
-    ref_files: list[str] = field(default_factory=list)
-    good_example: str = ""
-    bad_example: str = ""
-    reason: str = ""
+    priority: str
+    confidence: str
+    ref_files: list[str]
+    good_example: str
+    bad_example: str
+    reason: str
+    layer: str = "shared"
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "rule": self.rule,
+            "priority": self.priority,
+            "confidence": self.confidence,
+            "ref_files": self.ref_files,
+            "good_example": self.good_example,
+            "bad_example": self.bad_example,
+            "reason": self.reason,
+            "layer": self.layer,
+        }
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> AnalysisRule:
+        return cls(
+            rule=data["rule"],
+            priority=data["priority"],
+            confidence=data["confidence"],
+            ref_files=data["ref_files"],
+            good_example=data["good_example"],
+            bad_example=data["bad_example"],
+            reason=data["reason"],
+            layer=data.get("layer", "shared"),
+        )
 
 
 @dataclass
 class CategoryResult:
-    """카테고리 하나의 분석 결과."""
-
     category: str
-    design_intent: str = ""
-    rules: list[AnalysisRule] = field(default_factory=list)
-    anti_patterns: list[dict[str, str]] = field(default_factory=list)
-    file_type_guides: dict[str, str] = field(default_factory=dict)
-    checklist: list[str] = field(default_factory=list)
-    raw_llm_output: str = ""
+    design_intent: str
+    rules: list[AnalysisRule]
+    anti_patterns: list[dict[str, str]]
+    file_type_guides: dict[str, str]
+    checklist: list[str]
+    raw_llm_output: str
+    error: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "category": self.category,
+            "design_intent": self.design_intent,
+            "rules": [r.to_json() for r in self.rules],
+            "anti_patterns": self.anti_patterns,
+            "file_type_guides": self.file_type_guides,
+            "checklist": self.checklist,
+            "raw_llm_output": self.raw_llm_output,
+            "error": self.error,
+        }
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> CategoryResult:
+        return cls(
+            category=data["category"],
+            design_intent=data["design_intent"],
+            rules=[AnalysisRule.from_json(r) for r in data["rules"]],
+            anti_patterns=data["anti_patterns"],
+            file_type_guides=data["file_type_guides"],
+            checklist=data["checklist"],
+            raw_llm_output=data["raw_llm_output"],
+            error=data.get("error"),
+        )
 
 
 @dataclass
 class SessionResult:
-    """하나의 분석 세션 전체 결과."""
-
     session_id: str
     target: str
-    model: str = ""
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(UTC).isoformat(),
-    )
-    selected_files: list[str] = field(default_factory=list)
-    categories: list[CategoryResult] = field(default_factory=list)
-    analysis_duration_seconds: float = 0.0
-    project_structure: str = ""
+    model: str
+    timestamp: str
+    selected_files: list[str]
+    categories: list[CategoryResult]
+    analysis_duration_seconds: float
+    project_structure: str
+    files_by_layer: dict[str, int] = field(default_factory=dict)
 
-    def to_json(self) -> str:
-        """세션 결과를 JSON 문자열로 직렬화."""
-        return json.dumps(asdict(self), ensure_ascii=False, indent=2)
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "target": self.target,
+            "model": self.model,
+            "timestamp": self.timestamp,
+            "selected_files": self.selected_files,
+            "categories": [c.to_json() for c in self.categories],
+            "analysis_duration_seconds": self.analysis_duration_seconds,
+            "project_structure": self.project_structure,
+            "files_by_layer": self.files_by_layer,
+        }
 
     @classmethod
-    def from_json(cls, data: str) -> SessionResult:
-        """JSON 문자열에서 SessionResult를 복원."""
-        raw: dict[str, Any] = json.loads(data)
-        categories: list[CategoryResult] = []
-        for cat_raw in raw.pop("categories", []):
-            rules = [AnalysisRule(**r) for r in cat_raw.pop("rules", [])]
-            categories.append(CategoryResult(**cat_raw, rules=rules))
-        return cls(**raw, categories=categories)
+    def from_json(cls, data: dict[str, Any]) -> SessionResult:
+        return cls(
+            session_id=data["session_id"],
+            target=data["target"],
+            model=data["model"],
+            timestamp=data["timestamp"],
+            selected_files=data["selected_files"],
+            categories=[CategoryResult.from_json(c) for c in data["categories"]],
+            analysis_duration_seconds=data["analysis_duration_seconds"],
+            project_structure=data["project_structure"],
+            files_by_layer=data.get("files_by_layer", {}),
+        )

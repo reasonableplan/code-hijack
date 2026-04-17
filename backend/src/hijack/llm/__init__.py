@@ -1,1 +1,1 @@
-"""LLM 추상화 레이어 — Claude API 및 세션 기반 분석 지원."""
+"""LLM 호출 추상화 — BaseLLM 인터페이스와 ClaudeAPIClient 구현."""

@@ -1,155 +1,267 @@
-"""소스 파일 수집기 — 로컬 경로 또는 Git 레포에서 파일을 읽는다."""
-
 from __future__ import annotations
 
-import logging
-import os
-import shutil
+import json
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+try:
+    import tomllib
+except ImportError:
+    import tomllib  # type: ignore[no-redef]
 
-_LANGUAGE_MAP: dict[str, str] = {
-    ".py": "python",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".js": "javascript",
-    ".jsx": "javascript",
-}
+from hijack.errors import FETCH_001, INPUT_001, INPUT_002, FetchError, InputError
 
-# 언어와 무관하게 항상 수집하는 설정 파일
-_CONFIG_FILES = {
-    "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
-    "package.json", "tsconfig.json", "docker-compose.yml", "docker-compose.yaml",
-    "Dockerfile", ".env.example", "Makefile",
-}
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-_SKIP_DIRS = {
-    ".git", ".venv", "venv", "node_modules", "__pycache__",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
-    ".eggs", ".tox", ".next", ".nuxt", ".turbo", "coverage",
-}
+_SKIP_DIRS = frozenset({
+    ".git", "node_modules", "__pycache__", ".venv", "venv",
+    "dist", "build", "target", ".mypy_cache", ".pytest_cache",
+    ".ruff_cache", "coverage", ".coverage",
+})
 
-_MAX_FILE_SIZE = 512 * 1024  # 512 KB
+_SUPPORTED_SUFFIXES = frozenset({".py", ".ts", ".tsx"})
 
+_MAX_LINES = 2000
+
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
 
 @dataclass
 class SourceFile:
-    """수집된 소스 파일 하나."""
-
-    path: Path          # 프로젝트 루트 기준 상대 경로
-    content: str
-    language: str       # "python", "typescript", "javascript", "config"
-
-
-def _detect_language(path: Path) -> str | None:
-    """파일 확장자 또는 이름으로 언어를 감지."""
-    if path.name in _CONFIG_FILES:
-        return "config"
-    return _LANGUAGE_MAP.get(path.suffix.lower())
+    path: Path      # 레포 루트 기준 상대 경로 (Path 객체)
+    content: str    # 파일 전체 내용 (2000줄 초과 시 부분 추출)
+    layer: str      # "frontend"|"backend"|"db"|"devops"|"shared"
+    role: str       # "entry_point"|"model"|"api"|"test"|"config"|"service"|"other"
 
 
-def _is_skippable(rel_path: Path) -> bool:
-    """건너뛸 디렉토리 내 파일인지 확인."""
-    return any(part in _SKIP_DIRS for part in rel_path.parts)
+# ---------------------------------------------------------------------------
+# Layer detection
+# ---------------------------------------------------------------------------
+
+def detect_layer(
+    file_path: Path,
+    repo_root: Path,
+    package_json_deps: set[str],
+    pyproject_deps: set[str],
+) -> str:
+    """결정론적 규칙으로 레이어를 반환한다."""
+    rel = file_path.relative_to(repo_root)
+    rel_posix = rel.as_posix()
+    suffix = file_path.suffix.lower()
+    name = file_path.name
+
+    # 1. .tsx / .jsx → frontend
+    if suffix in {".tsx", ".jsx"}:
+        return "frontend"
+
+    # 2. rel 경로에 프론트엔드 디렉토리 포함 → frontend
+    _frontend_dirs = {"frontend/", "client/", "web/", "app/", "ui/", "components/"}
+    if any(d in rel_posix for d in _frontend_dirs):
+        return "frontend"
+
+    # 3. package_json_deps에 프론트엔드 프레임워크 AND suffix .ts → frontend
+    _fe_frameworks = {"react", "vue", "svelte", "next", "nuxt"}
+    if _fe_frameworks & package_json_deps and suffix == ".ts":
+        return "frontend"
+
+    # 4. .sql / .prisma → db
+    if suffix in {".sql", ".prisma"}:
+        return "db"
+
+    # 5. rel에 DB 관련 디렉토리 AND suffix .py/.ts → db
+    _db_dirs = {"migrations/", "schemas/", "prisma/", "models/"}
+    if any(d in rel_posix for d in _db_dirs) and suffix in {".py", ".ts"}:
+        return "db"
+
+    # 6. Dockerfile 또는 devops 디렉토리 → devops
+    if name == "Dockerfile" or any(d in rel_posix for d in {".github/", "k8s/", "terraform/"}):
+        return "devops"
+
+    # 7. .py AND (backend 디렉토리 OR pyproject_deps에 backend 프레임워크) → backend
+    _backend_dirs = {"backend/", "server/", "api/", "routes/"}
+    _backend_frameworks = {"fastapi", "django", "flask"}
+    if suffix == ".py" and (
+        any(d in rel_posix for d in _backend_dirs)
+        or bool(_backend_frameworks & pyproject_deps)
+    ):
+        return "backend"
+
+    # 8. 나머지 → shared
+    return "shared"
 
 
-def collect_files(
-    root: Path,
-    languages: set[str] | None = None,
-) -> list[SourceFile]:
-    """디렉토리를 순회하며 소스 파일을 수집한다.
+# ---------------------------------------------------------------------------
+# File content reader
+# ---------------------------------------------------------------------------
 
-    Args:
-        root: 스캔할 루트 디렉토리.
-        languages: 수집할 언어 집합. None이면 인식 가능한 모든 언어.
-                   "config" 파일은 항상 수집.
-    """
-    files: list[SourceFile] = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(root)
-        if _is_skippable(rel):
-            continue
-        lang = _detect_language(path)
-        if lang is None:
-            continue
-        if languages and lang not in languages and lang != "config":
-            continue
-        if path.stat().st_size > _MAX_FILE_SIZE:
-            logger.debug("대형 파일 건너뜀: %s", rel)
-            continue
-        try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            logger.warning("파일 읽기 실패 %s: %s", rel, exc)
-            continue
-        files.append(SourceFile(path=rel, content=content, language=lang))
-    return files
-
-
-def build_structure_map(root: Path) -> str:
-    """프로젝트 디렉토리 트리 문자열을 생성한다.
-
-    os.walk + topdown=True로 _SKIP_DIRS를 조기 제거하여
-    node_modules 등 대형 디렉토리 순회를 방지한다.
-    """
-    lines: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
-        rel = Path(dirpath).relative_to(root)
-        # 건너뛸 디렉토리를 in-place 제거 — os.walk가 하위로 내려가지 않음
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
-        depth = len(rel.parts)
-        if depth == 0:
-            continue  # 루트 자체는 생략
-        if depth > 4:
-            dirnames.clear()  # 4단계 이상은 순회 중단
-            continue
-        indent = "  " * (depth - 1)
-        lines.append(f"{indent}{rel.name}/ ({len(filenames)} files)")
-    return "\n".join(lines)
-
-
-def clone_repo(url: str) -> tuple[Path, Path]:
-    """Git 레포를 임시 디렉토리에 클론한다.
-
-    Returns:
-        (repo_path, temp_dir) — 호출자가 temp_dir를 정리해야 함.
-    """
-    tmpdir = Path(tempfile.mkdtemp(prefix="code-hijack-"))
-    repo_path = tmpdir / "repo"
+def _read_file_content(path: Path) -> str:
+    """2000줄 이하이면 전체, 초과이면 핵심 부분만 추출한다."""
     try:
-        subprocess.run(
-            ["git", "clone", "--depth=1", "--single-branch", url, str(repo_path)],
-            check=True,
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+    lines = text.splitlines(keepends=True)
+    if len(lines) <= _MAX_LINES:
+        return text
+
+    # 핵심 부분 추출: import 문, 클래스/함수 시그니처, 데코레이터, docstring 첫 줄
+    _sig_pattern = re.compile(
+        r"^(?:"
+        r"(?:from|import)\s"               # import 문
+        r"|(?:class|def|async\s+def)\s"    # 클래스/함수 선언
+        r"|@\w"                            # 데코레이터
+        r'|"""'                            # docstring 시작
+        r"|'''"
+        r")"
+    )
+
+    extracted: list[str] = []
+    in_docstring = False
+    docstring_char: str | None = None
+
+    for line in lines:
+        stripped = line.rstrip("\n")
+
+        if in_docstring:
+            # docstring 첫 줄 이후는 종료 여부만 체크
+            if docstring_char and docstring_char in stripped:
+                in_docstring = False
+            continue
+
+        if _sig_pattern.match(stripped):
+            extracted.append(line)
+            # docstring 시작 감지
+            if stripped.lstrip().startswith('"""') or stripped.lstrip().startswith("'''"):
+                docstring_char = '"""' if '"""' in stripped else "'''"
+                # 같은 줄에서 바로 닫히지 않으면 멀티라인
+                remaining = stripped.lstrip()[3:]
+                if docstring_char not in remaining:
+                    in_docstring = True
+
+    header = f"# [TRUNCATED: {len(lines)} lines → key signatures only]\n"
+    return header + "".join(extracted)
+
+
+# ---------------------------------------------------------------------------
+# Dependency readers
+# ---------------------------------------------------------------------------
+
+def _read_package_json_deps(repo_root: Path) -> set[str]:
+    pkg = repo_root / "package.json"
+    if not pkg.exists():
+        return set()
+    try:
+        data = json.loads(pkg.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    deps: set[str] = set()
+    deps.update(data.get("dependencies", {}).keys())
+    deps.update(data.get("devDependencies", {}).keys())
+    return deps
+
+
+def _read_pyproject_deps(repo_root: Path) -> set[str]:
+    pyproj = repo_root / "pyproject.toml"
+    if not pyproj.exists():
+        return set()
+    try:
+        data = tomllib.loads(pyproj.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return set()
+    raw: list[str] = data.get("project", {}).get("dependencies", [])
+    deps: set[str] = set()
+    for dep in raw:
+        # "fastapi>=0.100" → "fastapi"
+        name = re.split(r"[><=!\[;@ ]", dep)[0].lower().strip()
+        if name:
+            deps.add(name)
+    return deps
+
+
+# ---------------------------------------------------------------------------
+# Role detection
+# ---------------------------------------------------------------------------
+
+def _detect_role(rel: Path) -> str:
+    rel_posix = rel.as_posix().lower()
+    name = rel.name.lower()
+
+    if "test" in rel_posix or "spec" in rel_posix:
+        return "test"
+    if name in {"main.py", "app.py", "index.ts", "server.ts", "__main__.py"}:
+        return "entry_point"
+    if "model" in rel_posix or "schema" in rel_posix or "types" in rel_posix:
+        return "model"
+    if any(k in rel_posix for k in ("route", "api", "controller", "endpoint")):
+        return "api"
+    if "service" in rel_posix or "lib" in rel_posix or "util" in rel_posix:
+        return "service"
+    return "other"
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+def fetch_source(
+    target: str,
+    *,
+    subpath: str | None = None,
+) -> tuple[list[SourceFile], Path]:
+    """(files, repo_root) 반환."""
+
+    # 1. 소스 위치 결정
+    local_path = Path(target)
+    if local_path.exists():
+        repo_root = local_path / subpath if subpath else local_path
+    elif target.startswith(("http://", "https://")) or "github.com" in target:
+        tmpdir = tempfile.mkdtemp()
+        result = subprocess.run(
+            ["git", "clone", "--depth=1", target, tmpdir],
             capture_output=True,
             text=True,
-            timeout=120,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        raise RuntimeError(f"레포 클론 실패 {url}: {exc}") from exc
-    return repo_path, tmpdir
+        if result.returncode != 0:
+            raise FetchError(FETCH_001, f"git clone 실패: {result.stderr.strip()}")
+        repo_root = Path(tmpdir) / subpath if subpath else Path(tmpdir)
+    else:
+        raise InputError(INPUT_001, f"유효하지 않은 경로 또는 URL: {target!r}")
 
+    # 2. 파일 재귀 수집 (_SKIP_DIRS 제외, _SUPPORTED_SUFFIXES만)
+    collected: list[Path] = []
+    for p in repo_root.rglob("*"):
+        if not p.is_file():
+            continue
+        # 조상 디렉토리 중 _SKIP_DIRS에 포함된 것이 있으면 제외
+        if any(part in _SKIP_DIRS for part in p.parts):
+            continue
+        if p.suffix in _SUPPORTED_SUFFIXES:
+            collected.append(p)
 
-def fetch_source(target: str) -> tuple[list[SourceFile], str, Path | None]:
-    """로컬 경로 또는 Git URL에서 소스 파일을 가져온다.
+    # 3. 지원 파일 0개이면 InputError
+    if not collected:
+        msg = f"지원 파일(.py/.ts/.tsx) 없음: {repo_root.as_posix()!r}"
+        raise InputError(INPUT_002, msg)
 
-    Returns:
-        (파일 목록, 구조 맵, 임시 디렉토리)
-        임시 디렉토리는 클론한 경우에만 설정됨 (호출자가 정리).
-    """
-    local = Path(target)
-    if local.is_dir():
-        files = collect_files(local)
-        structure = build_structure_map(local)
-        return files, structure, None
+    # 4. 의존성 추출
+    package_json_deps = _read_package_json_deps(repo_root)
+    pyproject_deps = _read_pyproject_deps(repo_root)
 
-    repo_path, tmpdir = clone_repo(target)
-    files = collect_files(repo_path)
-    structure = build_structure_map(repo_path)
-    return files, structure, tmpdir
+    # 5. SourceFile 목록 생성
+    files: list[SourceFile] = []
+    for abs_path in collected:
+        rel = abs_path.relative_to(repo_root)
+        content = _read_file_content(abs_path)
+        layer = detect_layer(abs_path, repo_root, package_json_deps, pyproject_deps)
+        role = _detect_role(rel)
+        files.append(SourceFile(path=rel, content=content, layer=layer, role=role))
+
+    return files, repo_root

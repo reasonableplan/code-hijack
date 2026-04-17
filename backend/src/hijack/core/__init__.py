@@ -1,1 +1,1 @@
-"""핵심 모듈 — CLI와 Skill 모드가 공유하는 로직."""
+"""분석 파이프라인 — fetcher → preprocessor → analyzer → generator."""

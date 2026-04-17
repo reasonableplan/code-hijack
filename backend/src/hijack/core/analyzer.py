@@ -1,192 +1,200 @@
-"""LLM 기반 코드 분석기 — 카테고리별 순차 심층 분석."""
-
 from __future__ import annotations
 
+import asyncio
+import datetime
+import json
 import logging
 import re
 import time
+from pathlib import Path
 
 from hijack.core.fetcher import SourceFile
-from hijack.core.models import AnalysisRule, CategoryResult
-from hijack.core.preprocessor import ClassifiedFile, PreprocessResult
-from hijack.core.prompts import MVP_CATEGORIES, SYSTEM_PROMPT, build_analysis_prompt
+from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
+from hijack.core.preprocessor import (
+    build_file_summary_for_llm,
+    build_preprocess_result,
+    select_files_for_category,
+)
+from hijack.core.prompts import MVP_CATEGORIES, build_category_prompt
+from hijack.core.session import create_session_id
+from hijack.errors import LLM_002, LLM_003, LLMError
+from hijack.llm.api import DEFAULT_MODEL
 from hijack.llm.base import BaseLLM
 
 logger = logging.getLogger(__name__)
 
-# 카테고리별 관련 파일 역할 매핑
-_CATEGORY_ROLES: dict[str, list[str]] = {
-    "architecture": ["entry_point", "config", "service", "model", "api"],
-    "coding_style": ["service", "model", "api", "entry_point", "other"],
-    "api_design": ["api", "auth", "model", "entry_point", "config"],
-}
-
-_MAX_FILES_PER_CATEGORY = 15
-_MAX_CHARS_PER_FILE = 8000
+_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+_REQUIRED_RULE_FIELDS = {"rule", "priority", "layer"}
 
 
-def _select_files_for_category(
-    category: str,
-    classified: list[ClassifiedFile],
-) -> list[SourceFile]:
-    """카테고리에 관련된 파일만 선별한다."""
-    roles = _CATEGORY_ROLES.get(category, ["other"])
+# ---------------------------------------------------------------------------
+# JSON parsing
+# ---------------------------------------------------------------------------
 
-    scored: list[tuple[int, ClassifiedFile]] = []
-    for cf in classified:
-        score = roles.index(cf.role) if cf.role in roles else len(roles) + 1
-        scored.append((score, cf))
-
-    scored.sort(key=lambda x: x[0])
-    return [cf.file for _, cf in scored[:_MAX_FILES_PER_CATEGORY]]
-
-
-def _format_files_for_prompt(files: list[SourceFile]) -> str:
-    """소스 파일을 LLM 프롬프트에 포함할 형식으로 변환."""
-    parts: list[str] = []
-    for f in files:
-        content = f.content
-        if len(content) > _MAX_CHARS_PER_FILE:
-            content = content[:_MAX_CHARS_PER_FILE] + "\n... (잘림)"
-        parts.append(
-            f"### {f.path} ({f.language})\n"
-            f"```{f.language}\n{content}\n```\n"
-        )
-    return "\n".join(parts)
+def _parse_json(raw: str) -> dict | None:
+    """LLM 응답에서 JSON 객체를 파싱한다."""
+    raw = raw.strip()
+    # 코드 펜스 제거
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        raw = "\n".join(lines[1:])
+        if raw.endswith("```"):
+            raw = raw[: raw.rfind("```")]
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    # 첫 번째 { 부터 마지막 } 까지 추출
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(raw[start : end + 1])
+        except json.JSONDecodeError:
+            pass
+    return None
 
 
-def _parse_rules_from_markdown(text: str) -> list[AnalysisRule]:
-    """LLM 마크다운 출력에서 규칙을 추출한다."""
+def _parse_regex_fallback(raw: str) -> dict | None:
+    """JSON 파싱 실패 시 regex 로 JSON 블록을 찾아 재시도한다."""
+    match = re.search(r"\{[\s\S]+\}", raw)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group())
+    except json.JSONDecodeError:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Rule extraction
+# ---------------------------------------------------------------------------
+
+def _rules_from_parsed(raw_rules: list[dict]) -> list[AnalysisRule]:
+    """파싱된 규칙 목록에서 유효한 AnalysisRule 만 추출한다."""
     rules: list[AnalysisRule] = []
-
-    rule_pattern = re.compile(
-        r'\d+\.\s+\*\*\[(MUST|SHOULD)\]\s*(.*?)\*\*',
-        re.MULTILINE,
-    )
-    matches = list(rule_pattern.finditer(text))
-
-    for i, match in enumerate(matches):
-        priority = match.group(1)
-        rule_text = match.group(2).strip()
-
-        # 이 규칙과 다음 규칙 사이의 섹션 추출
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        section = text[start:end]
-
-        # 참조 파일 추출
-        ref_files: list[str] = []
-        for ref_match in re.finditer(r'📁\s*(?:Reference|참조):\s*(.+)', section):
-            ref_files.append(ref_match.group(1).strip())
-
-        # ✅/❌ 예시 코드 추출
-        good = ""
-        bad = ""
-        good_match = re.search(r'✅.*?```\w*\n(.*?)```', section, re.DOTALL)
-        bad_match = re.search(r'❌.*?```\w*\n(.*?)```', section, re.DOTALL)
-        if good_match:
-            good = good_match.group(1).strip()
-        if bad_match:
-            bad = bad_match.group(1).strip()
-
-        # 이유 추출
-        reason = ""
-        reason_match = re.search(r'(?:Reason|이유):\s*(.+)', section)
-        if reason_match:
-            reason = reason_match.group(1).strip()
-
-        rules.append(AnalysisRule(
-            rule=rule_text,
-            priority=priority,
-            ref_files=ref_files,
-            good_example=good,
-            bad_example=bad,
-            reason=reason,
-        ))
-
+    for item in raw_rules:
+        if not isinstance(item, dict):
+            continue
+        missing = _REQUIRED_RULE_FIELDS - item.keys()
+        if missing:
+            logger.warning("규칙 필드 누락 %s — 드롭: %s", missing, item.get("rule", "?"))
+            continue
+        rules.append(
+            AnalysisRule(
+                rule=item["rule"],
+                priority=item.get("priority", "SHOULD"),
+                confidence=item.get("confidence", "medium"),
+                ref_files=item.get("ref_files", []),
+                good_example=item.get("good_example", ""),
+                bad_example=item.get("bad_example", ""),
+                reason=item.get("reason", ""),
+                layer=item.get("layer", "shared"),
+            )
+        )
     return rules
 
 
-def _parse_checklist(text: str) -> list[str]:
-    """마크다운에서 체크리스트 항목을 추출한다."""
-    return [m.group(1).strip() for m in re.finditer(r'- \[ \]\s*(.+)', text)]
+# ---------------------------------------------------------------------------
+# Per-category analysis
+# ---------------------------------------------------------------------------
 
-
-def _parse_design_intent(text: str) -> str:
-    """설계 의도 섹션을 추출한다."""
-    match = re.search(
-        r'###?\s*(?:Design Intent|설계 의도)\s*\n(.*?)(?=\n###?\s|\Z)',
-        text,
-        re.DOTALL,
-    )
-    return match.group(1).strip() if match else ""
-
-
-async def analyze_category(
+async def _analyze_category(
     category: str,
+    preprocess_result,
     llm: BaseLLM,
-    preprocess_result: PreprocessResult,
+    model: str,
 ) -> CategoryResult:
-    """하나의 카테고리를 LLM으로 분석한다.
+    selected = select_files_for_category(preprocess_result, category)
+    summaries = build_file_summary_for_llm(selected)
 
-    Args:
-        category: MVP_CATEGORIES 중 하나.
-        llm: 사용할 LLM 클라이언트.
-        preprocess_result: 전처리된 파일 데이터.
+    try:
+        prompt = build_category_prompt(category, summaries)
+    except ValueError as e:
+        return _error_result(category, "", str(e))
 
-    Returns:
-        구조화된 분석 결과.
-    """
-    files = _select_files_for_category(category, preprocess_result.classified)
-    files_content = _format_files_for_prompt(files)
+    raw = ""
+    last_error = ""
 
-    prompt = build_analysis_prompt(
-        category=category,
-        files_content=files_content,
-        structure_map=preprocess_result.structure_map,
-    )
+    for attempt in range(2):
+        try:
+            raw = await llm.analyze(prompt, model=model)
+            last_error = ""
+            break
+        except LLMError as e:
+            last_error = str(e)
+            logger.warning("[%s] LLM 호출 실패 (attempt %d): %s", category, attempt + 1, e)
+            if attempt < 1:
+                await asyncio.sleep(_BACKOFF_SECONDS[attempt])
+    else:
+        return _error_result(category, raw, f"{LLM_002}: {last_error}")
 
-    logger.info("%s 분석 중 (%d개 파일)...", category, len(files))
-    start = time.time()
-    raw_output = await llm.analyze(SYSTEM_PROMPT, prompt)
-    duration = time.time() - start
-    logger.info("  %s 분석 완료 (%.1f초)", category, duration)
+    parsed = _parse_json(raw) or _parse_regex_fallback(raw)
+    if parsed is None:
+        logger.warning("[%s] JSON 파싱 실패 — raw 출력 보존", category)
+        return _error_result(category, raw, f"{LLM_003}: JSON 및 regex 파싱 실패")
 
-    # LLM 출력에서 구조화 데이터 파싱
-    rules = _parse_rules_from_markdown(raw_output)
-    checklist = _parse_checklist(raw_output)
-    design_intent = _parse_design_intent(raw_output)
-
-    if not rules:
-        logger.warning(
-            "%s 분석에서 규칙을 추출하지 못함 (%d자). raw 출력은 디버깅용으로 저장됨.",
-            category, len(raw_output),
-        )
-
+    rules = _rules_from_parsed(parsed.get("rules", []))
     return CategoryResult(
         category=category,
-        design_intent=design_intent,
+        design_intent=parsed.get("design_intent", ""),
         rules=rules,
-        checklist=checklist,
-        raw_llm_output=raw_output,
+        anti_patterns=parsed.get("anti_patterns", []),
+        file_type_guides=parsed.get("file_type_guides", {}),
+        checklist=parsed.get("checklist", []),
+        raw_llm_output=raw,
+        error=None,
     )
 
 
-async def run_full_analysis(
-    llm: BaseLLM,
-    preprocess_result: PreprocessResult,
-    categories: list[str] | None = None,
-) -> list[CategoryResult]:
-    """전체 카테고리를 순차적으로 분석한다.
+def _error_result(category: str, raw: str, error: str) -> CategoryResult:
+    return CategoryResult(
+        category=category,
+        design_intent="",
+        rules=[],
+        anti_patterns=[],
+        file_type_guides={},
+        checklist=[],
+        raw_llm_output=raw,
+        error=error,
+    )
 
-    Args:
-        llm: LLM 클라이언트.
-        preprocess_result: 전처리 데이터.
-        categories: 분석할 카테고리 목록 (기본: MVP_CATEGORIES).
-    """
-    cats = categories or MVP_CATEGORIES
-    results: list[CategoryResult] = []
-    for cat in cats:
-        result = await analyze_category(cat, llm, preprocess_result)
-        results.append(result)
-    return results
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+async def run_full_analysis(
+    files: list[SourceFile],
+    repo_root: Path,
+    *,
+    categories: list[str] = MVP_CATEGORIES,
+    llm: BaseLLM,
+    model: str = DEFAULT_MODEL,
+    target: str = "",
+) -> SessionResult:
+    """카테고리별 LLM 분석을 실행하고 SessionResult를 반환한다."""
+    start = time.monotonic()
+    preprocess = build_preprocess_result(files, repo_root)
+
+    category_results: list[CategoryResult] = []
+    for category in categories:
+        result = await _analyze_category(category, preprocess, llm, model)
+        category_results.append(result)
+
+    duration = time.monotonic() - start
+    session_id = create_session_id(target or str(repo_root))
+
+    files_by_layer = {layer: len(flist) for layer, flist in preprocess.by_layer.items()}
+
+    return SessionResult(
+        session_id=session_id,
+        target=target or repo_root.as_posix(),
+        model=model,
+        timestamp=datetime.datetime.now(datetime.UTC).isoformat(),
+        selected_files=[f.path.as_posix() for f in files],
+        categories=category_results,
+        analysis_duration_seconds=round(duration, 3),
+        project_structure=preprocess.project_structure,
+        files_by_layer=files_by_layer,
+    )

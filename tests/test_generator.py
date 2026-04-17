@@ -1,75 +1,208 @@
-"""Tests for generator module."""
+from __future__ import annotations
 
-import tempfile
+import json
 from pathlib import Path
 
-from hijack.core.generator import generate_claude_md, generate_system_prompt, write_output
+import pytest
+
+from hijack.core.generator import (
+    render_category_md,
+    render_claude_md_entrypoint,
+    render_layer_md,
+    render_meta_md,
+    render_system_prompt_md,
+    write_output,
+)
 from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
 
 
-def _make_session() -> SessionResult:
-    rules = [
-        AnalysisRule(
-            rule="Use APIRouter for routes",
-            priority="MUST",
-            ref_files=["routes/users.py"],
-            good_example="router = APIRouter()",
-            bad_example="@app.get('/')",
-            reason="Separation of concerns",
-        ),
-        AnalysisRule(
-            rule="Use type hints",
-            priority="SHOULD",
-            ref_files=["models/user.py"],
-        ),
-    ]
-    cat = CategoryResult(
-        category="architecture",
-        design_intent="Clean layered architecture",
-        rules=rules,
-        checklist=["Check route registration", "Verify type hints"],
-        raw_llm_output="## Architecture\n...",
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+def _rule(layer: str = "backend", priority: str = "MUST") -> AnalysisRule:
+    return AnalysisRule(
+        rule="Use type hints",
+        priority=priority,
+        confidence="high",
+        ref_files=["main.py"],
+        good_example="def f(x: int) -> str: ...",
+        bad_example="def f(x): ...",
+        reason="readability",
+        layer=layer,
     )
+
+
+def _category(name: str = "architecture", layer: str = "backend") -> CategoryResult:
+    return CategoryResult(
+        category=name,
+        design_intent="Clean separation of concerns",
+        rules=[_rule(layer=layer)],
+        anti_patterns=[{"pattern": "global state", "reason": "bad", "alternative": "inject"}],
+        file_type_guides={"model": "keep fields typed"},
+        checklist=["check imports"],
+        raw_llm_output='{"design_intent": "...", "rules": []}',
+    )
+
+
+def _session(target: str = "https://github.com/org/repo") -> SessionResult:
     return SessionResult(
-        session_id="2026-04-12_test",
-        target="https://github.com/test/repo",
+        session_id="2026-04-17_repo",
+        target=target,
         model="claude-sonnet-4-6",
-        categories=[cat],
-        selected_files=["main.py", "routes/users.py"],
+        timestamp="2026-04-17T00:00:00+00:00",
+        selected_files=["main.py", "service.py"],
+        categories=[
+            _category("architecture", layer="backend"),
+            _category("coding_style", layer="shared"),
+        ],
+        analysis_duration_seconds=3.5,
+        project_structure="repo/\n  main.py\n  service.py",
     )
 
 
-def test_generate_claude_md():
-    session = _make_session()
-    result = generate_claude_md(session)
+# ---------------------------------------------------------------------------
+# render_meta_md
+# ---------------------------------------------------------------------------
 
-    assert "MUST" in result
-    assert "SHOULD" in result
-    assert "APIRouter" in result
-    assert "routes/users.py" in result
-    assert "체크리스트" in result
+class TestRenderMetaMd:
+    def test_contains_session_id(self) -> None:
+        md = render_meta_md(_session())
+        assert "2026-04-17_repo" in md
+
+    def test_contains_selected_files(self) -> None:
+        md = render_meta_md(_session())
+        assert "main.py" in md
+        assert "service.py" in md
+
+    def test_contains_project_structure(self) -> None:
+        md = render_meta_md(_session())
+        assert "repo/" in md
+
+    def test_failed_category_shown(self) -> None:
+        s = _session()
+        s.categories[0].error = "LLM_002: timeout"
+        md = render_meta_md(s)
+        assert "LLM_002" in md
 
 
-def test_generate_system_prompt():
-    session = _make_session()
-    result = generate_system_prompt(session)
+# ---------------------------------------------------------------------------
+# render_category_md
+# ---------------------------------------------------------------------------
 
-    assert "시니어 개발자" in result
-    assert "architecture" in result
-    assert "APIRouter" in result
+class TestRenderCategoryMd:
+    def test_normal_category(self) -> None:
+        md = render_category_md(_category())
+        assert "Use type hints" in md
+        assert "MUST" in md
+        assert "def f(x: int)" in md  # good_example
+        assert "global state" in md   # anti_pattern
+
+    def test_error_category_shows_error(self) -> None:
+        cat = _category()
+        cat.error = "LLM_003: parse failed"
+        cat.raw_llm_output = "raw output here"
+        md = render_category_md(cat)
+        assert "LLM_003" in md
+        assert "raw output here" in md
+
+    def test_checklist_present(self) -> None:
+        md = render_category_md(_category())
+        assert "check imports" in md
 
 
-def test_write_output():
-    session = _make_session()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_dir = Path(tmpdir) / "docs" / "hijacked"
-        created = write_output(session, output_dir)
+# ---------------------------------------------------------------------------
+# render_layer_md
+# ---------------------------------------------------------------------------
 
-        assert len(created) > 0
-        # Check session files exist
-        assert (output_dir / "2026-04-12_test" / "meta.md").exists()
-        assert (output_dir / "2026-04-12_test" / "architecture.md").exists()
-        assert (output_dir / "2026-04-12_test" / "session.json").exists()
-        # Check integrated files
-        assert (output_dir / "integrated" / "CLAUDE.md").exists()
-        assert (output_dir / "integrated" / "system-prompt.md").exists()
+class TestRenderLayerMd:
+    def test_backend_rules_shown(self) -> None:
+        cats = [_category("architecture", layer="backend")]
+        md = render_layer_md("backend", cats)
+        assert "Use type hints" in md
+        assert "backend" in md.lower()
+
+    def test_empty_layer_shows_placeholder(self) -> None:
+        cats = [_category("architecture", layer="backend")]
+        md = render_layer_md("frontend", cats)
+        assert "No rules tagged" in md
+
+    def test_rule_count_in_header(self) -> None:
+        cats = [_category("architecture", layer="shared"), _category("coding_style", layer="shared")]
+        md = render_layer_md("shared", cats)
+        assert "2" in md  # rule count appears in header
+
+
+# ---------------------------------------------------------------------------
+# render_claude_md_entrypoint
+# ---------------------------------------------------------------------------
+
+class TestRenderClaudeMdEntrypoint:
+    def test_contains_layer_guide(self) -> None:
+        md = render_claude_md_entrypoint(_session())
+        assert "frontend" in md
+        assert "backend" in md
+        assert "shared" in md
+
+    def test_contains_must_rules(self) -> None:
+        md = render_claude_md_entrypoint(_session())
+        assert "MUST" in md
+        assert "Use type hints" in md
+
+    def test_contains_target(self) -> None:
+        md = render_claude_md_entrypoint(_session())
+        assert "org/repo" in md
+
+
+# ---------------------------------------------------------------------------
+# render_system_prompt_md
+# ---------------------------------------------------------------------------
+
+class TestRenderSystemPromptMd:
+    def test_must_rules_present(self) -> None:
+        md = render_system_prompt_md(_session())
+        assert "MUST Rules" in md
+        assert "Use type hints" in md
+
+    def test_anti_patterns_present(self) -> None:
+        md = render_system_prompt_md(_session())
+        assert "global state" in md
+
+
+# ---------------------------------------------------------------------------
+# write_output
+# ---------------------------------------------------------------------------
+
+class TestWriteOutput:
+    def test_session_files_created(self, tmp_path: Path) -> None:
+        s = _session()
+        write_output(s, tmp_path)
+
+        session_dir = tmp_path / "2026-04-17_repo"
+        assert (session_dir / "meta.md").exists()
+        assert (session_dir / "session.json").exists()
+        assert (session_dir / "architecture.md").exists()
+        assert (session_dir / "coding_style.md").exists()
+
+    def test_integrated_files_created(self, tmp_path: Path) -> None:
+        write_output(_session(), tmp_path)
+
+        integrated = tmp_path / "integrated"
+        assert (integrated / "CLAUDE.md").exists()
+        assert (integrated / "system-prompt.md").exists()
+        assert (integrated / "backend.md").exists()
+        assert (integrated / "frontend.md").exists()
+        assert (integrated / "database.md").exists()
+        assert (integrated / "devops.md").exists()
+        assert (integrated / "shared.md").exists()
+
+    def test_session_json_parseable(self, tmp_path: Path) -> None:
+        write_output(_session(), tmp_path)
+        raw = (tmp_path / "2026-04-17_repo" / "session.json").read_text(encoding="utf-8")
+        data = json.loads(raw)
+        assert data["session_id"] == "2026-04-17_repo"
+        assert len(data["categories"]) == 2
+
+    def test_multiple_writes_do_not_error(self, tmp_path: Path) -> None:
+        write_output(_session(), tmp_path)
+        write_output(_session(), tmp_path)  # second write should not raise

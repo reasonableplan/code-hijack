@@ -1,176 +1,282 @@
-"""출력 생성기 — 분석 결과를 다중 형식 문서로 변환한다."""
-
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from hijack.core.models import CategoryResult, SessionResult
+from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
+from hijack.core.preprocessor import build_layer_stats
+
+_LAYERS = ["frontend", "backend", "db", "devops", "shared"]
+
+_LAYER_FILE_NAMES: dict[str, str] = {
+    "frontend": "frontend.md",
+    "backend": "backend.md",
+    "db": "database.md",
+    "devops": "devops.md",
+    "shared": "shared.md",
+}
+
+_LAYER_CONTEXT: dict[str, str] = {
+    "frontend": "프론트엔드 파일 작업 (.tsx/.jsx, frontend/) → 이 파일 + shared.md",
+    "backend": "백엔드 파일 작업 (.py, backend/) → 이 파일 + shared.md",
+    "db": "DB 파일 작업 (migrations/, models/) → 이 파일 + shared.md",
+    "devops": "CI/인프라 작업 (.github/, Dockerfile) → 이 파일 + shared.md",
+    "shared": "공통 규칙 (레이어 무관) → 모든 작업에 적용",
+}
 
 
-def generate_claude_md(session: SessionResult) -> str:
-    """CLAUDE.md 생성 — AI 에이전트가 가장 먼저 읽는 핵심 규칙 파일."""
+# ---------------------------------------------------------------------------
+# Renderers
+# ---------------------------------------------------------------------------
+
+def render_meta_md(result: SessionResult) -> str:
     lines = [
-        f"# 코드 스타일 규칙 — {session.target}에서 추출\n",
-        f"> code-hijack이 {session.timestamp[:10]}에 생성",
-        f"> 모델: {session.model}",
-        f"> 분석 파일: {len(session.selected_files)}개\n",
-        "---\n",
+        "# Analysis Metadata",
+        "",
+        f"- **Session ID**: `{result.session_id}`",
+        f"- **Target**: {result.target}",
+        f"- **Model**: `{result.model}`",
+        f"- **Timestamp**: {result.timestamp}",
+        f"- **Duration**: {result.analysis_duration_seconds:.1f}s",
+        f"- **Files analyzed**: {len(result.selected_files)}",
+        "",
+        "## Selected Files",
+        "",
     ]
+    for f in result.selected_files:
+        lines.append(f"- `{f}`")
+    lines += [
+        "",
+        "## Layer Distribution",
+        "",
+        "```",
+        build_layer_stats(result.files_by_layer),
+        "```",
+        "",
+        "## Project Structure",
+        "",
+        "```",
+        result.project_structure,
+        "```",
+        "",
+        "## Category Results",
+        "",
+    ]
+    for cat in result.categories:
+        status = "✅" if cat.error is None else f"❌ {cat.error}"
+        rule_count = len(cat.rules)
+        lines.append(f"- **{cat.category}**: {rule_count} rules {status}")
+    return "\n".join(lines)
 
-    # 전체 카테고리에서 MUST/SHOULD 규칙 수집
-    must_rules: list[tuple[str, str, list[str]]] = []
-    should_rules: list[tuple[str, str, list[str]]] = []
-    all_checklist: list[str] = []
 
-    for cat in session.categories:
-        for rule in cat.rules:
-            entry = (cat.category, rule.rule, rule.ref_files)
-            if rule.priority == "MUST":
-                must_rules.append(entry)
-            else:
-                should_rules.append(entry)
-        all_checklist.extend(cat.checklist)
+def render_category_md(cat: CategoryResult) -> str:
+    lines = [
+        f"# {cat.category.replace('_', ' ').title()} Analysis",
+        "",
+    ]
+    if cat.error:
+        lines += [f"> ⚠️ Analysis failed: {cat.error}", ""]
+        if cat.raw_llm_output:
+            lines += ["## Raw LLM Output", "", "```", cat.raw_llm_output[:2000], "```"]
+        return "\n".join(lines)
 
-    # 필수 규칙
-    if must_rules:
-        lines.append("## 필수 규칙 (MUST)\n")
-        for i, (cat, rule, refs) in enumerate(must_rules, 1):
-            lines.append(f"{i}. **[{cat}]** {rule}")
-            if refs:
-                lines.append(f"   - 📁 참조: {', '.join(refs)}")
-        lines.append("")
+    lines += [
+        "## Design Intent",
+        "",
+        cat.design_intent,
+        "",
+        f"## Rules ({len(cat.rules)})",
+        "",
+    ]
+    for rule in cat.rules:
+        lines += _render_rule(rule)
 
-    # 권장 규칙
-    if should_rules:
-        lines.append("## 권장 규칙 (SHOULD)\n")
-        for i, (cat, rule, refs) in enumerate(should_rules, 1):
-            lines.append(f"{i}. **[{cat}]** {rule}")
-            if refs:
-                lines.append(f"   - 📁 참조: {', '.join(refs)}")
-        lines.append("")
+    if cat.anti_patterns:
+        lines += ["## Anti-Patterns", ""]
+        for ap in cat.anti_patterns:
+            lines += [
+                f"### {ap.get('pattern', '?')}",
+                "",
+                f"**Why**: {ap.get('reason', '')}",
+                "",
+                f"**Alternative**: {ap.get('alternative', '')}",
+                "",
+            ]
 
-    # 참조 파일 맵
-    ref_map: dict[str, list[str]] = {}
-    for cat in session.categories:
-        for rule in cat.rules:
-            for ref in rule.ref_files:
-                ref_map.setdefault(ref, []).append(rule.rule[:60])
-    if ref_map:
-        lines.append("## 참조 파일 맵\n")
-        lines.append("코드 작성 전 관련 파일을 먼저 읽어라:\n")
-        for ref, rules in sorted(ref_map.items()):
-            lines.append(f"- **{ref}**")
-            for r in rules[:3]:
-                lines.append(f"  - {r}")
-        lines.append("")
+    if cat.file_type_guides:
+        lines += ["## File-Type Guides", ""]
+        for ft, guide in cat.file_type_guides.items():
+            lines += [f"### {ft}", "", guide, ""]
 
-    # 체크리스트
-    if all_checklist:
-        lines.append("## 코드 제출 전 체크리스트\n")
-        for item in all_checklist:
+    if cat.checklist:
+        lines += ["## Checklist", ""]
+        for item in cat.checklist:
             lines.append(f"- [ ] {item}")
         lines.append("")
 
     return "\n".join(lines)
 
 
-def generate_system_prompt(session: SessionResult) -> str:
-    """system-prompt.md 생성 — AI 에이전트용 시스템 프롬프트."""
+def render_layer_md(layer: str, categories: list[CategoryResult]) -> str:
+    rules = [r for cat in categories for r in cat.rules if r.layer == layer]
     lines = [
-        f"# 시스템 프롬프트 — {session.target} 스타일\n",
-        f"> code-hijack이 {session.timestamp[:10]}에 생성\n",
-        "---\n",
-        "너는 이 프로젝트의 시니어 개발자다. "
-        "기존 코드베이스의 스타일, 아키텍처, 설계 철학을 정확히 따라서 코드를 짠다.\n",
-        "## 프로젝트 스타일 규칙\n",
+        f"# {layer.title()} Layer Rules",
+        "",
+        f"> {_LAYER_CONTEXT.get(layer, '')}",
+        "",
+        f"**Total rules**: {len(rules)}",
+        "",
     ]
+    if not rules:
+        lines += [f"*No rules tagged `{layer}` in this session.*", ""]
+        return "\n".join(lines)
 
-    for cat in session.categories:
-        lines.append(f"### {cat.category}\n")
-        if cat.design_intent:
-            lines.append(f"**설계 의도:** {cat.design_intent}\n")
+    by_category: dict[str, list[AnalysisRule]] = {}
+    for cat in categories:
+        for r in cat.rules:
+            if r.layer == layer:
+                by_category.setdefault(cat.category, []).append(r)
 
-        for rule in cat.rules:
-            lines.append(f"- **[{rule.priority}]** {rule.rule}")
-            if rule.good_example:
-                lines.append("  ✅ 올바른 예시:")
-                lines.append(f"  ```\n  {rule.good_example}\n  ```")
-            if rule.bad_example:
-                lines.append("  ❌ 이렇게 하지 마라:")
-                lines.append(f"  ```\n  {rule.bad_example}\n  ```")
-        lines.append("")
+    for category, cat_rules in by_category.items():
+        lines += [f"## {category.replace('_', ' ').title()}", ""]
+        for rule in cat_rules:
+            lines += _render_rule(rule)
 
     return "\n".join(lines)
 
 
-def generate_session_meta(session: SessionResult) -> str:
-    """세션 메타데이터 파일을 생성한다."""
-    lines = [
-        f"# 분석 세션 — {session.session_id}\n",
-        f"- **대상**: {session.target}",
-        f"- **시간**: {session.timestamp}",
-        f"- **모델**: {session.model}",
-        f"- **소요 시간**: {session.analysis_duration_seconds:.1f}초",
-        f"- **분석 파일**: {len(session.selected_files)}개\n",
-        "## 선별된 파일\n",
-    ]
-    for f in session.selected_files:
-        lines.append(f"- {f}")
-    lines.append("")
+def render_claude_md_entrypoint(result: SessionResult) -> str:
+    must_rules = [
+        r
+        for cat in result.categories
+        for r in cat.rules
+        if r.priority == "MUST"
+    ][:10]
 
-    lines.append("## 분석 카테고리\n")
-    for cat in session.categories:
-        lines.append(
-            f"- **{cat.category}**: 규칙 {len(cat.rules)}개, "
-            f"체크리스트 {len(cat.checklist)}개"
-        )
-    lines.append("")
+    lines = [
+        "# Code Style Rules",
+        "",
+        f"> Generated by code-hijack from `{result.target}`",
+        f"> Session: `{result.session_id}` | Model: `{result.model}`",
+        "",
+        "## Layer Guide",
+        "",
+        "Load the relevant layer file based on what you're working on:",
+        "",
+    ]
+    for layer, ctx in _LAYER_CONTEXT.items():
+        fname = _LAYER_FILE_NAMES.get(layer, f"{layer}.md")
+        lines.append(f"- **{layer}**: {ctx} ([{fname}]({fname}))")
+
+    lines += [
+        "",
+        "## Top MUST Rules (All Layers)",
+        "",
+        f"*{len(must_rules)} most critical rules across all categories:*",
+        "",
+    ]
+    for rule in must_rules:
+        lines.append(f"- **[{rule.layer}/{rule.priority}]** {rule.rule}")
 
     return "\n".join(lines)
 
 
-def write_output(session: SessionResult, output_dir: Path) -> list[Path]:
-    """모든 출력 파일을 디스크에 기록한다.
+def render_system_prompt_md(result: SessionResult) -> str:
+    must_rules = [r for cat in result.categories for r in cat.rules if r.priority == "MUST"]
+    should_rules = [r for cat in result.categories for r in cat.rules if r.priority == "SHOULD"]
 
-    Args:
-        session: 전체 분석 결과.
-        output_dir: 기본 출력 디렉토리 (예: target_project/docs/hijacked/).
+    lines = [
+        "# System Prompt",
+        "",
+        f"You are a senior developer working on `{result.target}`.",
+        "Follow these coding rules extracted from the codebase analysis.",
+        "When writing code, treat MUST rules as non-negotiable constraints.",
+        "",
+        "## MUST Rules",
+        "",
+    ]
+    for rule in must_rules:
+        lines.append(f"- [{rule.layer}] {rule.rule}")
 
-    Returns:
-        생성된 파일 경로 목록.
-    """
-    created: list[Path] = []
+    if should_rules:
+        lines += ["", "## SHOULD Rules", ""]
+        for rule in should_rules:
+            lines.append(f"- [{rule.layer}] {rule.rule}")
 
-    # 세션 디렉토리
-    session_dir = output_dir / session.session_id
+    lines += [
+        "",
+        "## Anti-Patterns to Avoid",
+        "",
+    ]
+    for cat in result.categories:
+        for ap in cat.anti_patterns:
+            pattern = ap.get("pattern", "")
+            if pattern:
+                lines.append(f"- {pattern}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# File writing
+# ---------------------------------------------------------------------------
+
+def write_output(result: SessionResult, output_base: Path) -> None:
+    """세션별 raw 파일 + integrated 통합 파일을 모두 작성한다."""
+    session_dir = output_base / result.session_id
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    # 메타 파일
-    meta_path = session_dir / "meta.md"
-    meta_path.write_text(generate_session_meta(session), encoding="utf-8")
-    created.append(meta_path)
+    _write_session_files(result, session_dir)
+    _write_integrated_files(result, output_base / "integrated")
 
-    # 카테고리별 raw 결과
-    for cat in session.categories:
-        cat_path = session_dir / f"{cat.category}.md"
-        cat_path.write_text(cat.raw_llm_output, encoding="utf-8")
-        created.append(cat_path)
 
-    # 세션 JSON
-    json_path = session_dir / "session.json"
-    json_path.write_text(session.to_json(), encoding="utf-8")
-    created.append(json_path)
+def _write_session_files(result: SessionResult, session_dir: Path) -> None:
+    (session_dir / "meta.md").write_text(render_meta_md(result), encoding="utf-8")
+    (session_dir / "session.json").write_text(
+        json.dumps(result.to_json(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    for cat in result.categories:
+        (session_dir / f"{cat.category}.md").write_text(
+            render_category_md(cat), encoding="utf-8"
+        )
 
-    # 통합 디렉토리
-    integrated_dir = output_dir / "integrated"
+
+def _write_integrated_files(result: SessionResult, integrated_dir: Path) -> None:
     integrated_dir.mkdir(parents=True, exist_ok=True)
 
-    claude_path = integrated_dir / "CLAUDE.md"
-    claude_path.write_text(generate_claude_md(session), encoding="utf-8")
-    created.append(claude_path)
+    for layer in _LAYERS:
+        fname = _LAYER_FILE_NAMES[layer]
+        (integrated_dir / fname).write_text(
+            render_layer_md(layer, result.categories), encoding="utf-8"
+        )
 
-    prompt_path = integrated_dir / "system-prompt.md"
-    prompt_path.write_text(generate_system_prompt(session), encoding="utf-8")
-    created.append(prompt_path)
+    (integrated_dir / "CLAUDE.md").write_text(
+        render_claude_md_entrypoint(result), encoding="utf-8"
+    )
+    (integrated_dir / "system-prompt.md").write_text(
+        render_system_prompt_md(result), encoding="utf-8"
+    )
 
-    return created
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _render_rule(rule: AnalysisRule) -> list[str]:
+    lines = [
+        f"### {rule.rule}",
+        "",
+        f"**Priority**: `{rule.priority}` | **Confidence**: `{rule.confidence}`"
+        f" | **Layer**: `{rule.layer}`",
+        "",
+        f"**Why**: {rule.reason}",
+        "",
+    ]
+    if rule.ref_files:
+        lines += [f"**Reference**: {', '.join(f'`{f}`' for f in rule.ref_files)}", ""]
+    if rule.good_example:
+        lines += ["**✅ Good**:", "```", rule.good_example, "```", ""]
+    if rule.bad_example:
+        lines += ["**❌ Bad**:", "```", rule.bad_example, "```", ""]
+    return lines

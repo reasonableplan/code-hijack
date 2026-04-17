@@ -1,169 +1,75 @@
-"""Structured prompts for each analysis category."""
-
 from __future__ import annotations
 
-SYSTEM_PROMPT = """\
-You are code-hijack — a senior code analyst. Your job is to deeply analyze a codebase \
-and extract the coding style, architecture decisions, and design philosophy so that an \
-AI agent can replicate the exact same style.
+MVP_CATEGORIES: list[str] = ["architecture", "coding_style", "api_design"]
 
-You don't just find patterns — you explain WHY the developer made each decision.
+LAYERS: list[str] = ["frontend", "backend", "db", "devops", "shared"]
 
-Output rules:
-- Be specific. Use actual file paths and code from the provided files.
-- Every rule must include a ✅ good example and ❌ bad example from the actual codebase.
-- Mark each rule as MUST (critical) or SHOULD (recommended).
-- Include reference files that an AI agent should read before writing similar code.
-- Write in the language of the codebase comments (Korean if comments are Korean, English otherwise).
-"""
-
-# Category-specific user prompts
-CATEGORY_PROMPTS: dict[str, str] = {
-    "architecture": """\
-Analyze the **architecture** of this project.
-
-Focus on:
-1. Overall structure — how is the codebase organized? What layers exist?
-2. Module dependencies — which modules depend on which?
-3. Design intent — WHY was it structured this way? What problem does this structure solve?
-4. Entry points — how does execution flow start?
-5. Separation of concerns — how are responsibilities divided?
-
-For each finding, provide:
-- A concrete rule that an AI agent should follow
-- The reference file(s) to read
-- ✅ How this project does it (with actual code)
-- ❌ How NOT to do it
-- A checklist item for self-verification
-
-Output format:
-```
-## Architecture Analysis
-
-### Design Intent
-(Explain the overall architecture philosophy)
-
-### Rules
-1. **[MUST/SHOULD] Rule description**
-   - 📁 Reference: path/to/file.py
-   - ✅ Good:
-     ```python
-     actual code from the project
-     ```
-   - ❌ Bad:
-     ```python
-     what NOT to do
-     ```
-   - Reason: why this matters
-
-### Checklist
-- [ ] Check item 1
-- [ ] Check item 2
-```
-""",
-    "coding_style": """\
-Analyze the **coding style** of this project.
-
-Focus on:
-1. Naming conventions — functions, variables, classes, files, directories
-2. Code formatting — line length, indentation, blank lines
-3. Function/method patterns — size, parameter style, return patterns
-4. Class patterns — inheritance, composition, mixins
-5. Comment/docstring style — when and how they write comments
-6. Import organization — order, grouping, absolute vs relative
-7. Error handling patterns — try/except style, custom exceptions
-8. Type hints — usage level, style (Optional vs | None, etc.)
-
-For each finding, provide:
-- A concrete rule
-- The reference file(s)
-- ✅ Actual code example from the project
-- ❌ What NOT to do
-- A checklist item
-
-Output format:
-```
-## Coding Style Analysis
-
-### Design Intent
-(Explain the coding philosophy)
-
-### Rules
-1. **[MUST/SHOULD] Rule description**
-   - 📁 Reference: path/to/file.py
-   - ✅ Good:
-     ```
-     actual code
-     ```
-   - ❌ Bad:
-     ```
-     what NOT to do
-     ```
-   - Reason: why
-
-### Checklist
-- [ ] Check item
-```
-""",
-    "api_design": """\
-Analyze the **API design** of this project.
-
-Focus on:
-1. Endpoint naming — URL patterns, HTTP methods, versioning
-2. Request/Response format — data structure, naming (camelCase vs snake_case)
-3. Error handling — error response format, error codes, status codes
-4. Authentication/Authorization — how auth is handled in APIs
-5. Pagination — pattern used (offset/limit, cursor)
-6. Middleware — what middleware exists and why
-7. Dependency injection — how dependencies are passed to handlers
-8. Validation — input validation approach
-
-For each finding, provide:
-- A concrete rule
-- The reference file(s)
-- ✅ Actual code example
-- ❌ What NOT to do
-- A checklist item
-
-Output format:
-```
-## API Design Analysis
-
-### Design Intent
-(Explain the API design philosophy)
-
-### Rules
-1. **[MUST/SHOULD] Rule description**
-   - 📁 Reference: path/to/file.py
-   - ✅ Good:
-     ```
-     actual code
-     ```
-   - ❌ Bad:
-     ```
-     what NOT to do
-     ```
-   - Reason: why
-
-### Checklist
-- [ ] Check item
-```
-""",
+_CATEGORY_INSTRUCTIONS: dict[str, str] = {
+    "architecture": (
+        "Analyze the overall architecture: layer separation, module dependencies, "
+        "why this structure was chosen. Focus on: entry points, service/repository layers, "
+        "dependency flow, what patterns are enforced (e.g. clean architecture, hexagonal)."
+    ),
+    "coding_style": (
+        "Analyze coding conventions: naming (variables, functions, classes, files), "
+        "function length, class structure, import organization, comment patterns, "
+        "error handling style. Extract rules that make this codebase consistently readable."
+    ),
+    "api_design": (
+        "Analyze API design patterns: endpoint naming, request/response structure, "
+        "error responses, authentication patterns, versioning, HTTP method usage. "
+        "If this is a CLI or library (no HTTP), analyze the public interface design instead."
+    ),
 }
 
-MVP_CATEGORIES = ["architecture", "coding_style", "api_design"]
+_OUTPUT_FORMAT = """\
+Return a JSON object with this exact structure:
+{
+  "design_intent": "<overall design intent>",
+  "rules": [
+    {
+      "rule": "<specific rule>",
+      "priority": "MUST" or "SHOULD",
+      "confidence": "high" or "medium" or "low",
+      "ref_files": ["<file path>"],
+      "good_example": "<code showing correct usage>",
+      "bad_example": "<code showing incorrect usage>",
+      "reason": "<why this rule>",
+      "layer": "frontend" or "backend" or "db" or "devops" or "shared"
+    }
+  ],
+  "anti_patterns": [{"pattern": "", "reason": "", "alternative": ""}],
+  "file_type_guides": {"<file_type>": "<guidance>"},
+  "checklist": ["<item>"]
+}"""
+
+_LAYER_INSTRUCTION = (
+    "For each rule, assign a `layer` field: "
+    "'frontend' for UI/React/Vue code, "
+    "'backend' for server/API/service code, "
+    "'db' for database/migration/ORM code, "
+    "'devops' for CI/Docker/infra code, "
+    "'shared' for cross-cutting concerns."
+)
 
 
-def build_analysis_prompt(
-    category: str,
-    files_content: str,
-    structure_map: str,
-) -> str:
-    """Build the full user prompt for a category analysis."""
-    base = CATEGORY_PROMPTS[category]
+def build_category_prompt(category: str, file_summaries: list[str]) -> str:
+    """카테고리 분석 프롬프트를 반환한다.
+
+    file_summaries: 각 파일의 내용 또는 요약 문자열 목록.
+    """
+    if category not in _CATEGORY_INSTRUCTIONS:
+        raise ValueError(
+            f"Unknown category: {category!r}. Must be one of {MVP_CATEGORIES}."
+        )
+
+    category_instruction = _CATEGORY_INSTRUCTIONS[category]
+    joined = "\n\n".join(file_summaries)
+
     return (
-        f"{base}\n\n"
-        f"---\n\n"
-        f"## Project Structure\n```\n{structure_map}\n```\n\n"
-        f"## Source Files\n{files_content}"
+        f"You are an expert code analyst specializing in {category} analysis.\n\n"
+        f"<files>\n{joined}\n</files>\n\n"
+        f"{category_instruction}\n\n"
+        f"{_OUTPUT_FORMAT}\n\n"
+        f"{_LAYER_INSTRUCTION}"
     )

@@ -1,591 +1,394 @@
 # Project Skeleton — code-hijack
 
-## 1. Overview
+## 1. 프로젝트 개요
+
 - **프로젝트명**: code-hijack
-- **한 줄 설명**: 시니어 개발자의 코드베이스를 LLM으로 심층 분석하여, AI 에이전트가 동일한 스타일/구조/설계 철학으로 코드를 짜도록 규칙을 자동 추출하는 도구
-- **목적**: AI가 짜는 코드가 조잡하고 유지보수 힘든 문제 해결. 탑 티어 개발자의 선구안과 코드 스타일을 자동 추출하여 에이전트에 적용
-- **타겟 사용자**: AI 에이전트로 코드를 작성하는 개인 개발자, 팀, 회사 모두
-- **차별화**: 단순 패턴 추출이 아닌 **심층 분석** — "왜 이렇게 짰는지" 설계 의도까지 파악
+- **한 줄 설명**: 시니어 코드 스타일을 LLM으로 자동 추출
+- **목적**: AI 에이전트가 조잡한 코드를 짜는 문제 해결. 탑 티어 시니어 레포를 LLM으로 분석해 "왜 이렇게 짰는지" 설계 의도까지 담은 규칙 문서(CLAUDE.md + system-prompt.md)를 자동 생성. 에이전트가 해당 레포 스타일로 코드를 짜게 만든다.
+- **타겟 사용자**: AI 에이전트로 코드를 작성하는 개인 개발자 (본인 포함). Phase 2에서 팀/회사용 확장.
+- **범위**:
+  - **Phase 1 (MVP)**: GitHub URL/로컬 경로 입력 → 3개 카테고리(architecture, coding_style, api_design) × 5개 레이어(frontend/backend/db/devops/shared) 분석 → 레이어별 `.md` + CLAUDE.md 진입점 + system-prompt.md 출력. Claude Code skill 모드 + CLI 모드 모두 지원.
+  - **Out-of-scope (Phase 2+로 이월)**: 나머지 7개 카테고리, 세션 간 diff, 여러 레포 통합 분석, 언어 확장(Go/Rust), MCP 서버 노출.
 
 ## 2. 기능 요구사항
 
-### 핵심 기능 (MVP)
+### 핵심 기능 (MVP — Phase 1)
+- [ ] GitHub URL 또는 로컬 경로를 받아 Python/TypeScript 소스 파일을 수집한다
+- [ ] 휴리스틱 + LLM 협업으로 분석할 핵심 파일을 선별한다
+- [ ] 3개 카테고리(architecture, coding_style, api_design) × 5개 레이어(frontend/backend/db/devops/shared) 분석을 수행한다
+- [ ] 각 규칙에 참조 파일, ✅/❌ 예시 코드, 신뢰도, 우선순위(MUST/SHOULD)를 태깅한다
+- [ ] 대상 레포의 `docs/hijacked/` 하위에 세션별 raw 분석 + 통합 CLAUDE.md/system-prompt.md를 저장한다
 
-#### 2-1. 입력
-- [ ] GitHub 레포 URL 또는 로컬 경로 (Python + TypeScript)
-
-#### 2-2. LLM 심층 분석 — 10개 카테고리
-  1. **architecture** — 전체 구조, 레이어 분리, 모듈 의존성, "왜 이 구조인지"
-  2. **api_design** — API 연결 방식, 엔드포인트 패턴, 요청/응답 형식, 에러 처리
-  3. **data_model** — DB/모델 설계, state vs DB 결정 이유, 관계 설계
-  4. **coding_style** — 네이밍 컨벤션, 코드 포매팅, 함수/클래스 작성 패턴
-  5. **testing** — 테스트 프레임워크, 커버리지 전략, fixture/mock 패턴
-  6. **dependencies** — 라이브러리 선택 근거, 버전 호환성, 의존성 관리
-  7. **security** — 인증/인가 구조, 시크릿 관리, 입력 검증 패턴
-  8. **performance** — 캐싱, 비동기 패턴, DB 인덱싱, 동시성 전략
-  9. **devops** — CI/CD, Docker, 환경변수, 배포 전략
-  10. **state_management** — 전역/로컬/서버 상태 분리, 데이터 흐름 패턴
-
-#### 2-3. 적용력 강화 기능
-- [ ] **참조 파일 지정**: 각 규칙에 "이 파일을 먼저 읽어라" 지정 (추상적 규칙이 아닌 실제 파일)
-- [ ] **✅/❌ 예시 코드**: 대상 프로젝트의 실제 코드로 올바른 방식 vs 틀린 방식 비교
-- [ ] **안티패턴 목록**: "이 프로젝트에서 절대 하지 않는 것" 목록 + 이유
-- [ ] **파일 유형별 지침**: "모델 파일 작성 시", "테스트 파일 작성 시" 등 상황별 규칙
-- [ ] **체크리스트**: 코드 제출 전 AI가 자체 검증할 수 있는 체크리스트
-- [ ] **신뢰도 점수**: 각 규칙에 일관성 점수 (높음/중간/낮음)
-- [ ] **규칙 우선순위**: "필수(MUST)" vs "권장(SHOULD)" 구분
-
-#### 2-4. 출력 구조
-- [ ] 세션별 개별 분석 + 통합 버전 (docs/hijacked/ 하위)
-- [ ] 소스 레포 메타데이터 기록 (분석 대상, 시간, 파일 목록)
-- [ ] 세션 간 diff 비교 지원
-
-#### 2-5. 인터페이스
-- [ ] CLI: `code-hijack <target>` (독립 실행, Claude API 사용)
-- [ ] Claude Code skill: `/code-hijack <target>` (세션 내 실행)
-- [ ] 대화형 분석: 카테고리별 순차 진행 + 사용자 피드백
-
-### MVP 범위 (/plan-ceo-review 반영 — 범위 축소)
-
-| 항목 | MVP (Phase 1) | Phase 1.5 (layer 축) | Phase 2 |
-|------|--------------|---------------------|---------|
-| 카테고리 (aspect) | architecture, coding_style, api_design | 동일 | 나머지 7개 |
-| 레이어 (layer) | 없음 (혼합 출력) | **frontend / backend / db / devops / shared** | — |
-| 적용력 강화 | ✅/❌ 예시, 참조 파일, 체크리스트 | + 레이어별 스코프 | 안티패턴, 신뢰도, 우선순위, 파일유형별 |
-| 출력 | CLAUDE.md + system-prompt.md | **레이어별 파일 분리** (frontend.md, backend.md 등) | conventions, architecture, checklist 등 |
-| 인터페이스 | Claude Code Skill | 동일 | CLI (API 호출) |
-| 세션 | 단일 세션 | 단일 세션 | 세션 관리, diff, 통합 |
-
-### Phase 1.5 — 레이어 축 도입 (결정됨)
-
-**문제**: Phase 1 MVP는 aspect 축(architecture/coding_style/api_design)만 있음. 프론트/백엔드/DB 규칙이 한 CLAUDE.md에 뒤섞여서 AI가 프론트 파일 수정할 때 DB 규칙까지 로드. 또한 일부 규칙은 특정 레이어 전용(예: `.data` 래퍼 = 프론트, 마이그레이션 네이밍 = DB)인데 구분 안 됨.
-
-**해결**: 5개 레이어 태깅 + 레이어별 출력 파일 분리.
-
-| 레이어 | 감지 규칙 | 포함 예시 |
-|--------|----------|----------|
-| `frontend` | `.tsx/.jsx`, 경로에 `frontend/`, `client/`, `web/`, `app/`, `ui/`, `components/`; `package.json`에 react/vue/svelte/next | React 컴포넌트, 페이지, 스타일, 프론트 훅 |
-| `backend` | `.py` + 경로에 `backend/`, `server/`, `api/`, `routes/`; `package.json`에 express/fastify; `pyproject.toml`에 fastapi/django | API 핸들러, 서비스 로직, 서버 엔트리 |
-| `db` | 경로에 `migrations/`, `schemas/`, `models/`, `prisma/`; 확장자 `.sql`, `.prisma`; SQLAlchemy/TypeORM 패턴 | 마이그레이션, ORM 모델, 스키마 정의 |
-| `devops` | `Dockerfile`, `docker-compose*`, `.github/`, `.gitlab-ci*`, `terraform/`, `k8s/`, `Makefile`, `.env*` | CI/CD, 인프라, 배포 스크립트 |
-| `shared` | 위 4개 어디에도 속하지 않음 or 경로에 `shared/`, `common/`, `lib/`, `utils/` (단일 레이어 종속 아닌 경우) | 공통 타입, 유틸, 상수, 커밋 규칙 등 |
-
-**LLM 호출 전략 (비용 절충)**:
-- 호출 수는 Phase 1과 동일하게 **카테고리당 1회 유지** (3 카테고리 = 3 호출)
-- 각 호출 시 5개 레이어 파일을 모두 제공하되, 프롬프트가 **레이어별 섹션으로 나눠서 출력**하도록 강제
-- 레이어별 파일이 적거나 없으면 해당 섹션은 "N/A — 이 레이어 파일 없음" 표기
-
-**출력 구조**:
-```
-docs/hijacked/<session-id>/
-  meta.md
-  architecture.md                # raw LLM 출력 (카테고리별)
-  coding_style.md
-  api_design.md
-  session.json
-  integrated/
-    CLAUDE.md                    # 진입점 + 전체 개요 + layer 네비게이션
-    frontend.md                  # frontend 전용 규칙 (3 카테고리 합본)
-    backend.md                   # backend 전용 규칙
-    database.md                  # db 전용 규칙
-    devops.md                    # devops 전용 규칙
-    shared.md                    # 공통 규칙
-    system-prompt.md             # 레이어 구분 없는 통합 에이전트 프롬프트
-```
-
-**CLAUDE.md 진입점 역할**:
-```markdown
-# 코드 스타일 규칙
-> 프로젝트/파일에 따라 해당 레이어 문서만 로드하라.
-
-## 레이어 가이드
-- 프론트 파일 작업 (.tsx/.jsx, frontend/) → frontend.md + shared.md
-- 백엔드 파일 작업 (.py, backend/) → backend.md + shared.md
-- DB 파일 작업 (migrations/, models/) → database.md + shared.md
-- CI/인프라 작업 (.github/, Dockerfile) → devops.md + shared.md
-
-## 최우선 규칙 (레이어 무관)
-[모든 레이어의 MUST 규칙 요약 5~7개]
-```
-
-**구현 임팩트**:
-- `fetcher.py`: `SourceFile`에 `layer: str` 필드 추가, 감지 함수 추가
-- `preprocessor.py`: 2D 분류 (role × layer), 레이어별 파일 수 요약
-- `prompts.py`: 카테고리 프롬프트에 "각 레이어별 섹션으로 출력" 지시 추가
-- `analyzer.py`: LLM 출력 파싱 시 `layer` 필드 추출
-- `models.py`: `AnalysisRule`에 `layer: str` 필드 추가
-- `generator.py`: 레이어별 파일 분리 렌더러 + CLAUDE.md 진입점 재작성
-
-**평가 기준**: `tests/fixtures/senior_wisdom/ground_truth.md`의 5개 규칙이 올바른 레이어에 배치되는지 확인.
-
-### 추가 기능 (후순위)
+### 추가 기능 (Phase 2+)
 - [ ] 나머지 7개 카테고리 (testing, dependencies, security, performance, devops, state_management, data_model)
-- [ ] CLI 독립 실행 (Claude API)
-- [ ] 세션 관리 + diff
-- [ ] 여러 레포 비교 분석
-- [ ] 언어 확장 (Go, Rust 등)
-- [ ] 규칙 위반 자동 감지/경고
-- [ ] Critic 레이어 (뽑은 규칙의 타당성 재평가)
-- [ ] AI trap score (AI가 규칙을 어길 위험도 태깅)
-- [ ] Git/PR 히스토리 마이닝 (시니어의 실제 설명 추출)
+- [ ] `--resume` (이전 세션 이어서 분석)
+- [ ] 세션 diff (이전 세션 대비 변경/추가/삭제 규칙 표시)
+- [ ] 여러 레포 통합 분석
+- [ ] 언어 확장 (Go, Rust)
+
+### 비즈니스 규칙
+- 분석 대상 언어는 Python(.py)과 TypeScript(.ts/.tsx)만. 그 외 언어 파일은 제외한다.
+- 제외 디렉토리: `.git/`, `node_modules/`, `__pycache__/`, `.venv/`, `dist/`, `build/`, `target/`.
+- 세션 ID는 `YYYY-MM-DD_<레포명>` 형식. 같은 레포 재분석 시 새 세션 폴더를 생성 (이전 세션 보존).
+- LLM 분석 중 카테고리 실패 시 최대 2회 재시도. 실패 시 해당 카테고리 스킵 + `meta.md`에 사유 기록.
+- 레이어 태깅은 결정론적 감지 함수로 (경로/확장자/의존성 기반). LLM이 추측하지 않는다.
+- CLI 모드는 `ANTHROPIC_API_KEY` 환경변수 필수. Skill 모드는 현재 Claude Code 세션을 사용하므로 불필요.
+- 비용 추정을 분석 시작 전에 표시하고 사용자 확인(`Y/n`) 후 진행한다.
+
+### 명시적 Out-of-scope
+- **DB 영속화 없음** — sqlite/duckdb 사용하지 않는다. 세션 데이터는 `session.json` 파일로 저장.
+- **프론트엔드 UI 없음** — 웹/데스크탑 GUI 없음. CLI + Claude Code skill만.
+- **인증/권한 없음** — 단일 사용자 로컬 도구.
+- **백그라운드 분석 없음** — 모든 분석은 동기적 실행, 진행률은 stdout에 표시.
 
 ## 3. 기술 스택
 
-### 백엔드 (Python 3.12+)
-- **패키지 매니저**: uv
-- **CLI**: click
-- **LLM**: anthropic SDK (Claude API) — 모델은 사용자 선택 (--model)
-- **HTTP 클라이언트**: httpx
-- **AST 보조 분석**: ast (stdlib) — Python 정량 데이터 추출
-- **TS 분석**: LLM 우선, AST는 보조
-- **테스트**: pytest, pytest-asyncio
-- **린터**: ruff
+### 런타임 / 언어
+- Python 3.12+
+
+### 프레임워크 / 주요 라이브러리
+- `click` — CLI 프레임워크
+- `anthropic` — Claude API 호출 (CLI 모드)
+- `httpx` — GitHub 레포 메타데이터 조회
+- `asyncio` (stdlib) — LLM 호출 병렬 처리
+
+### 빌드 / 패키지 관리
+- `pip install -e ".[dev,api]"` (setuptools 기반, `backend/pyproject.toml` 참조)
+
+### 테스트
+- `pytest` + `pytest-asyncio` (asyncio_mode=auto)
+- 실행: `cd backend && pytest` (testpaths → `../tests/`)
+
+### 린트 / 포맷 / 타입체크
+- `ruff check src tests` (E, F, I, UP, B, SIM 규칙)
+- 타입체커: 현재 Phase 1에선 미도입 (pyright 추가는 Phase 2 검토)
 
 ### 허용 라이브러리 화이트리스트
-- click
-- anthropic
-- httpx
-- pytest, pytest-asyncio
-- ruff
 
-## 4. 핵심 아키텍처
+**추가 허용 (프로파일 기본 + 이 목록)**:
+- `anthropic`: Claude API SDK — LLM 분석의 핵심 호출 경로
+- `httpx`: GitHub URL 정규화/메타데이터 조회 + anthropic SDK 내부 의존성
+- `pytest-asyncio`: async LLM 호출 테스트
 
-### 분석 파이프라인
+**화이트리스트 외 금지**:
+- `pydantic` — 데이터 모델은 `@dataclass`로 통일 (프로파일 whitelist에 있지만 이 프로젝트는 의도적으로 배제)
+- `rich`, `platformdirs`, `tomli` — Phase 1 불필요. 필요해지면 그때 추가 + 사유 명시.
+
+## 4. 설정 / 환경변수
+
+### 환경변수
+| 이름 | 타입 | 필수 | 기본값 | 설명 |
+|------|------|:---:|--------|------|
+| `ANTHROPIC_API_KEY` | `str` | ✅ (CLI 모드) | — | Claude API 키. Skill 모드에서는 불필요. |
+
+### 피처 플래그
+현재 없음. Phase 1 동작은 모두 CLI 옵션으로 제어.
+
+### `.env.example` 위치
+- `backend/.env.example` — `ANTHROPIC_API_KEY=` 한 줄만.
+
+### 런타임 설정
+- 현재 런타임 설정 파일 없음. 모든 설정은 CLI 옵션 또는 환경변수로 전달.
+- 로드 우선순위: CLI 옵션 > 환경변수 > 코드 기본값.
+
+## 5. 에러 핸들링
+
+### 에러 분류 체계
+
+| 코드 | 의미 | 발생 조건 |
+|------|------|----------|
+| `INPUT_001` | 대상 경로/URL 유효하지 않음 | 로컬 경로 존재하지 않거나 URL 형식 오류 |
+| `INPUT_002` | 지원 언어 없음 | 대상 레포에 .py/.ts/.tsx 파일 0개 |
+| `FETCH_001` | 레포 클론 실패 | `git clone` 실패 (네트워크/권한) |
+| `FETCH_002` | 파일 0개 선별됨 | 휴리스틱 + LLM 선정 결과 0개 (폴백 경로 진입) |
+| `LLM_001` | API 인증 실패 | `ANTHROPIC_API_KEY` 미설정 또는 잘못됨 (CLI 모드만) |
+| `LLM_002` | API 호출 실패 | anthropic SDK 예외 (rate limit, 네트워크 등) |
+| `LLM_003` | 응답 파싱 실패 | JSON 파싱 실패 + regex 폴백도 실패 |
+| `OUTPUT_001` | 기존 통합 파일 덮어쓰기 거부 | `docs/hijacked/integrated/` 존재 + 사용자 확인에 `n` |
+
+### 에러 전달 방식
+- **CLI**: `click.ClickException` 서브클래스 raise → `stderr`에 사람이 읽는 메시지 + 적절한 exit code.
+- **Skill 모드**: 예외를 그대로 Claude Code에 전파 (Claude가 대화로 설명).
+
+### 예외/에러 계층
+
 ```
-입력 (레포 URL/경로)
-    ↓
-[1. Fetcher] — 레포 클론 + 파일 수집
-  - Python (.py) + TypeScript (.ts/.tsx) + 설정 파일 수집
-  - .gitignore, node_modules, __pycache__ 등 제외
-    ↓
-[2. Preprocessor] — 핵심 파일 선별
-  - 휴리스틱 기반 후보 선별 (역할별 파일 분류)
-  - 프로젝트 구조 맵 생성 (디렉토리 트리)
-  - LLM에 구조 맵 전달 → "분석할 핵심 파일 N개 선정" 요청
-    ↓
-[3. LLM Analyzer] — 카테고리별 순차 심층 분석
-  - 카테고리마다 구조화된 프롬프트 + 관련 파일 제공
-  - 각 분석에 포함:
-    - 설계 의도 추론 ("왜 이렇게 짰는지")
-    - 참조 파일 지정 ("이 파일을 먼저 읽어라")
-    - ✅/❌ 예시 코드 (실제 코드에서 추출)
-    - 안티패턴 식별
-    - 신뢰도 + 우선순위 태깅
-  - 각 카테고리 분석 후 사용자에게 결과 표시, 피드백 반영
-    ↓
-[4. Generator] — 다중 형식 출력
-  - 세션별 개별 파일 생성 (10개 카테고리)
-  - 통합 버전 생성 (CLAUDE.md, conventions.md 등)
-  - 메타데이터 기록
-```
-
-### 파일 선별 전략 (대규모 레포 대응)
-
-**Phase 1 — 휴리스틱 선별:**
-| 역할 | 파일 패턴 | 우선순위 |
-|------|----------|---------|
-| Entry point | main.py, app.py, index.ts, server.ts | 최고 |
-| 모델/스키마 | models/, schemas/, types/ | 높음 |
-| API/라우터 | routes/, api/, controllers/ | 높음 |
-| 서비스/로직 | services/, lib/, utils/ | 중간 |
-| 테스트 | tests/, __tests__/, *.test.ts | 중간 |
-| 설정 | config/, *.config.ts, pyproject.toml | 중간 |
-| 상태 관리 | store/, state/, context/ | 중간 |
-| 보안 | auth/, middleware/ | 중간 |
-| DevOps | Dockerfile, docker-compose, .github/ | 낮음 |
-
-**Phase 2 — LLM 최종 선정:**
-- 프로젝트 구조 맵 + 휴리스틱 후보 목록을 LLM에 제공
-- "이 프로젝트의 설계 철학을 이해하기 위해 읽어야 할 핵심 파일을 선정하라"
-- LLM이 프로젝트 성격에 맞게 최종 선정
-
-### LLM 분석 프롬프트 전략
-
-각 카테고리별 프롬프트에 공통으로 요구하는 출력 구조:
-```
-## [카테고리명] 분석 결과
-
-### 설계 의도
-(왜 이렇게 짰는지 추론)
-
-### 규칙 목록
-각 규칙은 아래 형식을 따른다:
-- **규칙**: [구체적 규칙]
-- **우선순위**: MUST / SHOULD
-- **신뢰도**: 높음 / 중간 / 낮음
-- **참조 파일**: [실제 파일 경로]
-- **✅ 올바른 예시**: (실제 코드)
-- **❌ 틀린 예시**: (이렇게 하면 안 됨)
-
-### 안티패턴
-(이 프로젝트에서 절대 하지 않는 것)
-
-### 파일 유형별 지침
-(모델 파일 작성 시 / API 파일 작성 시 / 테스트 파일 작성 시)
-
-### 체크리스트
-- [ ] 코드 제출 전 확인 항목
+HijackError (baseclass, ClickException 상속)
+├─ InputError          (INPUT_001, INPUT_002) — exit 2
+├─ FetchError          (FETCH_001, FETCH_002) — exit 3
+├─ LLMError            (LLM_001, LLM_002, LLM_003) — exit 3
+└─ OutputError         (OUTPUT_001) — exit 3
 ```
 
-## 5. 출력 형식
+### 내부 ↔ 외부 경계
+- **내부 전용**: 스택 트레이스, anthropic SDK 원시 에러 메시지 → `logging` 로만.
+- **외부 노출 (stderr)**: 에러 코드 + 사람이 읽는 메시지 + (LLM_002만) 재시도 횟수.
+- **절대 노출 금지**: `ANTHROPIC_API_KEY` 값, 내부 절대 경로, 스택 트레이스.
 
-### 파일 구조
-대상 프로젝트 내 `docs/hijacked/` 하위에 생성:
+### 재시도 / 복구 정책
+- `LLM_002` (API 호출 실패): 카테고리당 최대 2회 재시도. exponential backoff (1s → 2s → 4s). 2회 실패 시 해당 카테고리 스킵 + `meta.md`에 사유 기록.
+- `LLM_003` (파싱 실패): JSON 파싱 실패 시 regex 폴백 1회. 그것도 실패 시 raw 출력을 `<category>.md`에 저장 + 경고.
+- `FETCH_001`: 재시도 안 함. 즉시 에러.
+
+## 6. CLI 커맨드
+
+### 엔트리포인트
+- 실행 명령: `code-hijack` (pyproject.toml `[project.scripts]`에 등록) 또는 `python -m hijack`
+- 프레임워크: `click`
+
+### 공통 옵션
+| 옵션 | 축약 | 설명 |
+|------|-----|------|
+| `--verbose` | `-v` | 상세 로그 (logging DEBUG) |
+| `--quiet` | `-q` | 진행 메시지 억제 |
+| `--help` | `-h` | 도움말 |
+| `--version` | | 버전 표시 |
+
+### 커맨드
+
+#### `code-hijack <target>`
+
 ```
-target-project/
-└── docs/hijacked/
-    ├── 2026-04-12_fastapi/           # 세션 1: fastapi 레포 분석
-    │   ├── meta.md                   # 분석 메타데이터
-    │   │   - 대상 레포: fastapi/fastapi
-    │   │   - 분석 시간: 2026-04-12 14:30
-    │   │   - 모델: claude-opus-4-6
-    │   │   - 선별된 파일 목록 (30개)
-    │   │   - 분석 소요 시간
-    │   ├── architecture.md
-    │   ├── api_design.md
-    │   ├── data_model.md
-    │   ├── coding_style.md
-    │   ├── testing.md
-    │   ├── dependencies.md
-    │   ├── security.md
-    │   ├── performance.md
-    │   ├── devops.md
-    │   └── state_management.md
-    │
-    ├── 2026-04-15_nextjs/            # 세션 2: next.js 레포 분석
-    │   ├── meta.md
-    │   ├── architecture.md
-    │   └── ...
-    │
-    └── integrated/                    # 통합 버전 (모든 세션 종합)
-        ├── CLAUDE.md                  # 핵심 규칙 요약 (에이전트가 가장 먼저 읽는 파일)
-        ├── conventions.md             # 코딩 컨벤션 상세
-        ├── architecture.md            # 아키텍처 분석 + 설계 의도
-        ├── system-prompt.md           # AI 에이전트용 시스템 프롬프트
-        ├── checklist.md               # 코드 제출 전 체크리스트
-        └── anti-patterns.md           # 안티패턴 종합
-```
+사용법: code-hijack <target> [옵션]
 
-### 통합 버전 각 파일 내용
+인자:
+  target             GitHub URL 또는 로컬 경로 (필수)
 
-**CLAUDE.md** (에이전트가 가장 먼저 읽는 파일):
-- 프로젝트 빌드/실행 명령
-- 10개 카테고리 핵심 규칙 요약 (MUST 항목만)
-- "절대 하지 말 것" 목록 (top 10)
-- 참조 파일 맵 ("새 라우터 → routes/users.py 먼저 읽어라")
-- 사용 가능한 라이브러리 화이트리스트
-
-**conventions.md**:
-- 네이밍 규칙 + ✅/❌ 예시 코드
-- 파일/폴더 구조 규칙
-- API 설계 규칙 + 예시
-- 에러 처리 규칙 + 예시
-- 테스트 규칙 + 예시
-- 각 규칙에 신뢰도/우선순위 태그
-
-**architecture.md**:
-- 전체 구조 다이어그램
-- 레이어별 역할과 의존성
-- "왜 이렇게 설계했는지" 추론
-- 데이터 흐름
-- 파일 유형별 지침 ("모델 파일 작성 시", "서비스 파일 작성 시" 등)
-
-**system-prompt.md**:
-- AI 에이전트가 이 프로젝트에서 코딩할 때 사용할 시스템 프롬프트
-- "너는 이 프로젝트의 시니어 개발자처럼 코드를 짜야 한다" 형식
-- 각 파일 유형별 구체적 지침 포함
-
-**checklist.md**:
-- 코드 제출 전 AI가 자체 검증할 체크리스트
-- 카테고리별 체크 항목
-- MUST 항목은 통과 필수
-
-**anti-patterns.md**:
-- "이 프로젝트에서 절대 하지 않는 것" 종합
-- 각 안티패턴에 이유 + 올바른 대안 코드
-
-## 6. 세션 관리
-
-### 세션 간 diff
-- 새 세션 실행 시 이전 세션과 비교
-- 변경된 규칙, 추가된 규칙, 제거된 규칙 표시
-- 통합 버전 자동 업데이트
-
-### 세션 네이밍
-- `YYYY-MM-DD_<레포명>` 형식
-- 같은 레포 재분석 시 새 세션 생성 (이전 세션 보존)
-
-## 7. 중간 데이터 모델 (/plan-eng-review 반영)
-
-분석 결과를 구조화된 데이터로 저장하여 파싱 안정성과 세션 간 diff를 보장한다.
-
-### 핵심 데이터 모델
-```python
-@dataclass
-class AnalysisRule:
-    """하나의 규칙."""
-    rule: str                          # 규칙 설명
-    priority: Literal["MUST", "SHOULD"]  # 필수 vs 권장
-    confidence: Literal["high", "medium", "low"]  # 신뢰도
-    ref_files: list[str]               # 참조 파일 경로
-    good_example: str                  # ✅ 올바른 예시 코드
-    bad_example: str                   # ❌ 틀린 예시 코드
-    reason: str                        # 왜 이 규칙인지
-
-@dataclass
-class CategoryResult:
-    """하나의 카테고리 분석 결과."""
-    category: str                      # "architecture", "api_design", ...
-    design_intent: str                 # 설계 의도 설명
-    rules: list[AnalysisRule]
-    anti_patterns: list[dict]          # {"pattern": str, "reason": str, "alternative": str}
-    file_type_guides: dict[str, str]   # {"model": "지침...", "router": "지침..."}
-    checklist: list[str]               # 체크리스트 항목
-    raw_llm_output: str                # LLM 원본 출력 (디버깅용)
-
-@dataclass
-class SessionResult:
-    """하나의 분석 세션 전체 결과."""
-    session_id: str                    # "2026-04-12_fastapi"
-    target: str                        # 레포 URL 또는 경로
-    model: str                         # "claude-opus-4-6"
-    timestamp: str                     # ISO 8601
-    selected_files: list[str]          # 선별된 파일 목록
-    categories: list[CategoryResult]
-    analysis_duration_seconds: float
-```
-
-### 저장 형식
-- 세션별 `session.json`으로 구조화 저장 (diff/통합용)
-- 사람이 읽을 수 있는 .md 파일도 함께 생성
-
-### LLM 출력 파싱 전략
-1. **구조화된 프롬프트**: LLM에 JSON 출력을 요청 (tool_use 활용 가능)
-2. **폴백**: JSON 파싱 실패 시 Markdown에서 regex 추출
-3. **검증**: 필수 필드 누락 시 해당 카테고리 재분석 요청 (최대 2회)
-
-## 8. 컨텍스트 관리 전략 (/plan-eng-review 반영)
-
-LLM 컨텍스트 윈도우 한계에 대응하는 전략.
-
-### 카테고리별 파일 배정
-각 카테고리에 관련 파일만 선별하여 컨텍스트를 절약한다:
-
-| 카테고리 | 주입 파일 |
-|---------|----------|
-| architecture | entry point, 최상위 __init__, config, 디렉토리 구조 맵 |
-| api_design | routes/, api/, controllers/, middleware/ |
-| data_model | models/, schemas/, types/, migrations/ |
-| coding_style | 대표 소스 파일 5-10개 (다양한 모듈에서) |
-| testing | tests/ 대표 파일 5개 + conftest.py |
-| dependencies | pyproject.toml, package.json, requirements.txt, import 요약 |
-| security | auth/, middleware/, config 중 시크릿 관련 |
-| performance | 비동기 코드, DB 쿼리 코드, 캐싱 관련 |
-| devops | Dockerfile, docker-compose, .github/, CI 설정 |
-| state_management | store/, state/, context/, 전역 상태 파일 |
-
-### 파일 크기 제어
-- 단일 파일 500줄 초과 시 → 핵심 부분만 추출:
-  - import 문
-  - 클래스/함수 시그니처
-  - 데코레이터
-  - 주석/docstring
-- 전체 카테고리 컨텍스트: 최대 50,000 토큰 목표
-
-### 2단계 분석 (대규모 레포)
-```
-Step 1 — 요약 분석:
-  파일 시그니처만 LLM에 제공 → 각 카테고리의 핵심 패턴 파악
-  
-Step 2 — 심층 분석:
-  Step 1에서 식별된 핵심 파일의 전체 코드를 LLM에 제공
-  → 구체적 규칙/예시/안티패턴 추출
-```
-
-### CLI vs Skill 공유 아키텍처
-```
-hijack/
-├── core/              # 공유 로직 (CLI와 Skill 둘 다 사용)
-│   ├── fetcher.py     # 레포 클론/파일 수집
-│   ├── preprocessor.py # 파일 선별 + 구조 맵
-│   ├── analyzer.py    # LLM 분석 (프롬프트 + 파싱)
-│   ├── generator.py   # 출력 생성
-│   ├── models.py      # 데이터 모델 (Section 7)
-│   └── session.py     # 세션 관리
-├── llm/               # LLM 호출 추상화
-│   ├── base.py        # LLM 인터페이스
-│   ├── api.py         # Claude API 호출 (CLI용)
-│   └── session.py     # Claude Code 세션 내 분석 (Skill용)
-├── cli.py             # CLI 진입점
-└── skill.py           # Claude Code skill 진입점
-```
-
-## 9. 엣지케이스 (/plan-eng-review 반영)
-
-| 케이스 | 대응 |
-|--------|------|
-| 레포에 Python도 TS도 없음 | 에러: "Python 또는 TypeScript 파일이 없습니다. 지원 언어: Python, TypeScript" |
-| 파일 0개 선별됨 | 전체 파일 목록으로 폴백, 경고 메시지 표시 |
-| LLM 분석 중 API 에러 | 최대 2회 재시도, 실패 시 해당 카테고리 스킵 + 사유 기록 |
-| 기존 docs/hijacked/ 존재 | 새 세션 폴더 추가, 통합 버전은 업데이트 여부 사용자에게 확인 |
-| 모노레포 (여러 프로젝트) | `--path` 옵션으로 서브디렉토리 지정 |
-| 컨텍스트 초과 | 파일 요약 모드로 전환 (시그니처만 추출) |
-| LLM 출력 파싱 실패 | 재시도 1회, 실패 시 raw 출력을 .md로 저장 + 경고 |
-| 비용 초과 우려 | 분석 시작 전 예상 토큰/비용 표시, 사용자 확인 후 진행 |
-
-## 10. CLI/UX 설계 (Designer)
-
-### CLI 명령어 구조
-```
-code-hijack <target> [OPTIONS]
-
-Arguments:
-  target              GitHub URL 또는 로컬 경로
-
-Options:
-  --model, -m TEXT    LLM 모델 선택 (기본: claude-sonnet-4-6)
+옵션:
+  --model, -m TEXT    LLM 모델 ID (기본: claude-sonnet-4-6)
   --path, -p PATH     모노레포 시 서브디렉토리 지정
-  --categories TEXT    분석할 카테고리 콤마 구분 (기본: all)
+  --categories TEXT   분석할 카테고리 콤마 구분 (기본: architecture,coding_style,api_design)
   --output, -o PATH   출력 디렉토리 (기본: <target>/docs/hijacked/)
-  --resume            이전 세션 이어서 분석
-  --dry-run           비용 추정만 하고 실행 안 함
-  --verbose, -v       상세 로그
+  --dry-run           비용 추정만 하고 실행 안 함 (LLM 호출 없음)
+
+예시:
+  code-hijack https://github.com/fastapi/fastapi
+  → 분석 진행률 출력 + docs/hijacked/2026-04-17_fastapi/ 생성
+
+  code-hijack ./my-repo --dry-run
+  → 선별 파일 수 + 예상 토큰/비용만 출력, 종료
+
+에러:
+  exit 0: 성공
+  exit 2: 인자 누락 / 형식 오류 / INPUT_001, INPUT_002
+  exit 3: FETCH_*, LLM_*, OUTPUT_* 내부 처리 실패
 ```
 
-### 대화형 분석 흐름 (UX 시나리오)
+### 서브커맨드 그룹
+현재 없음 (단일 커맨드). Phase 2에서 `--resume`, `diff` 등을 서브커맨드로 승급 검토.
 
+### 출력 형식
+- 기본: 사람이 읽는 텍스트 (click.echo, 필요 시 색상). 진행률은 stderr에 짧게.
+- 에러: stderr. 최종 출력 파일 경로 및 요약은 stdout.
+- `--json` 옵션: 현재 없음 (Phase 2 검토).
+
+### Skill 모드
+- `/code-hijack <target>` — `skill.py` 엔트리를 통해 현재 Claude Code 세션의 컨텍스트로 실행.
+- `--model` 옵션 불필요 (세션 모델 사용).
+- API 호출 대신 세션 내 LLM 사용 → 추가 비용 없음.
+
+## 7. 도메인 로직
+
+### 핵심 비즈니스 규칙
+1. 분석 파이프라인은 **Fetcher → Preprocessor → Analyzer → Generator** 순서. 각 단계는 독립 테스트 가능.
+2. `core/`의 모든 함수는 순수 — 파일/네트워크 I/O 금지. I/O는 `io/` 또는 어댑터 계층에서만.
+3. LLM 호출은 **반드시 `BaseLLM` 인터페이스를 거친다**. 테스트에서 `AsyncMock`으로 대체 가능.
+4. 레이어 태깅은 결정론적 — 경로/확장자/의존성 파일(package.json, pyproject.toml) 기반 감지 함수로. LLM이 추측하지 않는다.
+5. LLM이 반환한 규칙 중 필수 필드(`rule`, `priority`, `layer`) 누락 시 해당 규칙 드롭 + 경고. 카테고리 전체는 유효.
+6. `dataclass` only — Pydantic 금지. 직렬화는 `to_json` / `from_json` 수동 구현.
+7. 윈도우/macOS/리눅스 호환 — 경로 비교는 `Path.as_posix()` 사용, `str(path)` 금지.
+
+### 알고리즘
+
+#### `detect_layer`
+- **입력**: `file_path: Path`, `repo_root: Path`, `package_jsons: dict[Path, dict]`, `pyproject_toml: dict | None`
+- **출력**: `Literal["frontend", "backend", "db", "devops", "shared"]`
+- **전제조건**: `file_path`가 `repo_root` 하위
+- **사후조건**: 반드시 5개 중 하나 반환. 불확실할 때 `"shared"`.
+- **복잡도**: `O(1)` (경로 단편 비교 + dict 조회)
+
+**의사 코드**:
 ```
-$ code-hijack https://github.com/fastapi/fastapi
+rel = file_path.relative_to(repo_root).as_posix()
+suffix = file_path.suffix
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- code-hijack — fastapi/fastapi
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-[1/4] 파일 수집
-  Cloning repository...
-  Found 342 Python files, 0 TypeScript files
-  Total: 342 source files
-
-[2/4] 핵심 파일 선별
-  Heuristic candidates: 87 files
-  LLM selected: 32 key files
-
-  Selected files:
-    fastapi/applications.py (entry point)
-    fastapi/routing.py (router)
-    fastapi/params.py (models)
-    ... (29 more)
-
-  Estimated cost: ~$8 (claude-opus-4-6) / ~$2 (claude-sonnet-4-6)
-  Estimated time: ~5 min
-  
-  Continue? [Y/n] █
-
-[3/4] 카테고리별 분석
-
-  ┌─────────────────────────────────────┐
-  │ 1/10  architecture                  │
-  └─────────────────────────────────────┘
-
-  ## 설계 의도
-  FastAPI는 Starlette 위에 구축된 3레이어 아키텍처...
-  라우팅 → 의존성 주입 → 응답 직렬화 순서로 처리...
-
-  ## 규칙 (7개)
-  1. [MUST] 라우터는 APIRouter로 분리, app에 include
-     📁 참조: fastapi/routing.py
-     ✅ router = APIRouter(prefix="/users")
-     ❌ @app.get("/users") 직접 등록
-
-  2. [MUST] 의존성은 Depends()로 주입
-     📁 참조: fastapi/dependencies/utils.py
-     ...
-
-  ## 안티패턴
-  - 글로벌 변수로 상태 공유 금지
-  - 라우터 함수에서 직접 DB 세션 생성 금지
-
-  ## 체크리스트
-  - [ ] 새 엔드포인트가 APIRouter에 등록되었는가?
-  - [ ] Depends()로 의존성을 주입했는가?
-
-  피드백이 있으신가요? (Enter로 다음 카테고리) █
-
-  ┌─────────────────────────────────────┐
-  │ 2/10  api_design                    │
-  └─────────────────────────────────────┘
-  ...
-  (10개 카테고리 반복)
-
-[4/4] 통합 문서 생성
-
-  Generating integrated documents...
-
-  ✅ 분석 완료!
-
-  세션 파일:
-    docs/hijacked/2026-04-12_fastapi/
-    ├── meta.md
-    ├── architecture.md
-    ├── api_design.md
-    ├── data_model.md
-    ├── coding_style.md
-    ├── testing.md
-    ├── dependencies.md
-    ├── security.md
-    ├── performance.md
-    ├── devops.md
-    ├── state_management.md
-    └── session.json
-
-  통합 파일:
-    docs/hijacked/integrated/
-    ├── CLAUDE.md
-    ├── conventions.md
-    ├── architecture.md
-    ├── system-prompt.md
-    ├── checklist.md
-    └── anti-patterns.md
+if suffix in {".tsx", ".jsx"}: return "frontend"
+if any(seg in rel for seg in ["frontend/", "client/", "web/", "app/", "ui/", "components/"]): return "frontend"
+if suffix in {".sql", ".prisma"} or any(seg in rel for seg in ["migrations/", "schemas/", "prisma/", "models/"]): return "db"
+if file_path.name in {"Dockerfile"} or any(seg in rel for seg in [".github/", "k8s/", "terraform/"]): return "devops"
+if suffix == ".py" and any(seg in rel for seg in ["backend/", "server/", "api/", "routes/"]): return "backend"
+if suffix == ".py" and pyproject_toml has "fastapi"|"django"|"flask": return "backend"
+return "shared"
 ```
 
-### 에러/경고 메시지
+#### `run_full_analysis`
+- **입력**: `files: list[SourceFile]`, `categories: list[str]`, `llm: BaseLLM`, `model: str`
+- **출력**: `SessionResult`
+- **전제조건**: `files`는 Preprocessor가 선별한 핵심 파일. `llm`은 `BaseLLM` 구현체.
+- **사후조건**: 카테고리마다 `CategoryResult` 생성. 실패한 카테고리는 `error` 필드에 사유 기록.
+- **복잡도**: `O(C × F)` (C=카테고리 수, F=카테고리당 관련 파일 수)
 
-| 상황 | 메시지 |
-|------|--------|
-| Python/TS 없음 | `Error: No Python or TypeScript files found. Supported: .py, .ts, .tsx` |
-| 클론 실패 | `Error: Failed to clone repository. Check URL and network.` |
-| API 키 없음 | `Error: ANTHROPIC_API_KEY not set. Set it or use Claude Code skill mode.` |
-| 파일 선별 0개 | `Warning: No key files identified. Analyzing all files (may be slow).` |
-| 카테고리 분석 실패 | `Warning: [architecture] analysis failed. Skipping. (Retry with --resume)` |
-| 기존 세션 존재 | `Note: Previous session found. Creating new session. Use --resume to continue.` |
-| 비용 높음 | `Warning: Estimated cost exceeds $20. Consider using --model claude-sonnet-4-6` |
+**의사 코드**:
+```
+for category in categories:
+    files_for_cat = filter_by_role(files, _CATEGORY_ROLES[category])
+    prompt = build_category_prompt(category, files_for_cat)
+    for attempt in range(2):
+        try:
+            raw = await llm.analyze(prompt, model=model)
+            parsed = parse_json(raw) or parse_regex(raw)
+            result = CategoryResult(category, ..., rules=[AnalysisRule(..., layer=r["layer"]) for r in parsed["rules"]])
+            results.append(result); break
+        except (APIError, ParseError) as e:
+            backoff(attempt); continue
+    else:
+        results.append(CategoryResult(category, error=str(e)))
+return SessionResult(categories=results, ...)
+```
 
-### Claude Code Skill 모드 차이점
+### 순수 함수 vs I/O 분리
 
-Skill(`/code-hijack`)로 실행 시:
-- API 호출 대신 현재 세션의 Claude가 직접 분석
-- 추가 비용 없음
-- 대화형 피드백이 자연스러움 (채팅 형태)
-- `--model` 옵션 불필요 (현재 세션 모델 사용)
-- 컨텍스트 윈도우 제한 → 파일 요약 모드가 더 자주 활성화될 수 있음
+**pure (`src/hijack/core/`)** — I/O 없음, 테스트 쉬움:
+- `models.py`: 데이터 모델 (`AnalysisRule`, `CategoryResult`, `SessionResult`) + `to_json` / `from_json`
+- `preprocessor.py`: 역할 분류, 2D(role×layer) 분류, 구조 맵 생성 — 순수 함수
+- `prompts.py`: 카테고리별 프롬프트 빌더 — 순수 문자열 조립
+- `analyzer.py` 의 파싱 함수 (`parse_json`, `parse_regex_fallback`) — LLM 호출부는 impure로 분리
+- `session.py` 의 ID 생성/diff 로직 — 순수
 
-## 11. 비용/시간 추정 (/plan-eng-review 반영)
+**impure (파이프라인 진입/출력 레이어)** — 파일/네트워크:
+- `core/fetcher.py`: 레포 클론 (`git` subprocess) + 파일 수집 [FS/NET]
+- `core/analyzer.py` 의 `run_full_analysis`: LLM 호출 [NET]
+- `core/generator.py`: `write_output` 파일 저장 [FS]
+- `core/session.py` 의 `get_output_dir`: 디렉토리 생성 [FS]
+- `llm/api.py`: `ClaudeAPIClient.analyze` — anthropic SDK 호출 [NET]
+- `cli.py`: click 진입점 — stdin/stdout/exit
 
-### LLM 호출 횟수
-| 단계 | 호출 수 | 설명 |
-|------|--------|------|
-| 파일 선정 | 1 | 구조 맵 → LLM이 핵심 파일 선정 |
-| 카테고리 분석 | 10~20 | 10개 카테고리 × (요약 1 + 심층 1) |
-| 통합 생성 | 1 | 전체 결과를 통합 문서로 |
-| **합계** | **12~22** | |
+### 에지 케이스 목록
+- 레포에 `.py` 도 `.ts/.tsx` 도 없음 → `InputError(INPUT_002)`
+- 휴리스틱 선정 결과 0개 → 전체 파일로 폴백 + 경고 (`FETCH_002` 는 에러 아닌 warn)
+- 단일 파일이 2,000줄 초과 → `import` / 시그니처 / 주석만 추출 (컨텍스트 절약)
+- 모노레포 (루트에 여러 프로젝트) → `--path` 옵션으로 서브디렉토리 지정
+- 기존 `docs/hijacked/integrated/` 존재 → 덮어쓸지 사용자 확인 (`y/n`). 거부 시 `OutputError(OUTPUT_001)`
+- LLM 응답이 JSON 아님 → regex 폴백 시도. 그것도 실패 시 raw 저장 + 경고.
+- `--dry-run` 모드 → Fetcher + Preprocessor 까지만 실행, LLM 호출 없이 예상 토큰/비용 출력.
 
-### 예상 비용 (Opus 기준)
-- 소규모 레포: ~$2-5
-- 중규모 레포: ~$5-15
-- 대규모 레포: ~$15-30
+### 테스트 전략
+- **단위 테스트**: 순수 함수 (`detect_layer`, `preprocessor`, `parse_json`, `parse_regex_fallback`, `create_session_id`) → 고정 입력/출력.
+- **통합 테스트**: `tests/fixtures/senior_wisdom/` 픽스처 레포로 전체 파이프라인 실행. LLM은 `AsyncMock` 또는 미리 녹음된 응답 사용.
+- **검증 픽스처**: `ground_truth.md`에 정의된 5개 규칙이 올바른 레이어에 배치되는지 검증 (Phase 1.5 완료 조건).
+- **커버리지 목표**: `core/` 모듈 ≥ 90%, `cli.py` / `llm/api.py` ≥ 70% (I/O 경계는 mock).
 
-→ **분석 시작 전 예상 비용을 사용자에게 표시하고 확인 후 진행**
+## 8. 외부 통합
 
-### 세션 내 분석 (Skill)
-- Claude Code 세션을 사용하므로 추가 API 비용 없음
-- 대신 세션 컨텍스트 윈도우 내에서 처리해야 함
+### 3rd Party API
+| 서비스 | 목적 | 인증 방식 | 요금제 |
+|--------|------|----------|--------|
+| Anthropic Claude API | 카테고리별 LLM 분석 | API key (env: `ANTHROPIC_API_KEY`) | pay-as-you-go (사용자가 `--model` 로 비용 제어) |
+| GitHub (공개 레포) | `git clone` 으로 클론 | 공개 레포는 인증 불필요. 사설 레포는 Phase 2 검토 | 무료 |
+
+### OAuth 공급자
+해당 없음 (단일 사용자 로컬 도구).
+
+### 웹훅
+**수신**: 없음. **발신**: 없음.
+
+### 실패 대응
+- **Anthropic Claude API**:
+  - Retry: 카테고리당 최대 2회, exponential backoff (1s → 2s → 4s)
+  - Circuit breaker: 없음 (Phase 2 검토)
+  - Fallback: 카테고리 스킵 + `meta.md`에 사유 기록. 나머지 카테고리는 계속 진행.
+- **GitHub 클론**:
+  - Retry: 없음 (네트워크 문제는 사용자가 재실행)
+  - Fallback: 로컬 경로 지정 권유 메시지.
+
+### Rate Limit
+- Anthropic: 모델별 RPM/TPM 한도 → 429 에러 시 `LLM_002` 로 묶어 재시도. 사용자에게 "잠시 후 재실행" 안내.
+- GitHub: 공개 레포 클론은 실무상 제한 없음 (Phase 1 기준).
+
+## 9. 태스크 분해
+
+### Phase 1 — MVP (3 카테고리 × 5 레이어, CLI + Skill)
+| ID | 에이전트 | 의존성 | 설명 | 상태 |
+|----|---------|--------|------|------|
+| T-001 | backend_coder | - | core.logic (models.py): AnalysisRule/CategoryResult/SessionResult @dataclass + to_json/from_json. layer 필드 포함. | 대기 |
+| T-002 | backend_coder | - | errors + configuration: HijackError(ClickException) 계층 (Input/Fetch/LLM/Output) + 에러 코드 상수 + backend/.env.example 생성. | 대기 |
+| T-003 | backend_coder | T-001 T-002 | core.logic (llm/base.py, llm/api.py): BaseLLM ABC (analyze 추상) + ClaudeAPIClient (anthropic SDK, asyncio.to_thread 래핑, 기본 모델 claude-sonnet-4-6, ANTHROPIC_API_KEY 로드). | 대기 |
+| T-004 | backend_coder | T-001 T-002 | core.logic (fetcher.py): SourceFile + fetch_source (로컬 경로 + git clone), 파일 수집 + _SKIP_DIRS 제외 + detect_layer (frontend/backend/db/devops/shared). | 대기 |
+| T-005 | backend_coder | T-001 T-004 | core.logic (preprocessor.py): 역할 분류 (entry_point/model/api/test/config/...), 2D(role×layer) 분류, PreprocessResult, build_file_summary_for_llm. | 대기 |
+| T-006 | backend_coder | T-001 | core.logic (prompts.py): MVP 3 카테고리 프롬프트 (architecture, coding_style, api_design) + 레이어별 섹션 출력 지시 + MVP_CATEGORIES 상수. | 대기 |
+| T-007 | backend_coder | T-003 T-005 T-006 | core.logic (analyzer.py): run_full_analysis, 카테고리별 LLM 호출, JSON 파싱 + regex 폴백, 최대 2회 재시도, 레이어 파싱. | 대기 |
+| T-008 | backend_coder | T-001 | core.logic (session.py): create_session_id (YYYY-MM-DD_<repo>), get_output_dir, SessionDiff (Phase 2 stub). | 대기 |
+| T-009 | backend_coder | T-001 T-007 T-008 | core.logic (generator.py): 레이어별 .md 분리 렌더러 (frontend/backend/database/devops/shared) + CLAUDE.md 진입점 + system-prompt.md + write_output (세션별 raw + integrated). | 대기 |
+| T-010 | backend_coder | T-002 T-003 T-007 T-009 | interface.cli (cli.py, skill.py): click 진입점 + --model/--path/--categories/--output/--dry-run/-v/-q, skill 엔트리, 비용 추정 + 사용자 확인 흐름. | 대기 |
+| T-011 | backend_coder | T-001 T-004 T-005 T-007 T-008 T-009 | core.logic (tests): test_models/fetcher/preprocessor/analyzer/generator/session + tests/fixtures/senior_wisdom/ 복원 (ground_truth.md 5 규칙 레이어 검증). | 대기 |
+
+### Phase 2 — 확장 (7 카테고리 + 세션 관리)
+| ID | 에이전트 | 의존성 | 설명 | 상태 |
+|----|---------|--------|------|------|
+| T-020 | backend_coder | - | core.logic (prompts.py): 7 카테고리 프롬프트 추가 (testing, dependencies, security, performance, devops, state_management, data_model). | 대기 |
+| T-021 | backend_coder | T-020 | core.logic (analyzer.py): _CATEGORY_ROLES 확장 (7 카테고리별 파일 역할 매핑). | 대기 |
+| T-022 | backend_coder | - | core.logic (session.py): SessionDiff 구현 완성 (두 SessionResult 비교 → 변경/추가/삭제 규칙). | 대기 |
+| T-023 | backend_coder | T-021 T-022 | interface.cli: --resume 옵션 (session.json 읽어 완료 카테고리 스킵) + diff 서브커맨드 + 7 카테고리/resume/diff 테스트 추가. | 대기 |
+
+### 의존성 그래프
+\`\`\`
+Phase 1:
+  T-001 (models) ─┬─► T-003 (llm)
+                  ├─► T-004 (fetcher)
+                  ├─► T-006 (prompts)
+                  └─► T-008 (session)
+  T-002 (errors) ─┤
+                  └─► T-003, T-004, T-010
+
+  T-004 ──► T-005 (preprocessor)
+  T-003 + T-005 + T-006 ──► T-007 (analyzer)
+  T-001 + T-007 + T-008 ──► T-009 (generator)
+  T-002 + T-003 + T-007 + T-009 ──► T-010 (cli/skill)
+  T-001 + T-004 + T-005 + T-007 + T-008 + T-009 ──► T-011 (tests)
+
+Phase 2:
+  T-020 ──► T-021
+  T-022 (병렬)
+  T-021 + T-022 ──► T-023
+\`\`\`
+
+### 병렬 실행 가능 조합
+- **즉시 시작 가능**: T-001, T-002 (의존성 없음)
+- **T-001 + T-002 완료 후 병렬**: T-003, T-004, T-006, T-008 (4개 동시)
+- **T-004 완료 후**: T-005 추가
+- **T-007 이후 병렬**: T-008(있었으면), T-009
+- **Phase 2 즉시 병렬**: T-020, T-022 (독립)
+
+### 진행 상태
+- \`pending\` — 아직 시작 안 함
+- \`in-progress\` — \`/ha-build\` 실행 중
+- \`done\` — 구현 + 검증 완료
+- \`blocked\` — 의존성 미해결 또는 실패 지속
+
+## 10. 구현 노트
+
+> 이 섹션은 `/ha-build`가 구현 중 발견한 것을 기록합니다.
+> 설계 시점에 예측 못한 이슈, 의사결정, TODO를 남깁니다.
+
+### 결정 로그
+| 날짜 | 태스크 | 결정 | 사유 | 영향 |
+|------|--------|------|------|------|
+| `<YYYY-MM-DD>` | `<T-XXX>` | <결정 내용> | <사유> | <영향 범위> |
+
+### 트레이드오프 / 타협
+- <예: "페이지네이션은 offset 방식 사용. cursor 방식이 더 좋지만 MVP 범위 외.">
+
+### 발견된 엣지 케이스 (skeleton 반영 미완)
+- <예: "Unicode 정규화 충돌 — 다음 릴리스에서 `core.logic`에 규칙 추가 예정">
+
+### TODO (이슈 트래커로 이관 예정)
+- [ ] <예: 성능: N+1 쿼리 최적화 필요 — issue #42>
+- [ ] <예: 테스트: 동시성 테스트 커버리지 확대>
+
+### 의존성 변경
+| 날짜 | 패키지 | 변경 | 사유 |
+|------|--------|------|------|
+| `<YYYY-MM-DD>` | `<pkg>` | `<v1 → v2>` | <사유> |
+
+### 테스트 데이터 / 시드
+- `tests/fixtures/senior_wisdom/` — 미니 시니어 레포 픽스처 + `ground_truth.md` 검증 데이터.
