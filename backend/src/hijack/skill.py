@@ -1,12 +1,15 @@
-"""Claude Code skill 진입점 — `/code-hijack <target>` 호출 시 실행된다.
+"""Claude Code skill 모드 진입점.
 
-Skill 모드에서는 ANTHROPIC_API_KEY 없이 현재 Claude Code 세션을 사용한다.
-CLI 모드와 동일한 파이프라인을 실행하되, LLM 호출은 세션 컨텍스트 내에서 처리된다.
+실제 skill 워크플로우는 `.claude/skills/code-hijack/SKILL.md` 에 정의돼 있다.
+이 파일은 Python import 호환용 껍데기다 — `/code-hijack <target>` 호출 시
+Claude Code 는 SKILL.md 를 읽고 거기 지시를 따른다.
+
+API key 를 가진 사용자는 CLI 모드 (`code-hijack analyze`) 를 사용한다 (cli.py).
+Skill 모드는 현재 Claude Code 세션을 LLM 으로 재사용해 API 비용을 피한다.
 """
 
 from __future__ import annotations
 
-from hijack.cli import main
+from hijack.cli import cli
 
-if __name__ == "__main__":
-    main()
+__all__ = ["cli"]

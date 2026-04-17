@@ -43,3 +43,6 @@ Thumbs.db
 
 # code-hijack output
 docs/hijacked/
+hijack-output/
+.skill_analysis.py
+backend/docs/.backup-*
