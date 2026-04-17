@@ -75,6 +75,19 @@ class TestDetectLayer:
         fp, root = self._make(tmp_path, "myproject/views.py")
         assert detect_layer(fp, root, set(), {"django"}) == "backend"
 
+    def test_fastapi_framework_source_repo_is_backend(self, tmp_path):
+        # fastapi 레포 자체: `fastapi/applications.py` — 첫 세그먼트가 프레임워크명
+        fp, root = self._make(tmp_path, "fastapi/applications.py")
+        assert detect_layer(fp, root, set(), set()) == "backend"
+
+    def test_django_framework_source_repo_is_backend(self, tmp_path):
+        fp, root = self._make(tmp_path, "django/core/management.py")
+        assert detect_layer(fp, root, set(), set()) == "backend"
+
+    def test_flask_framework_source_repo_is_backend(self, tmp_path):
+        fp, root = self._make(tmp_path, "flask/app.py")
+        assert detect_layer(fp, root, set(), set()) == "backend"
+
 
 # ---------------------------------------------------------------------------
 # _read_file_content tests

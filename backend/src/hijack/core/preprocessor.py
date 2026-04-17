@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from hijack.core.fetcher import SourceFile
+
+_MIN_MEANINGFUL_CHARS = 500
+_MAX_NEAR_DUPLICATES_PER_PATTERN = 2
+_DIGIT_RE = re.compile(r"\d+")
 
 # ---------------------------------------------------------------------------
 # Category → preferred roles mapping
@@ -70,29 +76,52 @@ def select_files_for_category(
     *,
     max_files: int = 30,
 ) -> list[SourceFile]:
-    """카테고리에 관련된 파일을 우선순위 순으로 최대 max_files 개 반환한다."""
+    """카테고리에 관련된 파일을 우선순위 순으로 최대 max_files 개 반환한다.
+
+    선별 규칙:
+    1. 역할 우선순위에 따라 후보 수집
+    2. 역할 내에서 콘텐츠 밀도로 정렬 (얕은 재-export 파일 뒤로)
+    3. Near-duplicate (숫자만 다른 경로) 중복 제거 — 최대 2개만
+    """
     preferred = _CATEGORY_ROLES.get(category, _DEFAULT_ROLES)
-    selected: list[SourceFile] = []
+    candidates: list[SourceFile] = []
     seen: set[str] = set()
 
     for role in preferred:
-        for f in result.by_role.get(role, []):
+        role_files = sorted(result.by_role.get(role, []), key=_content_rank_key)
+        for f in role_files:
             key = f.path.as_posix()
             if key not in seen:
                 seen.add(key)
-                selected.append(f)
-            if len(selected) >= max_files:
-                return selected
+                candidates.append(f)
 
     for f in result.files:
         key = f.path.as_posix()
         if key not in seen:
             seen.add(key)
-            selected.append(f)
-        if len(selected) >= max_files:
-            return selected
+            candidates.append(f)
 
-    return selected
+    deduped = _dedupe_near_duplicates(candidates)
+    return deduped[:max_files]
+
+
+def _content_rank_key(f: SourceFile) -> tuple[bool, int]:
+    """콘텐츠가 적은 파일을 뒤로 보내는 정렬 키. (얕음 flag, -크기)."""
+    size = len(f.content)
+    shallow = size < _MIN_MEANINGFUL_CHARS
+    return (shallow, -size)
+
+
+def _dedupe_near_duplicates(files: list[SourceFile]) -> list[SourceFile]:
+    """숫자만 다른 경로 (app01/main.py, app02/main.py, ...) 를 최대 2개로 제한한다."""
+    counts: dict[str, int] = defaultdict(int)
+    result: list[SourceFile] = []
+    for f in files:
+        pattern = _DIGIT_RE.sub("#", f.path.as_posix())
+        if counts[pattern] < _MAX_NEAR_DUPLICATES_PER_PATTERN:
+            counts[pattern] += 1
+            result.append(f)
+    return result
 
 
 def build_file_summary_for_llm(files: list[SourceFile]) -> list[str]:

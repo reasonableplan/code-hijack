@@ -76,7 +76,9 @@ class TestSelectFilesForCategory:
         assert selected[0].role == "entry_point"
 
     def test_max_files_limit(self) -> None:
-        files = [_make_file(f"f{i}.py", role="other") for i in range(50)]
+        # 숫자 변화 파일은 near-duplicate dedup 에 걸리므로 고유 이름 사용
+        names = [chr(ord("a") + i) for i in range(15)]
+        files = [_make_file(f"{n}.py", role="other") for n in names]
         result = _make_result(files)
         selected = select_files_for_category(result, "architecture", max_files=10)
         assert len(selected) == 10
@@ -120,3 +122,62 @@ class TestBuildLayerStats:
         stats = build_layer_stats({})
         assert "backend: 0" in stats
         assert "shared: 0" in stats
+
+
+class TestContentDensityRanking:
+    def _file(self, rel: str, content: str, role: str = "other") -> SourceFile:
+        return SourceFile(path=Path(rel), content=content, layer="shared", role=role)
+
+    def test_meaningful_file_ranked_before_shallow(self) -> None:
+        shallow = self._file("a.py", "x = 1", role="api")
+        meaningful = self._file("b.py", "x" * 1000, role="api")
+        result = _make_result([shallow, meaningful])
+        selected = select_files_for_category(result, "api_design", max_files=10)
+        assert selected[0].path.name == "b.py"
+        assert selected[1].path.name == "a.py"
+
+    def test_within_role_sorted_by_size_desc(self) -> None:
+        medium = self._file("a.py", "x" * 1000, role="api")
+        large = self._file("b.py", "x" * 3000, role="api")
+        result = _make_result([medium, large])
+        selected = select_files_for_category(result, "api_design", max_files=10)
+        assert selected[0].path.name == "b.py"
+        assert selected[1].path.name == "a.py"
+
+
+class TestNearDuplicateDedup:
+    def _file(self, rel: str, role: str = "other") -> SourceFile:
+        return SourceFile(path=Path(rel), content="x" * 1000, layer="shared", role=role)
+
+    def test_digit_varying_paths_capped_at_two(self) -> None:
+        files = [
+            self._file(f"docs_src/settings/app{i:02d}_py310/main.py", role="entry_point")
+            for i in range(1, 7)
+        ]
+        result = _make_result(files)
+        selected = select_files_for_category(result, "architecture", max_files=10)
+        assert len(selected) == 2, f"Expected 2 from near-duplicates, got {len(selected)}"
+
+    def test_distinct_paths_not_deduplicated(self) -> None:
+        files = [
+            self._file("a/main.py", role="entry_point"),
+            self._file("b/main.py", role="entry_point"),
+            self._file("c/main.py", role="entry_point"),
+        ]
+        result = _make_result(files)
+        selected = select_files_for_category(result, "architecture", max_files=10)
+        assert len(selected) == 3
+
+    def test_mix_of_duplicates_and_distinct(self) -> None:
+        files = [
+            self._file("apps/v1/main.py", role="entry_point"),
+            self._file("apps/v2/main.py", role="entry_point"),
+            self._file("apps/v3/main.py", role="entry_point"),
+            self._file("cli/main.py", role="entry_point"),
+        ]
+        result = _make_result(files)
+        selected = select_files_for_category(result, "architecture", max_files=10)
+        paths = {f.path.as_posix() for f in selected}
+        assert "cli/main.py" in paths
+        apps_count = sum(1 for p in paths if p.startswith("apps/"))
+        assert apps_count == 2

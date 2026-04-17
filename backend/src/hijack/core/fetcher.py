@@ -84,12 +84,18 @@ def detect_layer(
     if name == "Dockerfile" or any(d in rel_posix for d in {".github/", "k8s/", "terraform/"}):
         return "devops"
 
-    # 7. .py AND (backend 디렉토리 OR pyproject_deps에 backend 프레임워크) → backend
+    # 7. .py AND backend signal → backend
+    #   7a: backend 디렉토리 (프로젝트가 fastapi 를 import)
+    #   7b: pyproject 가 fastapi/django/flask 를 dep 로 선언
+    #   7c: 첫 경로 세그먼트가 backend 프레임워크 이름 — 프레임워크 자기 소스 레포 대응
+    #       (예: fastapi 레포의 `fastapi/applications.py`, django 레포의 `django/core/...`)
     _backend_dirs = {"backend/", "server/", "api/", "routes/"}
     _backend_frameworks = {"fastapi", "django", "flask"}
+    first_seg = rel_posix.split("/", 1)[0] if "/" in rel_posix else ""
     if suffix == ".py" and (
         any(d in rel_posix for d in _backend_dirs)
         or bool(_backend_frameworks & pyproject_deps)
+        or first_seg in _backend_frameworks
     ):
         return "backend"
 
