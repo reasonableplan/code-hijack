@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from hijack.core.generator import (
     render_category_md,
     render_claude_md_entrypoint,
@@ -14,7 +12,6 @@ from hijack.core.generator import (
     write_output,
 )
 from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -128,7 +125,10 @@ class TestRenderLayerMd:
         assert "No rules tagged" in md
 
     def test_rule_count_in_header(self) -> None:
-        cats = [_category("architecture", layer="shared"), _category("coding_style", layer="shared")]
+        cats = [
+            _category("architecture", layer="shared"),
+            _category("coding_style", layer="shared"),
+        ]
         md = render_layer_md("shared", cats)
         assert "2" in md  # rule count appears in header
 

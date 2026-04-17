@@ -10,7 +10,6 @@ from hijack.core.fetcher import (
 )
 from hijack.errors import INPUT_001, INPUT_002, InputError
 
-
 # ---------------------------------------------------------------------------
 # detect_layer tests
 # ---------------------------------------------------------------------------

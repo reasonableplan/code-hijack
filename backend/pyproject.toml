@@ -19,7 +19,7 @@ dev = [
 ]
 
 [project.scripts]
-code-hijack = "hijack.cli:main"
+code-hijack = "hijack.cli:cli"
 
 [build-system]
 requires = ["setuptools>=68"]

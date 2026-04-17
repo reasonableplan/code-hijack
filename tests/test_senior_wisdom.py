@@ -7,9 +7,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from hijack.core.analyzer import run_full_analysis
-from hijack.core.fetcher import SourceFile, detect_layer, fetch_source
+from hijack.core.fetcher import detect_layer, fetch_source
 from hijack.core.generator import write_output
-from hijack.core.models import AnalysisRule, CategoryResult
 
 _FIXTURE_REPO = Path(__file__).parent / "fixtures" / "senior_wisdom" / "repo"
 
@@ -87,7 +86,11 @@ def _make_llm_response(layer: str = "backend") -> str:
                 "layer": layer,
             }
         ],
-        "anti_patterns": [{"pattern": "bare except", "reason": "swallows errors", "alternative": "except Exception as e"}],
+        "anti_patterns": [{
+            "pattern": "bare except",
+            "reason": "swallows errors",
+            "alternative": "except Exception as e",
+        }],
         "file_type_guides": {"route": "Always annotate request/response types"},
         "checklist": ["Type hints present", "Error handling explicit"],
     })

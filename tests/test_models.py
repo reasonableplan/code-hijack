@@ -22,8 +22,15 @@ def make_category(**kwargs) -> CategoryResult:
         category="architecture",
         design_intent="Layered architecture with clear separation",
         rules=[make_rule()],
-        anti_patterns=[{"pattern": "God object", "reason": "Too much responsibility", "alternative": "Split into services"}],
-        file_type_guides={"model": "Only data, no business logic", "router": "Only routing, delegate to service"},
+        anti_patterns=[{
+            "pattern": "God object",
+            "reason": "Too much responsibility",
+            "alternative": "Split into services",
+        }],
+        file_type_guides={
+            "model": "Only data, no business logic",
+            "router": "Only routing, delegate to service",
+        },
         checklist=["No business logic in routers", "Services are stateless"],
         raw_llm_output='{"rules": []}',
     )

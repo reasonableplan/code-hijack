@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -14,8 +14,13 @@ from hijack.core.analyzer import (
     run_full_analysis,
 )
 from hijack.core.fetcher import SourceFile
+from hijack.core.preprocessor import (
+    _CATEGORY_ROLES,
+    build_preprocess_result,
+    select_files_for_category,
+)
+from hijack.core.prompts import ALL_CATEGORIES
 from hijack.errors import LLM_002, LLMError
-
 
 # ---------------------------------------------------------------------------
 # _parse_json
@@ -126,8 +131,14 @@ def _make_llm_response(category: str) -> str:
 
 def _make_files() -> list[SourceFile]:
     return [
-        SourceFile(path=Path("main.py"), content="def main(): pass", layer="backend", role="entry_point"),
-        SourceFile(path=Path("service.py"), content="def svc(): pass", layer="backend", role="service"),
+        SourceFile(
+            path=Path("main.py"), content="def main(): pass",
+            layer="backend", role="entry_point",
+        ),
+        SourceFile(
+            path=Path("service.py"), content="def svc(): pass",
+            layer="backend", role="service",
+        ),
     ]
 
 
@@ -252,3 +263,101 @@ async def test_run_full_analysis_session_metadata() -> None:
     assert "main.py" in result.selected_files
     assert result.analysis_duration_seconds >= 0
     assert result.timestamp.endswith("+00:00") or result.timestamp.endswith("Z")
+
+
+# ---------------------------------------------------------------------------
+# _CATEGORY_ROLES — 7개 신규 카테고리 파일 역할 매핑 검증
+# ---------------------------------------------------------------------------
+
+class TestCategoryRoleMapping:
+    """각 신규 카테고리가 올바른 파일 역할을 선택하는지 검증한다."""
+
+    def _files_by_role(self) -> list[SourceFile]:
+        roles = ["entry_point", "model", "api", "test", "service", "other"]
+        return [
+            SourceFile(
+                path=Path(f"{role}.py"), content=f"# {role}", layer="backend", role=role
+            )
+            for role in roles
+        ]
+
+    def _selected_roles(self, category: str) -> list[str]:
+        files = self._files_by_role()
+        result = build_preprocess_result(files, Path("/repo"))
+        selected = select_files_for_category(result, category)
+        return [f.role for f in selected]
+
+    def test_all_categories_covered_in_roles_map(self) -> None:
+        for cat in ALL_CATEGORIES:
+            assert cat in _CATEGORY_ROLES, f"{cat!r} missing from _CATEGORY_ROLES"
+
+    def test_testing_category_prefers_test_role(self) -> None:
+        roles = self._selected_roles("testing")
+        assert roles[0] == "test"
+
+    def test_dependencies_category_includes_entry_point(self) -> None:
+        roles = self._selected_roles("dependencies")
+        assert "entry_point" in roles
+
+    def test_security_category_prefers_api_role(self) -> None:
+        roles = self._selected_roles("security")
+        assert roles[0] == "api"
+
+    def test_performance_category_prefers_service_role(self) -> None:
+        roles = self._selected_roles("performance")
+        assert roles[0] == "service"
+
+    def test_devops_category_selects_other_role(self) -> None:
+        roles = self._selected_roles("devops")
+        assert "other" in roles
+
+    def test_state_management_category_includes_service_and_model(self) -> None:
+        roles = self._selected_roles("state_management")
+        assert "service" in roles
+        assert "model" in roles
+
+    def test_data_model_category_prefers_model_role(self) -> None:
+        roles = self._selected_roles("data_model")
+        assert roles[0] == "model"
+
+
+@pytest.mark.asyncio
+async def test_run_full_analysis_all_ten_categories() -> None:
+    """ALL_CATEGORIES 10개를 분석해도 에러가 없어야 한다."""
+    mock_resp = _make_llm_response("backend")
+    llm = AsyncMock()
+    llm.analyze = AsyncMock(return_value=mock_resp)
+
+    files = _make_files()
+    result = await run_full_analysis(
+        files,
+        Path("/repo"),
+        categories=ALL_CATEGORIES,
+        llm=llm,
+        target="/local/repo",
+    )
+
+    assert len(result.categories) == 10
+    assert llm.analyze.call_count == 10
+    for cat in result.categories:
+        assert cat.error is None, f"{cat.category} returned error: {cat.error}"
+
+
+@pytest.mark.asyncio
+async def test_files_by_layer_populated_in_session_result() -> None:
+    """SessionResult.files_by_layer 가 preprocess 결과로 채워진다."""
+    llm = AsyncMock()
+    llm.analyze = AsyncMock(return_value=_make_llm_response("backend"))
+
+    files = [
+        SourceFile(path=Path("a.py"), content="x", layer="backend", role="service"),
+        SourceFile(path=Path("b.tsx"), content="x", layer="frontend", role="other"),
+        SourceFile(path=Path("c.py"), content="x", layer="shared", role="other"),
+    ]
+    result = await run_full_analysis(
+        files, Path("/repo"), categories=["architecture"], llm=llm, target="/repo"
+    )
+
+    assert result.files_by_layer.get("backend") == 1
+    assert result.files_by_layer.get("frontend") == 1
+    assert result.files_by_layer.get("shared") == 1

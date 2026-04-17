@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hijack.errors import LLMError, LLM_001, LLM_002
-from hijack.llm.api import ClaudeAPIClient, DEFAULT_MODEL
-
+from hijack.errors import LLM_001, LLM_002, LLMError
+from hijack.llm.api import DEFAULT_MODEL, ClaudeAPIClient
 
 # ---------------------------------------------------------------------------
 # LLM_001: ANTHROPIC_API_KEY 없을 때 ClaudeAPIClient() 가 LLMError raise

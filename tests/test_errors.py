@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import click
-import pytest
 
 from hijack.errors import (
     FETCH_001,

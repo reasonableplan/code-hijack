@@ -3,7 +3,7 @@ harness_version: 2
 schema_version: 1
 project_name: code-hijack
 created_at: '2026-04-17T03:13:41+00:00'
-updated_at: '2026-04-17T11:40:01+00:00'
+updated_at: '2026-04-17T12:00:33+00:00'
 project_type: Python CLI 분석 도구 (개인용)
 scale: small
 user_description_original: 시니어 코드베이스를 LLM으로 분석해 AI 에이전트용 코딩 규칙 자동 추출 도구
@@ -44,7 +44,7 @@ pipeline:
   - ha-build
   - ha-verify
   - ha-review
-  current_step: building
+  current_step: reviewed
   completed_steps:
   - ha-design
   - ha-plan
@@ -59,6 +59,12 @@ pipeline:
   - ha-build:T-009
   - ha-build:T-010
   - ha-build:T-011
+  - ha-build:T-020
+  - ha-build:T-021
+  - ha-build:T-022
+  - ha-build:all-done
+  - ha-verify
+  - ha-review
   skipped_steps: []
   gstack_mode: manual
 verify_history:
@@ -72,8 +78,18 @@ verify_history:
   passed: true
   summary: Phase 1 MVP clean — 0 BLOCK, 1 WARN (skeleton.md TODO 가짜 양성), 4 권장사항 (OUTPUT_001/ctx
     미사용/build_layer_stats dead/진행표시)
+- step: ha-verify
+  at: '2026-04-17T11:59:11+00:00'
+  passed: true
+  summary: pytest 169 passed, ruff clean, pyright skipped (not installed) — Phase
+    2 all tasks done
+- step: ha-review
+  at: '2026-04-17T12:00:33+00:00'
+  passed: true
+  summary: Phase 2 clean — 0 BLOCK, 0 WARN (source). 4 non-blocking 권장 (tests lint
+    out-of-scope, MVP 상수 중복, diff 에러 래핑, 진행표시 [2/4] 지속 미반영)
 backups: []
-last_activity: '2026-04-17T11:40:01+00:00'
+last_activity: '2026-04-17T12:00:33+00:00'
 ---
 
 # code-hijack
