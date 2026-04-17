@@ -85,9 +85,9 @@ Return a JSON object with this exact structure:
       "rule": "<specific rule>",
       "priority": "MUST" or "SHOULD",
       "confidence": "high" or "medium" or "low",
-      "ref_files": ["<file path>"],
-      "good_example": "<code showing correct usage>",
-      "bad_example": "<code showing incorrect usage>",
+      "ref_files": ["<file path>:<line_number>", "<file path>:<start>-<end>"],
+      "good_example": "<ACTUAL code snippet from the repo, copy-pasted>",
+      "bad_example": "<ACTUAL anti-pattern code, NOT a descriptive comment>",
       "reason": "<why this rule>",
       "layer": "frontend" or "backend" or "db" or "devops" or "shared"
     }
@@ -95,7 +95,26 @@ Return a JSON object with this exact structure:
   "anti_patterns": [{"pattern": "", "reason": "", "alternative": ""}],
   "file_type_guides": {"<file_type>": "<guidance>"},
   "checklist": ["<item>"]
-}"""
+}
+
+QUALITY REQUIREMENTS (non-negotiable):
+
+1. `ref_files`: MUST include line number(s). Format: "path/to/file.py:42" for a single
+   line, "path/to/file.py:42-58" for a range. NEVER just the filename.
+   If you cite a function/class, point to its definition line (def/class line).
+
+2. `good_example`: MUST be actual code copied from one of the ref_files — verbatim,
+   not paraphrased. Keep it short (3-10 lines). If you can't extract a real snippet,
+   don't create the rule.
+
+3. `bad_example`: MUST be actual anti-pattern code, not a comment describing what to
+   avoid. NEVER write "# 이렇게 하지 말 것" or "# X 를 하면 안 됨" — always provide
+   the concrete code form the author avoided or that would break the rule.
+   GOOD bad_example:  `x = eval(user_input)`
+   BAD  bad_example:  `# eval 로 유저 입력 실행`
+
+4. `priority`: MUST only for non-negotiable rules (violation = PR rejection).
+   SHOULD for strong preferences. Don't inflate — when uncertain, use SHOULD."""
 
 _LAYER_INSTRUCTION = (
     "For each rule, assign a `layer` field: "

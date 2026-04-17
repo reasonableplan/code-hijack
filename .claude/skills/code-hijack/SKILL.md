@@ -73,13 +73,25 @@ print(json.dumps({
 각 **AnalysisRule** 은 다음 필드를 반드시 가진다:
 
 - `rule`: 구체적 규칙 (1문장)
-- `priority`: `"MUST"` 또는 `"SHOULD"`
+- `priority`: `"MUST"` (위반 시 PR 거부 수준) 또는 `"SHOULD"` (강한 권장). 애매하면 SHOULD.
 - `confidence`: `"high"` / `"medium"` / `"low"`
-- `ref_files`: 근거가 된 실제 파일 경로 목록
-- `good_example`: ✅ 실제 코드에서 추출한 올바른 예시
-- `bad_example`: ❌ 해당 규칙 위반 패턴
+- `ref_files`: 근거가 된 실제 파일 경로 + **라인 번호**. 형식: `"path.py:42"` 또는 범위 `"path.py:42-58"`. 라인 번호 없이 파일명만 쓰지 말 것.
+- `good_example`: ✅ `ref_files` 에서 **그대로 복사한 실제 코드** (3-10줄). 요약/paraphrase 금지.
+- `bad_example`: ❌ **실제 안티패턴 코드**. 주석으로 "이렇게 하면 안 됨" 설명 금지. 구체적 위반 코드 형태로.
 - `reason`: 이 규칙이 왜 존재하는지
 - `layer`: `"frontend"` / `"backend"` / `"db"` / `"devops"` / `"shared"`
+
+**good/bad_example 품질 기준 (critical):**
+
+```
+# ✅ 올바른 bad_example — 실제 위반 코드
+bad_example: 'eval(user_input)'
+
+# ❌ 틀린 bad_example — 주석으로 설명
+bad_example: '# user input 을 eval 로 실행 (금지)'
+```
+
+라인 번호 얻는 법: Read tool 결과에 line 번호가 포함돼 있음. 또는 Bash 로 `grep -n 'pattern' <file>` 실행.
 
 **AnalysisRule 외에 CategoryResult 가 가지는 것:**
 
@@ -163,8 +175,9 @@ print(f'[DONE] {Path(OUTPUT) / session.session_id}')
 - **컨텍스트 관리**: 카테고리당 12개 이하 파일. 초과하면 대상 레포 크기 확인 후 `--path` 서브디렉토리 권고.
 - **필수 필드**: `AnalysisRule` 의 `rule`, `priority`, `layer` 누락 시 해당 규칙 드롭 (analyzer 의 파싱 로직과 동일).
 - **레이어 태깅**: `detect_layer` 가 이미 결정한 `SourceFile.layer` 를 존중. 추측으로 덮어쓰지 말 것.
-- **priority 기준**: MUST = 위반 시 PR 거부 수준, SHOULD = 강한 권장. 애매하면 SHOULD.
-- **ref_files**: 반드시 실제 존재하는 경로. 추상적인 "the codebase" 금지.
+- **priority 기준**: MUST = 위반 시 PR 거부 수준, SHOULD = 강한 권장. 애매하면 SHOULD. MUST 남발 금지.
+- **ref_files**: 실제 존재하는 경로 + **라인 번호 필수**. 예: `"path/to/file.py:42"` 또는 `"path.py:42-58"`. 추상적 "the codebase" 금지. 라인 번호 없이 파일명만 쓰기 금지.
+- **bad_example 는 실제 안티패턴 코드**: `"# 이렇게 하지 말 것"` 식 주석 설명 금지. 구체 위반 코드 형태여야 에이전트가 패턴 매칭 가능.
 - **good/bad_example**: 실제 레포 코드에서 추출. 상상으로 만들지 말 것 (이 프로젝트의 핵심 차별점).
 - **덮어쓰기**: 기존 `<output>/integrated/` 존재 시 사용자에게 확인받고 진행 (`OUTPUT_001` 에러 코드).
 
