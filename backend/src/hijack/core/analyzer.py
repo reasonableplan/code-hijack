@@ -172,8 +172,13 @@ async def run_full_analysis(
     llm: BaseLLM,
     model: str = DEFAULT_MODEL,
     target: str = "",
+    critic: bool = True,
 ) -> SessionResult:
-    """카테고리별 LLM 분석을 실행하고 SessionResult를 반환한다."""
+    """카테고리별 LLM 분석을 실행하고 SessionResult를 반환한다.
+
+    critic=True (기본) 이면 분석 후 critic 레이어가 중복/MUST 인플레를 정제한다.
+    실패해도 원본 결과는 보존됨.
+    """
     start = time.monotonic()
     preprocess = build_preprocess_result(files, repo_root)
 
@@ -184,10 +189,9 @@ async def run_full_analysis(
 
     duration = time.monotonic() - start
     session_id = create_session_id(target or str(repo_root))
-
     files_by_layer = {layer: len(flist) for layer, flist in preprocess.by_layer.items()}
 
-    return SessionResult(
+    session = SessionResult(
         session_id=session_id,
         target=target or repo_root.as_posix(),
         model=model,
@@ -198,3 +202,10 @@ async def run_full_analysis(
         project_structure=preprocess.project_structure,
         files_by_layer=files_by_layer,
     )
+
+    if critic and any(c.rules for c in category_results):
+        from hijack.core.critic import refine
+        logger.info("Critic 레이어 실행 중...")
+        session = await refine(session, llm, model=model)
+
+    return session

@@ -187,7 +187,26 @@ print(f'[DONE] {Path(OUTPUT) / session.session_id}')
 "
 ```
 
-### 5. 완료 안내
+### 5.5. 자체 Critic 재평가 (권장 — 품질 향상)
+
+모든 카테고리 규칙 생성이 끝난 뒤, **스스로 다시 훑고 다음 작업을 수행**해라:
+
+**DROP** (규칙 제거):
+- 너무 일반적인 규칙 ("좋은 코드를 짜자", "일관성 유지")
+- 카테고리 간 사실상 중복 (architecture 의 "BaseLLM 경유" == coding_style 의 "추상 인터페이스 사용")
+- ref_files / good_example 이 약한 규칙 (근거 부족)
+
+**DOWNGRADE MUST → SHOULD**:
+- 위반해도 실제 PR 거부 수준 아닌 규칙 (강한 선호에 불과)
+- 팀 관례 성격 (설계 correctness / security 아님)
+- **목표 MUST 비율: 30-40%**. 초과하면 재평가.
+
+**KEEP as-is**: 고품질 규칙은 그대로.
+
+이 단계는 skill 모드에서 생략 가능하지만, 하면 결과물 신호-잡음비가 유의미하게 개선된다.
+API 모드 (`code-hijack analyze`) 는 기본 on (`--critic`).
+
+### 6. 완료 안내
 
 사용자에게 출력 경로 안내:
 

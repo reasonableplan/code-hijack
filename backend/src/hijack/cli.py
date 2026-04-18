@@ -79,6 +79,8 @@ def cli() -> None:
 @click.option("--resume", default=None, metavar="SESSION_JSON",
               help="이전 세션 session.json (완료된 카테고리 스킵)")
 @click.option("--dry-run", is_flag=True, help="LLM 호출 없이 예상 비용만 출력")
+@click.option("--critic/--no-critic", default=True,
+              help="Critic 레이어로 중복/MUST 인플레 재평가 (기본 on, +1 LLM 호출)")
 @click.option("--verbose", "-v", is_flag=True, help="상세 로그")
 @click.option("--quiet", "-q", is_flag=True, help="진행 메시지 억제")
 def analyze(
@@ -89,6 +91,7 @@ def analyze(
     output_dir: str | None,
     resume: str | None,
     dry_run: bool,
+    critic: bool,
     verbose: bool,
     quiet: bool,
 ) -> None:
@@ -123,6 +126,7 @@ def analyze(
         category_list=category_list,
         output_dir=output_dir,
         dry_run=dry_run,
+        critic=critic,
         quiet=quiet,
     )
 
@@ -169,6 +173,7 @@ def _run(
     category_list: list[str],
     output_dir: str | None,
     dry_run: bool,
+    critic: bool,
     quiet: bool,
 ) -> None:
     if not quiet:
@@ -215,6 +220,7 @@ def _run(
             llm=llm,
             model=model,
             target=target,
+            critic=critic,
         )
     )
 

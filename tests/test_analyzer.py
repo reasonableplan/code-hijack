@@ -237,6 +237,7 @@ async def test_run_full_analysis_multiple_categories() -> None:
         categories=["architecture", "coding_style"],
         llm=llm,
         target="/local/repo",
+        critic=False,
     )
 
     assert len(result.categories) == 2
@@ -335,12 +336,30 @@ async def test_run_full_analysis_all_ten_categories() -> None:
         categories=ALL_CATEGORIES,
         llm=llm,
         target="/local/repo",
+        critic=False,
     )
 
     assert len(result.categories) == 10
     assert llm.analyze.call_count == 10
     for cat in result.categories:
         assert cat.error is None, f"{cat.category} returned error: {cat.error}"
+
+
+@pytest.mark.asyncio
+async def test_run_full_analysis_calls_critic_by_default() -> None:
+    """critic=True 가 기본값 — 카테고리 호출 N 개 + critic 호출 1회 = N+1"""
+    import json as _json
+    mock_resp = _make_llm_response("backend")
+    critic_resp = _json.dumps({"keep": [], "downgrade_to_should": [], "drop": [], "notes": "ok"})
+    llm = AsyncMock()
+    llm.analyze = AsyncMock(side_effect=[mock_resp, critic_resp])
+
+    files = _make_files()
+    await run_full_analysis(
+        files, Path("/repo"), categories=["architecture"],
+        llm=llm, target="/repo",
+    )
+    assert llm.analyze.call_count == 2  # 1 카테고리 + 1 critic
 
 
 @pytest.mark.asyncio
