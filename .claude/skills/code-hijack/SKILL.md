@@ -91,7 +91,39 @@ bad_example: 'eval(user_input)'
 bad_example: '# user input 을 eval 로 실행 (금지)'
 ```
 
+**MUST/SHOULD 캘리브레이션**: 10 규칙 중 MUST 는 3-4개가 정상. MUST 비율 60% 초과면 재평가 필수.
+
 라인 번호 얻는 법: Read tool 결과에 line 번호가 포함돼 있음. 또는 Bash 로 `grep -n 'pattern' <file>` 실행.
+
+### Few-shot 예시 — 이런 규칙을 만들어라
+
+✅ **GOOD rule** (모양 학습용):
+
+```json
+{
+  "rule": "subprocess.run 은 반드시 capture_output=True + text=True 조합으로 호출",
+  "priority": "MUST",
+  "confidence": "high",
+  "ref_files": ["src/hijack/core/fetcher.py:229-237"],
+  "good_example": "result = subprocess.run(\n    ['git', 'clone', '--depth=1', target, tmpdir],\n    capture_output=True,\n    text=True,\n)\nif result.returncode != 0:\n    raise FetchError(FETCH_001, f'git clone 실패: {result.stderr.strip()}')",
+  "bad_example": "subprocess.run(['git', 'clone', target, tmpdir])",
+  "reason": "returncode/stderr 접근 못하면 실패 원인 사용자 전달 불가 — 디버깅 블라인드",
+  "layer": "backend"
+}
+```
+
+❌ **BAD rule** (이런 식으로 쓰지 말 것):
+
+```json
+{
+  "rule": "좋은 코드를 짜야 한다",                    // 너무 추상적
+  "priority": "MUST",                              // 판단 불가한데 MUST
+  "ref_files": ["src/main.py"],                    // 라인 번호 없음
+  "good_example": "# 좋은 예시",                    // 주석 (실제 코드 아님)
+  "bad_example": "# 이렇게 하지 말 것",              // 설명문
+  "reason": "중요하니까",                           // 설계 의도 없음
+}
+```
 
 **AnalysisRule 외에 CategoryResult 가 가지는 것:**
 

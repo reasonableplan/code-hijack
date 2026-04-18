@@ -1,3 +1,5 @@
+# ruff: noqa: E501
+# 이 파일은 LLM 프롬프트 템플릿이라 긴 문자열 리터럴이 본질적. E501 제외.
 from __future__ import annotations
 
 MVP_CATEGORIES: list[str] = ["architecture", "coding_style", "api_design"]
@@ -114,7 +116,43 @@ QUALITY REQUIREMENTS (non-negotiable):
    BAD  bad_example:  `# eval 로 유저 입력 실행`
 
 4. `priority`: MUST only for non-negotiable rules (violation = PR rejection).
-   SHOULD for strong preferences. Don't inflate — when uncertain, use SHOULD."""
+   SHOULD for strong preferences. Don't inflate — when uncertain, use SHOULD.
+   As a calibration: out of every 10 rules you extract, typically 3-4 are MUST,
+   6-7 are SHOULD. If your MUST/SHOULD ratio exceeds 60/40, re-evaluate.
+
+---
+
+FEW-SHOT EXAMPLE — GOOD quality rule (learn the shape):
+
+{
+  "rule": "subprocess.run 은 반드시 capture_output=True + text=True 조합으로 호출",
+  "priority": "MUST",
+  "confidence": "high",
+  "ref_files": ["src/hijack/core/fetcher.py:229-237"],
+  "good_example": "result = subprocess.run(cmd, capture_output=True, text=True)\\nif result.returncode != 0:\\n    raise FetchError(FETCH_001, result.stderr.strip())",
+  "bad_example": "subprocess.run([\\"git\\", \\"clone\\", target, tmpdir])",
+  "reason": "returncode/stderr 에 접근하지 못하면 실패 원인 사용자에게 전달 불가 — 디버깅 블라인드",
+  "layer": "backend"
+}
+
+FEW-SHOT EXAMPLE — BAD quality rule (AVOID these mistakes):
+
+{
+  "rule": "좋은 코드를 짜야 한다",                    // ❌ 너무 추상적
+  "priority": "MUST",                              // ❌ 판단 불가한 규칙에 MUST
+  "confidence": "high",
+  "ref_files": ["src/main.py"],                    // ❌ 라인 번호 없음
+  "good_example": "# 좋은 예시 코드",                // ❌ 실제 코드 아닌 주석
+  "bad_example": "# 이렇게 하지 말 것",              // ❌ 설명문 — 패턴 매칭 불가
+  "reason": "중요하니까",                           // ❌ 설계 의도 없음
+  "layer": "shared"
+}
+
+NEGATIVE EXAMPLE 의 모든 ❌ 를 피하라. 특히:
+- rule 은 구체 동작으로 (WHAT + WHY 암시)
+- ref_files 는 반드시 "path:line" 형식
+- good/bad_example 은 실제 코드 발췌, 주석 아님
+- reason 은 설계 철학/트레이드오프 설명"""
 
 _LAYER_INSTRUCTION = (
     "For each rule, assign a `layer` field: "
