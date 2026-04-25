@@ -226,7 +226,7 @@ class TestScopeRendering:
         assert "**Scope**: `framework_internal`" in md
 
     def test_rule_renders_default_cross_project_scope(self) -> None:
-        # 명시 안 해도 default 가 cross_project 라 표시.
+        # Even without an explicit scope, the default (cross_project) is shown.
         cat = _category()
         md = render_category_md(cat)
         assert "**Scope**: `cross_project`" in md
@@ -237,7 +237,7 @@ class TestScopeRendering:
         s = _session()
         s.categories = [cat]
         md = render_system_prompt_md(s)
-        # cross_project 은 default 라 시각 노이즈 없음.
+        # cross_project is the default tag — no visual noise.
         assert "[cross_project]" not in md
 
     def test_system_prompt_shows_non_default_scope_tag(self) -> None:
@@ -338,7 +338,7 @@ class TestSystemPromptInlineExamples:
         assert "  ref:" not in md
 
     def test_keeps_rule_header_format(self) -> None:
-        # 기존 한 줄 형식 (- [layer] rule) 은 유지되어야 함.
+        # The original "- [layer] rule" header format must be preserved.
         cat = _category()
         cat.rules = [_rule_with_examples(layer="frontend")]
         s = _session()

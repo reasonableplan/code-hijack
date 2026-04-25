@@ -1,4 +1,4 @@
-"""harness_export — code-hijack 세션 → HarnessAI conventions/guidelines 변환 테스트."""
+"""harness_export — convert code-hijack session into HarnessAI-shaped docs."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -67,7 +67,7 @@ def _session(*categories: CategoryResult) -> SessionResult:
 
 
 # ---------------------------------------------------------------------------
-# export_session — 기본 흐름
+# export_session — main flow
 # ---------------------------------------------------------------------------
 
 class TestExportSession:
@@ -76,8 +76,8 @@ class TestExportSession:
         assert summary.conventions_path.exists()
         assert summary.conventions_path == tmp_path / "conventions.md"
         body = summary.conventions_path.read_text(encoding="utf-8")
-        assert "프로젝트 컨벤션" in body
-        assert "https://github.com/x/y" in body  # target 명시
+        assert "Project Conventions" in body
+        assert "https://github.com/x/y" in body  # target is shown
 
     def test_cross_project_rule_in_guidelines(self, tmp_path: Path) -> None:
         s = _session(_category(rules=[_rule(layer="backend", scope="cross_project")]))
@@ -95,9 +95,9 @@ class TestExportSession:
             _rule("internal only", layer="backend", scope="framework_internal"),
         ]))
         summary = export_session(s, tmp_path)
-        # guidelines 파일 자체가 안 만들어짐.
+        # No guideline file is generated.
         assert summary.guideline_paths == []
-        # conventions.md 의 결정 표에도 안 들어감.
+        # And the rule does not appear in the decisions table either.
         body = summary.conventions_path.read_text(encoding="utf-8")
         assert "internal only" not in body
 
@@ -110,20 +110,20 @@ class TestExportSession:
         body = summary.lesson_candidates_path.read_text(encoding="utf-8")
         assert "domain rule" in body
         assert "Domain-Specific Rules" in body
-        # guidelines 에는 안 들어감 (cross_project 만).
+        # Not present in guidelines (cross_project only).
         assert summary.guideline_paths == []
 
     def test_shared_layer_only_in_conventions(self, tmp_path: Path) -> None:
-        # shared layer 의 cross_project rule 은 conventions 의 "공통 원칙" 섹션에만.
+        # `shared` layer cross_project rules belong only in conventions ("Core principles").
         s = _session(_category(rules=[
             _rule("shared rule", layer="shared", scope="cross_project"),
         ]))
         summary = export_session(s, tmp_path)
-        # guidelines 파일 없음.
+        # No guideline file.
         assert summary.guideline_paths == []
         body = summary.conventions_path.read_text(encoding="utf-8")
         assert "shared rule" in body
-        assert "## 핵심 원칙 (모든 레이어 공통)" in body
+        assert "## Core principles (all layers)" in body
 
     def test_db_layer_files_use_db_prefix(self, tmp_path: Path) -> None:
         s = _session(_category("data_model", rules=[
@@ -150,20 +150,20 @@ class TestExportSession:
         assert "Anti-Patterns" in body
 
     def test_dependencies_category_in_conventions_section(self, tmp_path: Path) -> None:
-        # dependencies 카테고리는 별도 guidelines 파일을 만들지 않고 conventions 의
-        # "의존성 정책" 섹션으로 들어감.
+        # The `dependencies` category does not produce a separate guideline file —
+        # it folds into the "Dependency policy" section of conventions.md.
         s = _session(_category("dependencies", rules=[
             _rule("Use uv for Python deps", layer="backend", scope="cross_project"),
         ]))
         summary = export_session(s, tmp_path)
         body = summary.conventions_path.read_text(encoding="utf-8")
-        assert "## 의존성 정책 (dependencies)" in body
+        assert "## Dependency policy" in body
         assert "Use uv for Python deps" in body
-        # guidelines 파일은 안 만들어짐.
+        # No guideline file for it.
         assert summary.guideline_paths == []
 
     def test_no_lesson_file_when_nothing_to_report(self, tmp_path: Path) -> None:
-        # cross_project rule 만 있고 anti_patterns / domain_specific 없으면 lesson 파일 X.
+        # Only cross_project rules and no anti-patterns → no lesson file.
         s = _session(_category(rules=[_rule(scope="cross_project")]))
         summary = export_session(s, tmp_path)
         assert summary.lesson_candidates_path is None
@@ -201,7 +201,7 @@ class TestConventionsContent:
     def test_authority_order_section(self, tmp_path: Path) -> None:
         summary = export_session(_session(), tmp_path)
         body = summary.conventions_path.read_text(encoding="utf-8")
-        assert "## 권위 순서" in body
+        assert "## Authority order" in body
         assert "conventions.md" in body
         assert "guidelines" in body
 
@@ -212,7 +212,7 @@ class TestConventionsContent:
         ]))
         summary = export_session(s, tmp_path)
         body = summary.conventions_path.read_text(encoding="utf-8")
-        assert "## Scope 분포" in body
+        assert "## Scope distribution" in body
 
     def test_index_lists_generated_files(self, tmp_path: Path) -> None:
         s = _session(_category("architecture", rules=[
@@ -224,12 +224,12 @@ class TestConventionsContent:
 
 
 # ---------------------------------------------------------------------------
-# CLI 통합
+# CLI integration
 # ---------------------------------------------------------------------------
 
 class TestCliHarnessExport:
     def test_command_runs_and_writes_files(self, tmp_path: Path) -> None:
-        # 미리 session.json 작성
+        # Pre-write a session.json
         session = _session(_category(rules=[
             _rule("cli test rule", layer="backend", scope="cross_project"),
         ]))
@@ -268,9 +268,10 @@ class TestCliHarnessExport:
 
 class TestEdgeCases:
     def test_legacy_rule_without_scope_treated_as_cross_project(self, tmp_path: Path) -> None:
-        # Backward compat: 기존 session.json 의 scope 누락 rule 도 cross_project 로 처리.
+        # Backward compat: a rule loaded from an older session.json without a `scope`
+        # field should be treated as cross_project.
         rule = _rule("legacy")
-        rule.scope = ""  # 빈 문자열 — None 또는 missing 케이스
+        rule.scope = ""  # empty string — same as missing
         s = _session(_category(rules=[rule]))
         summary = export_session(s, tmp_path)
         assert summary.cross_project_count == 1
@@ -278,7 +279,7 @@ class TestEdgeCases:
         assert target.exists()
 
     def test_unknown_category_skipped(self, tmp_path: Path) -> None:
-        # 카테고리 매핑에 없는 항목은 guidelines 에서 건너뛰고 conventions 에는 들어가지 않음.
+        # A category not in the filename mapping is skipped silently.
         s = _session(_category("unknown_category", rules=[
             _rule("orphan", layer="backend", scope="cross_project"),
         ]))

@@ -210,7 +210,7 @@ class TestScopeTagging:
 
     @pytest.mark.asyncio
     async def test_invalid_scope_value_falls_back_to_default(self) -> None:
-        # LLM 이 임의 라벨을 만들면 default 로 보정.
+        # When the LLM hallucinates a non-canonical label, fall back to default.
         s = _session(_category("arch", [_rule("r1")]))
         llm = AsyncMock()
         llm.analyze = AsyncMock(return_value=_critic_response_with_scopes(
@@ -222,7 +222,7 @@ class TestScopeTagging:
 
     @pytest.mark.asyncio
     async def test_missing_scopes_field_keeps_existing_scope(self) -> None:
-        # critic 응답에 scopes 필드 없음 (구버전 응답) → 기존 scope 유지.
+        # Older critic responses omit the `scopes` field — preserve the rule's existing scope.
         existing = _rule("r1")
         existing.scope = "domain_specific"
         s = _session(_category("arch", [existing]))

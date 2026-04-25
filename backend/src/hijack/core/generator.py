@@ -67,7 +67,8 @@ def render_meta_md(result: SessionResult) -> str:
         rule_count = len(cat.rules)
         lines.append(f"- **{cat.category}**: {rule_count} rules {status}")
 
-    # Scope 분포 — HarnessAI 통합 시 cross_project 만 자동 적용 가능 여부 가늠.
+    # Scope distribution — informs how much auto-applicable signal is in the
+    # session (HarnessAI integration only auto-applies cross_project rules).
     scope_counts: dict[str, int] = {}
     for cat in result.categories:
         for rule in cat.rules:
@@ -236,7 +237,7 @@ def render_system_prompt_md(result: SessionResult) -> str:
 
 
 def _render_rule_compact(rule: AnalysisRule) -> list[str]:
-    """system-prompt 한 항목 — rule 헤드 + ✅/❌/ref 인라인 (있을 때만)."""
+    """One system-prompt entry: rule header + inline ✅/❌/ref (only if present)."""
     out = [f"- [{rule.layer}]{_scope_tag(rule)} {rule.rule}"]
     good = _signature_preview(rule.good_example)
     bad = _signature_preview(rule.bad_example)
@@ -250,10 +251,10 @@ def _render_rule_compact(rule: AnalysisRule) -> list[str]:
 
 
 def _signature_preview(code: str, max_len: int = 100) -> str:
-    """코드 예시에서 첫 의미 있는 라인을 system-prompt 한 줄용으로 추출.
+    """Pick the first meaningful line of a code example for inline system-prompt use.
 
-    빈 줄 / 주석 / docstring 시작 라인 (\"\"\" / ''') 을 건너뛰고 첫 코드 라인 반환.
-    max_len 초과 시 ... 로 truncate. 빈 문자열을 반환하면 호출처가 표시 생략.
+    Skips blank lines, comments, and docstring openers (\"\"\" / ''').
+    Truncates with `…` past max_len. Returns "" so the caller can drop the line.
     """
     if not code:
         return ""
@@ -272,9 +273,9 @@ def _signature_preview(code: str, max_len: int = 100) -> str:
 
 
 def _scope_tag(rule: AnalysisRule) -> str:
-    """Return a leading-space tag like ` [framework_internal]` or empty string.
+    """Return a leading-space tag like ` [framework_internal]`, or "" for cross_project.
 
-    cross_project 은 기본값이라 시각 노이즈 줄이려고 표시 생략.
+    cross_project is the default — omitting the tag avoids visual noise.
     """
     scope = rule.scope or "cross_project"
     if scope == "cross_project":

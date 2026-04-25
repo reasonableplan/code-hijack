@@ -11,10 +11,12 @@ AI agents produce generic, inconsistent code. code-hijack analyzes a senior open
 - **10 analysis categories** — architecture, coding_style, api_design, testing, dependencies, security, performance, devops, state_management, data_model
 - **5-layer deterministic classification** — frontend / backend / db / devops / shared (path + extension + dep-file heuristics, no LLM guessing)
 - **Evidence-based rules** — every rule includes `ref_files:line`, verbatim ✅/❌ examples from the actual repo, confidence + priority
-- **Critic layer** — second LLM pass that drops duplicates, downgrades inflated MUST, calibrates priority ratio
+- **Scope-tagged rules** — every rule is classified `cross_project` (transfers directly), `framework_internal` (only meaningful inside the source codebase), or `domain_specific` (re-evaluate per domain). Lets a downstream tool auto-apply the safe ones and quarantine the rest.
+- **Critic layer** — second LLM pass that drops duplicates, downgrades inflated MUST, tags scope, calibrates priority ratio
 - **Two execution modes**:
   - **CLI mode** (`code-hijack analyze`) — direct Anthropic API, fully automatable
   - **Skill mode** (`/code-hijack`) — uses the current Claude Code session, no API key needed
+- **HarnessAI integration** — `harness-export` subcommand converts a session into [HarnessAI](https://github.com/reasonableplan/harnessai)-shaped docs (`conventions.md` + per-area `guidelines/` + `shared-lessons-candidates.md`). Only `cross_project` rules auto-apply; the rest become reviewable candidates.
 - **Session management** — `--resume` to skip completed categories, `diff` subcommand to compare rule changes across sessions
 
 ## Example outputs
@@ -69,27 +71,40 @@ code-hijack diff old_session/ new_session/
 
 Workflow defined in [`.claude/skills/code-hijack/SKILL.md`](.claude/skills/code-hijack/SKILL.md). No API key consumed — the current Claude Code session acts as the LLM.
 
+### HarnessAI export (any session)
+
+```bash
+# Convert an existing session into HarnessAI conventions/guidelines/lesson-candidate format
+code-hijack harness-export ./docs/hijacked/2026-04-17_fastapi --output ./harness-form
+```
+
+Output goes to `<output>/conventions.md`, `<output>/guidelines/<area>/<aspect>.md`, and (if any) `<output>/shared-lessons-candidates.md`. Drop these into a new project's `docs/` and a HarnessAI-style agent will pick up the rules.
+
 ## Output structure
 
 ```
 <target>/docs/hijacked/
 ├── 2026-04-17_fastapi/         # per-session raw analysis
-│   ├── meta.md                 # metadata: session ID, selected files, layer distribution
-│   ├── architecture.md         # rules per category (rule + ✅/❌ + reason)
+│   ├── meta.md                 # metadata: session ID, selected files, layer distribution, scope distribution
+│   ├── architecture.md         # rules per category (rule + ✅/❌ + scope + reason)
 │   ├── coding_style.md
 │   ├── api_design.md
-│   └── session.json            # structured data, reused for diff
-└── integrated/                 # agent-ready combined view
-    ├── CLAUDE.md               # entry point + layer guide + top MUST rules
-    ├── backend.md              # backend-layer rules across all categories
-    ├── frontend.md
-    ├── database.md
-    ├── devops.md
-    ├── shared.md               # cross-cutting rules
-    └── system-prompt.md        # agent system prompt
+│   └── session.json            # structured data, reused for diff / harness-export
+├── integrated/                 # agent-ready combined view
+│   ├── CLAUDE.md               # entry point + layer guide + top MUST rules
+│   ├── backend.md              # backend-layer rules across all categories
+│   ├── frontend.md
+│   ├── database.md
+│   ├── devops.md
+│   ├── shared.md               # cross-cutting rules
+│   └── system-prompt.md        # agent system prompt (rule + ✅/❌/ref inline)
+└── (harness-form/)             # optional: produced by `harness-export`
+    ├── conventions.md          # HarnessAI-style decision tables (cross_project + dependencies)
+    ├── guidelines/<area>/*.md  # per-area guides (✅/❌ + design intent)
+    └── shared-lessons-candidates.md  # anti-patterns + domain-specific rules (review-only)
 ```
 
-Copy `integrated/CLAUDE.md` into your own project's Claude Code context, and your agent will follow the extracted style.
+Copy `integrated/CLAUDE.md` into your own project's Claude Code context, and your agent will follow the extracted style. For HarnessAI projects, copy `harness-form/` contents into the project's `docs/` directly.
 
 ## Pipeline
 
@@ -140,13 +155,14 @@ backend/
       preprocessor.py                  # role classification, 2D grouping, file selection
       prompts.py                       # 10 category prompts + few-shot examples
       analyzer.py                      # LLM loop + parse + retry
-      critic.py                        # second-pass rule refinement
+      critic.py                        # second-pass rule refinement (drop / downgrade / scope-tag)
       session.py                       # session_id, SessionDiff
       generator.py                     # layer .md + CLAUDE.md rendering
+      harness_export.py                # HarnessAI conventions/guidelines/lesson-candidate adapter
     llm/
       base.py                          # BaseLLM ABC
       api.py                           # ClaudeAPIClient (anthropic SDK)
-tests/                                 # pytest — 188 tests, ruff clean
+tests/                                 # pytest — 227 tests, ruff clean
   fixtures/senior_wisdom/              # mini repo for layer-detection tests
 examples/                              # real analysis outputs
   fastapi/                             # latest fastapi analysis (17 rules)
@@ -169,7 +185,8 @@ Future direction to narrow this gap: **Git history + PR discussion mining** (Pha
 - ✅ **Phase 1 (MVP)** — 3 categories × 5 layers, CLI + Skill mode
 - ✅ **Phase 2 (expansion)** — 10 categories, `--resume`, `diff` subcommand, SessionDiff
 - ✅ **Phase 3a (quality)** — Few-shot prompts, Critic layer, content-density selection
-- **Phase 3b (planned)** — Git history mining, `design_decisions` category, RAG integration
+- ✅ **Phase 3b (HarnessAI integration)** — `scope` field (cross_project / framework_internal / domain_specific), `harness-export` subcommand, system-prompt with inline ✅/❌/ref
+- **Phase 4 (planned)** — Git history mining, `design_decisions` category, RAG integration
 
 ## Development
 
@@ -181,4 +198,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Background
 
-Built over ~1 week using the harnessai + gstack workflow (plan → build → verify → review loop). 8 incremental commits, 188 passing tests, dogfooded on 4 repos with documented quality progression. Full design document: [`backend/docs/skeleton.md`](backend/docs/skeleton.md).
+Built using the harnessai + gstack workflow (plan → build → verify → review loop). Incremental commits, 227 passing tests, dogfooded on 4 repos with documented quality progression. Phase 3b added scope tags + `harness-export` to round-trip extracted style back into HarnessAI projects. Full design document: [`backend/docs/skeleton.md`](backend/docs/skeleton.md).

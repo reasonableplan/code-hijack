@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-# 새 프로젝트로 옮길 수 있는 규칙인지 판단하는 태그.
-# - cross_project: 다른 프로젝트에 그대로 적용 가능 (PEP 604, BaseResponse 래퍼 등)
-# - framework_internal: 특정 프레임워크/라이브러리 내부 결정. 외부에서 의미 없음
-#                       (예: "FastAPI 가 Starlette 상속" — FastAPI 만의 결정)
-# - domain_specific: 도메인 특화 결정. 다른 도메인에서 그대로 쓰면 부적합
-#                    (예: "issue.priority 는 4단계 enum")
+# Portability tag — does this rule transfer to a new project?
+# - cross_project: applies to other similar projects directly (PEP 604, BaseResponse wrappers, ...)
+# - framework_internal: internal decision of THIS framework/library — irrelevant downstream
+#                       (e.g. "FastAPI subclasses Starlette" — only meaningful inside FastAPI)
+# - domain_specific: domain-bound choice that another domain would change
+#                    (e.g. "issue.priority is a 4-level enum")
 SCOPE_VALUES = ("cross_project", "framework_internal", "domain_specific")
 
 

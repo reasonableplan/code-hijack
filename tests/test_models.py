@@ -121,7 +121,7 @@ def test_rule_scope_roundtrip() -> None:
 
 
 def test_rule_scope_backward_compat_when_key_missing() -> None:
-    # 기존 session.json (scope 필드 없음) 도 default 로 로드되어야 함.
+    # An older session.json without a `scope` key must still load via the default.
     payload = make_rule().to_json()
     payload.pop("scope", None)
     restored = AnalysisRule.from_json(payload)
