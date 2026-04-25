@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 
-from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
+from hijack.core.models import SCOPE_VALUES, AnalysisRule, CategoryResult, SessionResult
 from hijack.llm.base import BaseLLM
 
 logger = logging.getLogger(__name__)
@@ -115,8 +115,9 @@ async def refine(result: SessionResult, llm: BaseLLM, *, model: str) -> SessionR
     drop_set = set(parsed.get("drop", []))
     downgrade_set = set(parsed.get("downgrade_to_should", []))
     scope_map_raw = parsed.get("scopes", {}) or {}
-    # 잘못된 scope 값은 default 로 보정 (LLM 이 임의 라벨 만드는 경우 방어)
-    valid_scopes = {"cross_project", "framework_internal", "domain_specific"}
+    # 잘못된 scope 값은 default 로 보정 (LLM 이 임의 라벨 만드는 경우 방어).
+    # SCOPE_VALUES 를 SSOT 로 사용 — 미래 새 scope 추가 시 모듈 한 곳만 수정.
+    valid_scopes = set(SCOPE_VALUES)
     scope_map: dict[str, str] = {
         k: v for k, v in scope_map_raw.items() if v in valid_scopes
     }
