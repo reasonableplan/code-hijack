@@ -264,3 +264,84 @@ class TestScopeRendering:
         assert "**cross_project**: 2" in md
         assert "**framework_internal**: 1" in md
         assert "**domain_specific**: 0" in md
+
+
+# ---------------------------------------------------------------------------
+# system-prompt ✅/❌/ref inline (Q3)
+# ---------------------------------------------------------------------------
+
+from hijack.core.generator import _signature_preview  # noqa: E402
+
+
+class TestSignaturePreview:
+    def test_returns_first_meaningful_line(self) -> None:
+        code = "def foo(x: int) -> str:\n    return str(x)"
+        assert _signature_preview(code) == "def foo(x: int) -> str:"
+
+    def test_skips_blank_and_comment_lines(self) -> None:
+        code = "\n# this is a comment\n\ndef bar(): pass"
+        assert _signature_preview(code) == "def bar(): pass"
+
+    def test_skips_docstring_opening(self) -> None:
+        code = '"""module doc"""\nfrom x import y'
+        assert _signature_preview(code) == "from x import y"
+
+    def test_truncates_long_line(self) -> None:
+        code = "x = " + ("a" * 200)
+        out = _signature_preview(code, max_len=50)
+        assert len(out) == 50
+        assert out.endswith("…")
+
+    def test_empty_input_returns_empty(self) -> None:
+        assert _signature_preview("") == ""
+        assert _signature_preview("\n\n#only comment\n") == ""
+
+
+def _rule_with_examples(
+    good: str = "def foo(*, x: int) -> str: ...",
+    bad: str = "def foo(x): ...",
+    ref: str = "src/main.py:10",
+    layer: str = "backend",
+    priority: str = "MUST",
+) -> AnalysisRule:
+    return AnalysisRule(
+        rule="Use keyword-only params",
+        priority=priority,
+        confidence="high",
+        ref_files=[ref] if ref else [],
+        good_example=good,
+        bad_example=bad,
+        reason="explicit kw",
+        layer=layer,
+    )
+
+
+class TestSystemPromptInlineExamples:
+    def test_shows_good_bad_ref_lines(self) -> None:
+        cat = _category()
+        cat.rules = [_rule_with_examples()]
+        s = _session()
+        s.categories = [cat]
+        md = render_system_prompt_md(s)
+        assert "  ✅ def foo(*, x: int) -> str: ..." in md
+        assert "  ❌ def foo(x): ..." in md
+        assert "  ref: src/main.py:10" in md
+
+    def test_omits_lines_when_examples_empty(self) -> None:
+        cat = _category()
+        cat.rules = [_rule_with_examples(good="", bad="", ref="")]
+        s = _session()
+        s.categories = [cat]
+        md = render_system_prompt_md(s)
+        assert "  ✅" not in md
+        assert "  ❌" not in md
+        assert "  ref:" not in md
+
+    def test_keeps_rule_header_format(self) -> None:
+        # 기존 한 줄 형식 (- [layer] rule) 은 유지되어야 함.
+        cat = _category()
+        cat.rules = [_rule_with_examples(layer="frontend")]
+        s = _session()
+        s.categories = [cat]
+        md = render_system_prompt_md(s)
+        assert "- [frontend] Use keyword-only params" in md

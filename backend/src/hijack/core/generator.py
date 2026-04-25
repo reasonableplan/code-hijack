@@ -214,12 +214,12 @@ def render_system_prompt_md(result: SessionResult) -> str:
         "",
     ]
     for rule in must_rules:
-        lines.append(f"- [{rule.layer}]{_scope_tag(rule)} {rule.rule}")
+        lines.extend(_render_rule_compact(rule))
 
     if should_rules:
         lines += ["", "## SHOULD Rules", ""]
         for rule in should_rules:
-            lines.append(f"- [{rule.layer}]{_scope_tag(rule)} {rule.rule}")
+            lines.extend(_render_rule_compact(rule))
 
     lines += [
         "",
@@ -233,6 +233,42 @@ def render_system_prompt_md(result: SessionResult) -> str:
                 lines.append(f"- {pattern}")
 
     return "\n".join(lines)
+
+
+def _render_rule_compact(rule: AnalysisRule) -> list[str]:
+    """system-prompt 한 항목 — rule 헤드 + ✅/❌/ref 인라인 (있을 때만)."""
+    out = [f"- [{rule.layer}]{_scope_tag(rule)} {rule.rule}"]
+    good = _signature_preview(rule.good_example)
+    bad = _signature_preview(rule.bad_example)
+    if good:
+        out.append(f"  ✅ {good}")
+    if bad:
+        out.append(f"  ❌ {bad}")
+    if rule.ref_files:
+        out.append(f"  ref: {rule.ref_files[0]}")
+    return out
+
+
+def _signature_preview(code: str, max_len: int = 100) -> str:
+    """코드 예시에서 첫 의미 있는 라인을 system-prompt 한 줄용으로 추출.
+
+    빈 줄 / 주석 / docstring 시작 라인 (\"\"\" / ''') 을 건너뛰고 첫 코드 라인 반환.
+    max_len 초과 시 ... 로 truncate. 빈 문자열을 반환하면 호출처가 표시 생략.
+    """
+    if not code:
+        return ""
+    for raw_line in code.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            continue
+        if line.startswith('"""') or line.startswith("'''"):
+            continue
+        if len(line) > max_len:
+            line = line[: max_len - 1] + "…"
+        return line
+    return ""
 
 
 def _scope_tag(rule: AnalysisRule) -> str:
