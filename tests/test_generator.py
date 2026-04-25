@@ -206,3 +206,61 @@ class TestWriteOutput:
     def test_multiple_writes_do_not_error(self, tmp_path: Path) -> None:
         write_output(_session(), tmp_path)
         write_output(_session(), tmp_path)  # second write should not raise
+
+
+# ---------------------------------------------------------------------------
+# scope rendering (Q4)
+# ---------------------------------------------------------------------------
+
+def _rule_scoped(scope: str, priority: str = "MUST", layer: str = "backend") -> AnalysisRule:
+    rule = _rule(layer=layer, priority=priority)
+    rule.scope = scope
+    return rule
+
+
+class TestScopeRendering:
+    def test_rule_renders_scope_field(self) -> None:
+        cat = _category()
+        cat.rules = [_rule_scoped("framework_internal")]
+        md = render_category_md(cat)
+        assert "**Scope**: `framework_internal`" in md
+
+    def test_rule_renders_default_cross_project_scope(self) -> None:
+        # 명시 안 해도 default 가 cross_project 라 표시.
+        cat = _category()
+        md = render_category_md(cat)
+        assert "**Scope**: `cross_project`" in md
+
+    def test_system_prompt_omits_cross_project_tag(self) -> None:
+        cat = _category()
+        cat.rules = [_rule_scoped("cross_project")]
+        s = _session()
+        s.categories = [cat]
+        md = render_system_prompt_md(s)
+        # cross_project 은 default 라 시각 노이즈 없음.
+        assert "[cross_project]" not in md
+
+    def test_system_prompt_shows_non_default_scope_tag(self) -> None:
+        cat = _category()
+        cat.rules = [
+            _rule_scoped("framework_internal"),
+            _rule_scoped("domain_specific"),
+        ]
+        s = _session()
+        s.categories = [cat]
+        md = render_system_prompt_md(s)
+        assert "[framework_internal]" in md
+        assert "[domain_specific]" in md
+
+    def test_meta_md_includes_scope_distribution(self) -> None:
+        cat_a = _category(name="architecture")
+        cat_a.rules = [_rule_scoped("cross_project"), _rule_scoped("cross_project")]
+        cat_b = _category(name="api_design")
+        cat_b.rules = [_rule_scoped("framework_internal")]
+        s = _session()
+        s.categories = [cat_a, cat_b]
+        md = render_meta_md(s)
+        assert "## Scope Distribution" in md
+        assert "**cross_project**: 2" in md
+        assert "**framework_internal**: 1" in md
+        assert "**domain_specific**: 0" in md

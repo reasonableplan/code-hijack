@@ -162,3 +162,86 @@ class TestRefine:
         assert "r1" in rule_names
         assert "r2" not in rule_names
         assert "r3" in rule_names  # 누락된 규칙은 보존됨
+
+
+# ---------------------------------------------------------------------------
+# scope tagging (Q4)
+# ---------------------------------------------------------------------------
+
+def _critic_response_with_scopes(
+    keep: list[str],
+    downgrade: list[str],
+    drop: list[str],
+    scopes: dict[str, str],
+) -> str:
+    return json.dumps({
+        "keep": keep,
+        "downgrade_to_should": downgrade,
+        "drop": drop,
+        "scopes": scopes,
+        "notes": "test",
+    })
+
+
+class TestScopeTagging:
+    @pytest.mark.asyncio
+    async def test_applies_scope_from_critic_response(self) -> None:
+        s = _session(_category("arch", [
+            _rule("public"), _rule("internal"), _rule("domain"),
+        ]))
+        llm = AsyncMock()
+        llm.analyze = AsyncMock(return_value=_critic_response_with_scopes(
+            keep=["public", "internal", "domain"],
+            downgrade=[],
+            drop=[],
+            scopes={
+                "public": "cross_project",
+                "internal": "framework_internal",
+                "domain": "domain_specific",
+            },
+        ))
+        result = await refine(s, llm, model="m")
+        scopes = {r.rule: r.scope for r in result.categories[0].rules}
+        assert scopes == {
+            "public": "cross_project",
+            "internal": "framework_internal",
+            "domain": "domain_specific",
+        }
+
+    @pytest.mark.asyncio
+    async def test_invalid_scope_value_falls_back_to_default(self) -> None:
+        # LLM 이 임의 라벨을 만들면 default 로 보정.
+        s = _session(_category("arch", [_rule("r1")]))
+        llm = AsyncMock()
+        llm.analyze = AsyncMock(return_value=_critic_response_with_scopes(
+            keep=["r1"], downgrade=[], drop=[],
+            scopes={"r1": "totally_invalid_label"},
+        ))
+        result = await refine(s, llm, model="m")
+        assert result.categories[0].rules[0].scope == "cross_project"
+
+    @pytest.mark.asyncio
+    async def test_missing_scopes_field_keeps_existing_scope(self) -> None:
+        # critic 응답에 scopes 필드 없음 (구버전 응답) → 기존 scope 유지.
+        existing = _rule("r1")
+        existing.scope = "domain_specific"
+        s = _session(_category("arch", [existing]))
+        llm = AsyncMock()
+        llm.analyze = AsyncMock(return_value=_critic_response(
+            keep=["r1"], downgrade=[], drop=[],
+        ))
+        result = await refine(s, llm, model="m")
+        assert result.categories[0].rules[0].scope == "domain_specific"
+
+    @pytest.mark.asyncio
+    async def test_downgrade_and_scope_apply_together(self) -> None:
+        s = _session(_category("arch", [_rule("r1", priority="MUST")]))
+        llm = AsyncMock()
+        llm.analyze = AsyncMock(return_value=_critic_response_with_scopes(
+            keep=["r1"], downgrade=["r1"], drop=[],
+            scopes={"r1": "framework_internal"},
+        ))
+        result = await refine(s, llm, model="m")
+        rule = result.categories[0].rules[0]
+        assert rule.priority == "SHOULD"
+        assert rule.scope == "framework_internal"

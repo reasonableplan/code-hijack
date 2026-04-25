@@ -101,3 +101,28 @@ def test_session_result_nested_roundtrip() -> None:
     restored = SessionResult.from_json(session.to_json())
     assert restored.categories[0].rules[0].layer == "frontend"
     assert restored.categories[0].rules[1].layer == "db"
+
+
+# ---------------------------------------------------------------------------
+# scope (Q4)
+# ---------------------------------------------------------------------------
+
+def test_rule_default_scope_is_cross_project() -> None:
+    rule = make_rule()
+    assert rule.scope == "cross_project"
+
+
+def test_rule_scope_roundtrip() -> None:
+    for scope in ("cross_project", "framework_internal", "domain_specific"):
+        rule = make_rule(scope=scope)
+        data = rule.to_json()
+        assert data["scope"] == scope
+        assert AnalysisRule.from_json(data).scope == scope
+
+
+def test_rule_scope_backward_compat_when_key_missing() -> None:
+    # 기존 session.json (scope 필드 없음) 도 default 로 로드되어야 함.
+    payload = make_rule().to_json()
+    payload.pop("scope", None)
+    restored = AnalysisRule.from_json(payload)
+    assert restored.scope == "cross_project"

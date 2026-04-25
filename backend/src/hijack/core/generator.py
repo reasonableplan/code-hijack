@@ -66,6 +66,20 @@ def render_meta_md(result: SessionResult) -> str:
         status = "✅" if cat.error is None else f"❌ {cat.error}"
         rule_count = len(cat.rules)
         lines.append(f"- **{cat.category}**: {rule_count} rules {status}")
+
+    # Scope 분포 — HarnessAI 통합 시 cross_project 만 자동 적용 가능 여부 가늠.
+    scope_counts: dict[str, int] = {}
+    for cat in result.categories:
+        for rule in cat.rules:
+            key = rule.scope or "cross_project"
+            scope_counts[key] = scope_counts.get(key, 0) + 1
+    if scope_counts:
+        lines += ["", "## Scope Distribution", ""]
+        total = sum(scope_counts.values())
+        for scope_key in ("cross_project", "framework_internal", "domain_specific"):
+            n = scope_counts.get(scope_key, 0)
+            pct = (n * 100 // total) if total else 0
+            lines.append(f"- **{scope_key}**: {n} ({pct}%)")
     return "\n".join(lines)
 
 
@@ -176,7 +190,7 @@ def render_claude_md_entrypoint(result: SessionResult) -> str:
         "",
     ]
     for rule in must_rules:
-        lines.append(f"- **[{rule.layer}/{rule.priority}]** {rule.rule}")
+        lines.append(f"- **[{rule.layer}/{rule.priority}]**{_scope_tag(rule)} {rule.rule}")
 
     return "\n".join(lines)
 
@@ -192,16 +206,20 @@ def render_system_prompt_md(result: SessionResult) -> str:
         "Follow these coding rules extracted from the codebase analysis.",
         "When writing code, treat MUST rules as non-negotiable constraints.",
         "",
+        "Scope tags: rules without a tag are `cross_project` (apply broadly).",
+        "`[framework_internal]` rules describe THIS codebase only — skip when reusing.",
+        "`[domain_specific]` rules need re-evaluation in a different domain.",
+        "",
         "## MUST Rules",
         "",
     ]
     for rule in must_rules:
-        lines.append(f"- [{rule.layer}] {rule.rule}")
+        lines.append(f"- [{rule.layer}]{_scope_tag(rule)} {rule.rule}")
 
     if should_rules:
         lines += ["", "## SHOULD Rules", ""]
         for rule in should_rules:
-            lines.append(f"- [{rule.layer}] {rule.rule}")
+            lines.append(f"- [{rule.layer}]{_scope_tag(rule)} {rule.rule}")
 
     lines += [
         "",
@@ -215,6 +233,17 @@ def render_system_prompt_md(result: SessionResult) -> str:
                 lines.append(f"- {pattern}")
 
     return "\n".join(lines)
+
+
+def _scope_tag(rule: AnalysisRule) -> str:
+    """Return a leading-space tag like ` [framework_internal]` or empty string.
+
+    cross_project 은 기본값이라 시각 노이즈 줄이려고 표시 생략.
+    """
+    scope = rule.scope or "cross_project"
+    if scope == "cross_project":
+        return ""
+    return f" [{scope}]"
 
 
 # ---------------------------------------------------------------------------
@@ -264,11 +293,12 @@ def _write_integrated_files(result: SessionResult, integrated_dir: Path) -> None
 # ---------------------------------------------------------------------------
 
 def _render_rule(rule: AnalysisRule) -> list[str]:
+    scope = rule.scope or "cross_project"
     lines = [
         f"### {rule.rule}",
         "",
         f"**Priority**: `{rule.priority}` | **Confidence**: `{rule.confidence}`"
-        f" | **Layer**: `{rule.layer}`",
+        f" | **Layer**: `{rule.layer}` | **Scope**: `{scope}`",
         "",
         f"**Why**: {rule.reason}",
         "",
