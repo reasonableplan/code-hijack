@@ -12,6 +12,7 @@ from hijack import __version__
 from hijack.core.analyzer import run_full_analysis
 from hijack.core.fetcher import fetch_source
 from hijack.core.generator import write_output
+from hijack.core.harness_export import export_session
 from hijack.core.models import SessionResult
 from hijack.core.prompts import MVP_CATEGORIES
 from hijack.core.session import SessionDiff
@@ -152,6 +153,42 @@ def diff_cmd(session1: str, session2: str, output: str | None) -> None:
         click.echo(f"diff 저장: {output}")
     else:
         click.echo(md)
+
+
+@cli.command("harness-export")
+@click.argument("session")
+@click.option("--output", "-o", "output_dir", required=True,
+              metavar="DIR",
+              help="HarnessAI docs 디렉토리 (conventions.md / guidelines/ 출력 루트)")
+def harness_export_cmd(session: str, output_dir: str) -> None:
+    """code-hijack 세션을 HarnessAI conventions/guidelines 형식으로 변환한다.
+
+    SESSION: session.json 또는 세션 디렉토리 (raw 분석 결과)
+
+    cross_project scope 의 규칙만 자동 적용. framework_internal 은 제외,
+    domain_specific 은 shared-lessons-candidates.md 로 분리.
+    """
+    session_result = _load_session_json(session)
+    output_path = Path(output_dir)
+    summary = export_session(session_result, output_path)
+
+    click.echo(f"\n[harness-export] 완료 → {summary.output_dir.as_posix()}")
+    click.echo(f"  conventions.md: {summary.conventions_path.relative_to(output_path).as_posix()}")
+    click.echo(f"  guidelines: {len(summary.guideline_paths)} files")
+    if summary.lesson_candidates_path:
+        click.echo(
+            f"  lessons (candidate): "
+            f"{summary.lesson_candidates_path.relative_to(output_path).as_posix()}"
+        )
+    click.echo("")
+    click.echo(
+        f"  scope — cross_project: {summary.cross_project_count}, "
+        f"framework_internal: {summary.framework_internal_count} (제외), "
+        f"domain_specific: {summary.domain_specific_count} (lesson 후보)"
+    )
+    click.echo(f"  anti-patterns: {summary.anti_pattern_count}")
+    click.echo("")
+    click.echo("다음 단계: 출력 파일을 검토 후 HarnessAI 프로젝트의 docs/ 로 복사하세요.")
 
 
 # ---------------------------------------------------------------------------
