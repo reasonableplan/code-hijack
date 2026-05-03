@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from hijack.core.archaeology import render_history_for_prompt
+from hijack.core.docs import RepoDoc, collect_repo_docs
 from hijack.core.fetcher import SourceFile
 
 _MIN_MEANINGFUL_CHARS = 500
@@ -43,6 +44,7 @@ class PreprocessResult:
     by_layer: dict[str, list[SourceFile]] = field(default_factory=dict)
     by_role_layer: dict[str, dict[str, list[SourceFile]]] = field(default_factory=dict)
     project_structure: str = ""
+    repo_docs: list[RepoDoc] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +52,12 @@ class PreprocessResult:
 # ---------------------------------------------------------------------------
 
 def build_preprocess_result(files: list[SourceFile], repo_root: Path) -> PreprocessResult:
-    """SourceFile 목록으로 PreprocessResult를 생성한다."""
+    """SourceFile 목록으로 PreprocessResult를 생성한다.
+
+    Also collects repo-level rationale docs (README/ARCHITECTURE/ADRs) once per
+    session — they're prepended to every category prompt as <repo_context> so
+    the LLM can ground rule reasons in real design notes.
+    """
     by_role: dict[str, list[SourceFile]] = {}
     by_layer: dict[str, list[SourceFile]] = {}
     by_role_layer: dict[str, dict[str, list[SourceFile]]] = {}
@@ -61,6 +68,7 @@ def build_preprocess_result(files: list[SourceFile], repo_root: Path) -> Preproc
         by_role_layer.setdefault(f.role, {}).setdefault(f.layer, []).append(f)
 
     structure = _build_project_structure(files, repo_root)
+    repo_docs = collect_repo_docs(repo_root)
 
     return PreprocessResult(
         files=files,
@@ -68,6 +76,7 @@ def build_preprocess_result(files: list[SourceFile], repo_root: Path) -> Preproc
         by_layer=by_layer,
         by_role_layer=by_role_layer,
         project_structure=structure,
+        repo_docs=repo_docs,
     )
 
 

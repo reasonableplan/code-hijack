@@ -53,6 +53,19 @@ def senior_wisdom_with_git(tmp_path_factory: pytest.TempPathFactory) -> Path:
     dst = tmp_path_factory.mktemp("senior_wisdom_git") / "repo"
     shutil.copytree(_STATIC_FIXTURE, dst)
 
+    # Repo-level rationale docs the doc fetcher should discover.
+    (dst / "README.md").write_text(
+        "# Senior Wisdom\n\nWe favour dataclasses over pydantic.\n",
+        encoding="utf-8",
+    )
+    (dst / "docs" / "adr").mkdir(parents=True, exist_ok=True)
+    (dst / "docs" / "adr" / "0001-drop-pydantic.md").write_text(
+        "# ADR 0001 — Drop pydantic from user routes\n\n"
+        "Pydantic v2 caused runtime regressions; dataclasses keep the surface\n"
+        "area smaller. Decided after the Revert documented in commit history.\n",
+        encoding="utf-8",
+    )
+
     _git(dst, "init", "-q", "-b", "main")
     _git(dst, "config", "user.email", "senior@example.com")
     _git(dst, "config", "user.name", "Senior Dev")

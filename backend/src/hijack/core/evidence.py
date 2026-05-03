@@ -28,6 +28,13 @@ _NO_EVIDENCE_PATTERN = re.compile(r"\[no-evidence\]", re.IGNORECASE)
 # Heuristic: a literal "Revert" mention with quoting/punctuation is a citation
 # of a revert subject. Bare-word "revert" is too noisy to treat as evidence.
 _REVERT_PATTERN = re.compile(r"['\"`]\s*Revert", re.IGNORECASE)
+# Doc citations from <repo_context>: ADR / README / ARCHITECTURE / CONTRIBUTING
+# / DESIGN, either as the bare keyword (uppercase, distinctive) or as a markdown
+# path in backticks (`docs/adr/0003-foo.md`, `ARCHITECTURE.md`).
+_DOC_KEYWORD_PATTERN = re.compile(
+    r"\b(?:ADR|README|ARCHITECTURE|CONTRIBUTING|DESIGN)\b"
+)
+_DOC_PATH_PATTERN = re.compile(r"`[^`]*\.(?:md|markdown|mdx|rst)`", re.IGNORECASE)
 
 # Phrases that almost always signal LLM-generated rationale rather than
 # real evidence. If a reason matches no citation pattern AND contains one of
@@ -115,6 +122,8 @@ def classify_rule(rule: AnalysisRule) -> str:
         _COMMIT_PATTERN.search(reason)
         or _PR_PATTERN.search(reason)
         or _REVERT_PATTERN.search(reason)
+        or _DOC_KEYWORD_PATTERN.search(reason)
+        or _DOC_PATH_PATTERN.search(reason)
     ):
         return "cited"
 

@@ -79,6 +79,21 @@ class TestClassifyCited:
         reason = "commit a1b2c3d — best practice for this codebase"
         assert classify_rule(_rule(reason)) == "cited"
 
+    def test_adr_keyword_cited(self) -> None:
+        assert classify_rule(_rule("ADR 0003 documented this choice")) == "cited"
+
+    def test_readme_keyword_cited(self) -> None:
+        assert classify_rule(_rule("README explains the dataclass-only stance")) == "cited"
+
+    def test_architecture_keyword_cited(self) -> None:
+        assert classify_rule(_rule("per ARCHITECTURE.md section 4")) == "cited"
+
+    def test_md_path_in_backticks_cited(self) -> None:
+        assert (
+            classify_rule(_rule("see `docs/adr/0003-drop-pydantic.md` for context"))
+            == "cited"
+        )
+
 
 class TestClassifyNoEvidence:
     def test_marker_lowercase(self) -> None:

@@ -65,6 +65,30 @@ class TestEvidenceCitationRequirement:
         result = build_category_prompt("api_design", ["sample"])
         assert "commit a1b2c3d" in result
 
+    def test_prompt_lists_adr_as_third_citation_form(self) -> None:
+        result = build_category_prompt("architecture", ["sample"])
+        assert "<repo_context>" in result
+        assert "ADR" in result
+
+
+class TestRepoContextInjection:
+    def test_repo_context_block_prepended_when_provided(self) -> None:
+        ctx = "<repo_context>\n### ARCHITECTURE.md\nWe use dataclasses.\n</repo_context>"
+        result = build_category_prompt("architecture", ["sample"], repo_context=ctx)
+        assert "<repo_context>" in result
+        assert "ARCHITECTURE.md" in result
+        # repo_context should appear BEFORE <files>, not after.
+        assert result.index("<repo_context>") < result.index("<files>")
+
+    def test_no_block_when_repo_context_empty(self) -> None:
+        result = build_category_prompt("architecture", ["sample"], repo_context="")
+        # The instruction text mentions <repo_context> as a doc-citation source,
+        # but no actual injected block should appear before <files>.
+        files_idx = result.index("<files>")
+        # If a <repo_context> open tag occurred before <files>, it would come from
+        # an actual injected block. Verify none is there.
+        assert "<repo_context>\n" not in result[:files_idx]
+
 
 class TestNewCategoryPrompts:
     """7개 신규 카테고리 프롬프트 기본 동작 검증."""

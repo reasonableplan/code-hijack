@@ -8,6 +8,7 @@ import re
 import time
 from pathlib import Path
 
+from hijack.core.docs import render_repo_context
 from hijack.core.fetcher import SourceFile
 from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
 from hijack.core.preprocessor import (
@@ -107,9 +108,10 @@ async def _analyze_category(
 ) -> CategoryResult:
     selected = select_files_for_category(preprocess_result, category)
     summaries = build_file_summary_for_llm(selected)
+    repo_context = render_repo_context(preprocess_result.repo_docs)
 
     try:
-        prompt = build_category_prompt(category, summaries)
+        prompt = build_category_prompt(category, summaries, repo_context=repo_context)
     except ValueError as e:
         return _error_result(category, "", str(e))
 

@@ -189,6 +189,26 @@ class TestArchaeologyIntegration:
         # All histories should be None when explicitly disabled.
         assert all(f.history is None for f in files)
 
+    def test_repo_docs_collected_and_rendered_in_prompt(
+        self, senior_wisdom_with_git: Path
+    ) -> None:
+        from hijack.core.docs import render_repo_context
+        from hijack.core.preprocessor import build_preprocess_result
+        from hijack.core.prompts import build_category_prompt
+
+        files, repo_root = fetch_source(str(senior_wisdom_with_git))
+        preprocess = build_preprocess_result(files, repo_root)
+
+        doc_paths = {d.path for d in preprocess.repo_docs}
+        assert "README.md" in doc_paths
+        assert "docs/adr/0001-drop-pydantic.md" in doc_paths
+
+        ctx = render_repo_context(preprocess.repo_docs)
+        prompt = build_category_prompt("architecture", ["sample"], repo_context=ctx)
+        # Both the README intent and the ADR content reach the prompt.
+        assert "dataclasses over pydantic" in prompt
+        assert "ADR 0001" in prompt
+
 
 @pytest.mark.asyncio
 async def test_layer_distribution_in_output(tmp_path: Path) -> None:

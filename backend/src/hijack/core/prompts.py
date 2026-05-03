@@ -121,11 +121,13 @@ QUALITY REQUIREMENTS (non-negotiable):
    6-7 are SHOULD. If your MUST/SHOULD ratio exceeds 60/40, re-evaluate.
 
 5. `reason` — EVIDENCE OVER OPINION:
-   When a file has a <history> block, the rule's `reason` MUST cite at least
-   one of the following from the input, verbatim:
+   When the input includes <history> or <repo_context> blocks, the rule's
+   `reason` MUST cite at least one of the following from the input, verbatim:
      (a) a commit short-SHA from <history>, e.g. "commit a1b2c3d: '<subject>'"
      (b) a revert SHA listed under `reverts touching this file`
-   If no such evidence is available (or the history is empty), set
+     (c) an ADR / README / ARCHITECTURE section title from <repo_context>,
+         e.g. "ADR `docs/adr/0003-drop-pydantic.md`: '<heading>'"
+   If no such evidence is available (or the blocks are empty), set
    `confidence: "low"` and prefix `reason` with "[no-evidence]".
    DO NOT generate generic justifications like "best practice", "more readable",
    or "industry standard" as the sole reason. Drop the rule instead — extracting
@@ -175,10 +177,18 @@ _LAYER_INSTRUCTION = (
 )
 
 
-def build_category_prompt(category: str, file_summaries: list[str]) -> str:
+def build_category_prompt(
+    category: str,
+    file_summaries: list[str],
+    *,
+    repo_context: str = "",
+) -> str:
     """카테고리 분석 프롬프트를 반환한다.
 
     file_summaries: 각 파일의 내용 또는 요약 문자열 목록.
+    repo_context: pre-rendered <repo_context> block from `core.docs`. Empty
+    string means no repo-level docs were collected — the block is omitted
+    rather than emitted with a placeholder.
     """
     if category not in _CATEGORY_INSTRUCTIONS:
         raise ValueError(
@@ -188,8 +198,11 @@ def build_category_prompt(category: str, file_summaries: list[str]) -> str:
     category_instruction = _CATEGORY_INSTRUCTIONS[category]
     joined = "\n\n".join(file_summaries)
 
+    context_section = f"{repo_context}\n\n" if repo_context else ""
+
     return (
         f"You are an expert code analyst specializing in {category} analysis.\n\n"
+        f"{context_section}"
         f"<files>\n{joined}\n</files>\n\n"
         f"{category_instruction}\n\n"
         f"{_OUTPUT_FORMAT}\n\n"
