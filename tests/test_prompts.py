@@ -70,6 +70,22 @@ class TestEvidenceCitationRequirement:
         assert "<repo_context>" in result
         assert "ADR" in result
 
+    def test_prompt_demands_verbatim_quoted_subjects(self) -> None:
+        # Review fix: paraphrasing erases the senior's voice. Citations must
+        # include the actual subject/heading copied verbatim from the input.
+        result = build_category_prompt("coding_style", ["sample"])
+        assert "verbatim" in result.lower()
+        assert "single quotes" in result.lower()
+        # Reinforces anti-hallucination directive (line breaks may sit between
+        # words in the prompt, so match a tight substring).
+        assert "invent shas" in result.lower()
+
+    def test_prompt_asks_to_quote_a_key_sentence(self) -> None:
+        # When the senior wrote a substantive body, that prose must reach the
+        # output — instruction explicitly demands a quoted sentence.
+        result = build_category_prompt("coding_style", ["sample"])
+        assert "QUOTE A KEY SENTENCE" in result
+
 
 class TestRepoContextInjection:
     def test_repo_context_block_prepended_when_provided(self) -> None:

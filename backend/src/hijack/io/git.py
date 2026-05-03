@@ -78,10 +78,13 @@ def get_file_history(
 
 
 def get_reverts_touching(repo_root: Path, file_path: Path) -> list[Commit]:
-    """Commits whose subject starts with `Revert` / `revert` and that touch `file_path`.
+    """Commits whose subject indicates an intentional rollback of `file_path`.
 
     A revert in a file's history is strong negative evidence — the senior tried
-    a pattern, then explicitly backed it out.
+    a pattern, then explicitly backed it out. The pattern is broadened beyond
+    git's own `Revert "..."` subjects to catch the conventions teams use in
+    practice: `rollback:`, `back out`, `back-out`, `undo:`. Anchored to the
+    start of the subject (with `^`) to avoid matching the words mid-sentence.
     """
     try:
         rel = file_path.relative_to(repo_root).as_posix()
@@ -92,7 +95,9 @@ def get_reverts_touching(repo_root: Path, file_path: Path) -> list[Commit]:
         repo_root,
         [
             "--follow",
-            "--grep=^[Rr]evert",
+            "--extended-regexp",
+            "--regexp-ignore-case",
+            "--grep=^(revert|rollback|back[ -]out|undo)",
             f"--format={GIT_LOG_FORMAT}",
             "--",
             rel,

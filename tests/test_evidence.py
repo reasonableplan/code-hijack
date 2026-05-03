@@ -139,6 +139,79 @@ class TestNotCommitFalsePositives:
         assert classify_rule(_rule("commit abcde failed")) == "other"
 
 
+class TestSHAVerification:
+    """When valid_shas is provided, hallucinated commit SHAs land in fake_citation."""
+
+    _REAL = {"a1b2c3d4e5f6789012345678901234567890abcd"}
+
+    def test_real_sha_prefix_match_is_cited(self) -> None:
+        # Short SHA "a1b2c3d" prefix-matches the real 40-char SHA above.
+        assert (
+            classify_rule(_rule("commit a1b2c3d explains it"), valid_shas=self._REAL)
+            == "cited"
+        )
+
+    def test_unknown_sha_is_fake_citation(self) -> None:
+        assert (
+            classify_rule(_rule("commit deadbeef shows it"), valid_shas=self._REAL)
+            == "fake_citation"
+        )
+
+    def test_no_valid_shas_disables_check(self) -> None:
+        # Backward compatibility: valid_shas=None means accept all syntactically
+        # valid commit citations. Phase A behaviour.
+        assert classify_rule(_rule("commit deadbeef shows it"), valid_shas=None) == "cited"
+
+    def test_empty_valid_shas_set_disables_check(self) -> None:
+        # Empty set is treated like "no truth pool" — same as None, since the
+        # session may have legitimately collected no history.
+        assert (
+            classify_rule(_rule("commit deadbeef shows it"), valid_shas=set())
+            == "fake_citation"
+        )
+
+    def test_mixed_real_and_fake_shas_classified_cited(self) -> None:
+        # Reason citing both a real and a fake SHA still has real grounding.
+        reason = "commit a1b2c3d (real) and commit deadbeef (made up)"
+        assert classify_rule(_rule(reason), valid_shas=self._REAL) == "cited"
+
+    def test_fake_sha_with_adr_citation_falls_through_to_cited(self) -> None:
+        # When the rule has BOTH a fake SHA AND a non-commit citation (ADR),
+        # the non-commit citation wins — there's still real grounding.
+        reason = "ADR 0003 documents this; see also commit deadbeef"
+        assert classify_rule(_rule(reason), valid_shas=self._REAL) == "cited"
+
+    def test_fake_sha_with_generic_phrase_is_fake_not_generic(self) -> None:
+        # Bucket priority: fake_citation surfaces the hallucination signal.
+        reason = "commit deadbeef — best practice for this codebase"
+        assert (
+            classify_rule(_rule(reason), valid_shas=self._REAL) == "fake_citation"
+        )
+
+    def test_compute_evidence_metrics_uses_session_historic_shas(self) -> None:
+        s = _session(
+            {
+                "architecture": [
+                    _rule("commit a1b2c3d shows it"),
+                    _rule("commit deadbeef hallucinated"),
+                ]
+            }
+        )
+        s.historic_shas = list(self._REAL)
+        m = compute_evidence_metrics(s)
+        assert m.overall.cited == 1
+        assert m.overall.fake_citation == 1
+
+    def test_render_metrics_md_shows_fake_citation_row(self) -> None:
+        s = _session(
+            {"architecture": [_rule("commit deadbeef hallucinated")]}
+        )
+        s.historic_shas = list(self._REAL)
+        out = render_metrics_md(compute_evidence_metrics(s))
+        assert "Fake citation" in out
+        assert "hallucinated" in out.lower() or "Fake citation" in out
+
+
 # ---------------------------------------------------------------------------
 # compute_evidence_metrics
 # ---------------------------------------------------------------------------

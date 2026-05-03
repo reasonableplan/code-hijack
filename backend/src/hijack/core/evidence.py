@@ -61,14 +61,21 @@ _GENERIC_PHRASES = (
 class RuleClassification:
     """Per-rule classification — every rule belongs to exactly one bucket."""
 
-    cited: int = 0          # mentions a commit SHA, PR#, or quoted Revert
-    no_evidence: int = 0    # explicit [no-evidence] marker
-    generic: int = 0        # generic-justification phrase, no citation
-    other: int = 0          # neither cited nor flagged — silently uncited
+    cited: int = 0           # mentions a real commit SHA / PR / Revert / ADR
+    no_evidence: int = 0     # explicit [no-evidence] marker
+    fake_citation: int = 0   # cited a commit SHA that wasn't in the input
+    generic: int = 0         # generic-justification phrase, no citation
+    other: int = 0           # neither cited nor flagged — silently uncited
 
     @property
     def total(self) -> int:
-        return self.cited + self.no_evidence + self.generic + self.other
+        return (
+            self.cited
+            + self.no_evidence
+            + self.fake_citation
+            + self.generic
+            + self.other
+        )
 
     @property
     def cited_ratio(self) -> float:
@@ -84,48 +91,53 @@ class EvidenceMetrics:
 
     def to_json(self) -> dict[str, Any]:
         return {
-            "overall": {
-                "cited": self.overall.cited,
-                "no_evidence": self.overall.no_evidence,
-                "generic": self.overall.generic,
-                "other": self.overall.other,
-                "total": self.overall.total,
-                "cited_ratio": round(self.overall.cited_ratio, 3),
-            },
+            "overall": _classification_to_json(self.overall),
             "by_category": {
-                cat: {
-                    "cited": c.cited,
-                    "no_evidence": c.no_evidence,
-                    "generic": c.generic,
-                    "other": c.other,
-                    "total": c.total,
-                    "cited_ratio": round(c.cited_ratio, 3),
-                }
-                for cat, c in self.by_category.items()
+                cat: _classification_to_json(c) for cat, c in self.by_category.items()
             },
         }
 
 
-def classify_rule(rule: AnalysisRule) -> str:
-    """Return one of: 'cited' | 'no_evidence' | 'generic' | 'other'.
+def classify_rule(
+    rule: AnalysisRule,
+    *,
+    valid_shas: set[str] | None = None,
+) -> str:
+    """Return one of: 'cited' | 'no_evidence' | 'fake_citation' | 'generic' | 'other'.
 
-    Order matters: we check explicit no-evidence marker first (it can co-exist
-    with a generic phrase), then citation patterns (which trump generic), then
-    generic-phrase detection.
+    Priority order:
+      1. Explicit [no-evidence] marker — most honest signal, beats everything.
+      2. Any non-commit citation (PR / Revert / ADR / doc path) → cited.
+         These citations don't have a verifiable SHA pool, so we accept them.
+      3. Commit SHA mentions:
+           - At least one matches `valid_shas` (or check skipped) → cited.
+           - All commit SHAs in reason are unknown → fake_citation.
+      4. Generic-justification phrase, no citation → generic.
+      5. Otherwise → other.
+
+    `valid_shas` is the set of full SHAs surfaced to the LLM. Pass None to
+    skip verification (backward-compatible default).
     """
     reason = rule.reason or ""
 
     if _NO_EVIDENCE_PATTERN.search(reason):
         return "no_evidence"
 
-    if (
-        _COMMIT_PATTERN.search(reason)
-        or _PR_PATTERN.search(reason)
+    has_non_commit_citation = (
+        _PR_PATTERN.search(reason)
         or _REVERT_PATTERN.search(reason)
         or _DOC_KEYWORD_PATTERN.search(reason)
         or _DOC_PATH_PATTERN.search(reason)
-    ):
+    )
+    if has_non_commit_citation:
         return "cited"
+
+    cited_shas = [m.group(1).lower() for m in _COMMIT_PATTERN.finditer(reason)]
+    if cited_shas:
+        if valid_shas is None or _any_sha_valid(cited_shas, valid_shas):
+            return "cited"
+        # All commit SHAs in this reason are unknown to the input pool.
+        return "fake_citation"
 
     lowered = reason.lower()
     if any(phrase in lowered for phrase in _GENERIC_PHRASES):
@@ -135,17 +147,48 @@ def classify_rule(rule: AnalysisRule) -> str:
 
 
 def compute_evidence_metrics(session: SessionResult) -> EvidenceMetrics:
-    """Walk all rules in `session` and tally citation classifications."""
+    """Walk all rules in `session` and tally citation classifications.
+
+    Uses `session.historic_shas` as the truth pool for SHA verification —
+    sessions analysed without git history (or pre-Phase-A) carry an empty
+    list, which disables the check.
+    """
     metrics = EvidenceMetrics()
+    valid_shas = {sha.lower() for sha in session.historic_shas} or None
 
     for cat in session.categories:
         bucket = metrics.by_category.setdefault(cat.category, RuleClassification())
         for rule in cat.rules:
-            kind = classify_rule(rule)
+            kind = classify_rule(rule, valid_shas=valid_shas)
             setattr(bucket, kind, getattr(bucket, kind) + 1)
             setattr(metrics.overall, kind, getattr(metrics.overall, kind) + 1)
 
     return metrics
+
+
+def _any_sha_valid(cited_shas: list[str], valid_shas: set[str]) -> bool:
+    """Whether any cited SHA is a prefix of (or equal to) a real full SHA.
+
+    Cited SHAs are typically 7-12 hex chars; valid_shas hold full 40-char SHAs.
+    A cited "a1b2c3d" matches valid "a1b2c3d4e5f6...".
+    """
+    for cited in cited_shas:
+        for valid in valid_shas:
+            if valid.startswith(cited):
+                return True
+    return False
+
+
+def _classification_to_json(c: RuleClassification) -> dict[str, Any]:
+    return {
+        "cited": c.cited,
+        "no_evidence": c.no_evidence,
+        "fake_citation": c.fake_citation,
+        "generic": c.generic,
+        "other": c.other,
+        "total": c.total,
+        "cited_ratio": round(c.cited_ratio, 3),
+    }
 
 
 def render_metrics_md(metrics: EvidenceMetrics) -> str:
@@ -157,11 +200,14 @@ def render_metrics_md(metrics: EvidenceMetrics) -> str:
     lines = [
         "## Evidence Coverage",
         "",
-        "How many rules cite real artifacts (commit SHA / PR# / quoted revert)",
+        "How many rules cite real artifacts (commit SHA / PR# / quoted revert / ADR)",
         "versus generic justifications. Higher cited-ratio = less LLM opinion.",
+        "Fake citations are commit SHAs the LLM invented — they were not in the input.",
         "",
         f"- **Cited**: {o.cited} ({_pct(o.cited, o.total)}%)",
         f"- **No-evidence (flagged)**: {o.no_evidence} ({_pct(o.no_evidence, o.total)}%)",
+        f"- **Fake citation (hallucinated SHA)**: {o.fake_citation} "
+        f"({_pct(o.fake_citation, o.total)}%)",
         f"- **Generic justification**: {o.generic} ({_pct(o.generic, o.total)}%)",
         f"- **Other (uncited)**: {o.other} ({_pct(o.other, o.total)}%)",
         f"- **Total rules**: {o.total}",
@@ -172,13 +218,13 @@ def render_metrics_md(metrics: EvidenceMetrics) -> str:
         lines += [
             "### By Category",
             "",
-            "| Category | Cited | No-evidence | Generic | Other | Total | Cited % |",
-            "|---|---:|---:|---:|---:|---:|---:|",
+            "| Category | Cited | No-evidence | Fake | Generic | Other | Total | Cited % |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
         ]
         for cat, c in metrics.by_category.items():
             lines.append(
-                f"| {cat} | {c.cited} | {c.no_evidence} | {c.generic} | "
-                f"{c.other} | {c.total} | {_pct(c.cited, c.total)}% |"
+                f"| {cat} | {c.cited} | {c.no_evidence} | {c.fake_citation} | "
+                f"{c.generic} | {c.other} | {c.total} | {_pct(c.cited, c.total)}% |"
             )
 
     return "\n".join(lines)

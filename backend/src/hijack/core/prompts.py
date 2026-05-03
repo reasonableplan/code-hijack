@@ -120,18 +120,34 @@ QUALITY REQUIREMENTS (non-negotiable):
    As a calibration: out of every 10 rules you extract, typically 3-4 are MUST,
    6-7 are SHOULD. If your MUST/SHOULD ratio exceeds 60/40, re-evaluate.
 
-5. `reason` — EVIDENCE OVER OPINION:
+5. `reason` — EVIDENCE OVER OPINION (this is the whole point of the tool):
+   The senior's actual reasoning lives in commit bodies, ADRs, and reverts.
+   Your job is to PRESERVE that reasoning verbatim — not paraphrase it into
+   plausible-sounding generic prose.
+
    When the input includes <history> or <repo_context> blocks, the rule's
-   `reason` MUST cite at least one of the following from the input, verbatim:
-     (a) a commit short-SHA from <history>, e.g. "commit a1b2c3d: '<subject>'"
-     (b) a revert SHA listed under `reverts touching this file`
-     (c) an ADR / README / ARCHITECTURE section title from <repo_context>,
-         e.g. "ADR `docs/adr/0003-drop-pydantic.md`: '<heading>'"
+   `reason` MUST cite at least one of the following from the input:
+     (a) a commit short-SHA AND the actual subject in single quotes, e.g.
+         "commit a1b2c3d ('fix: drop pydantic — runtime regressions')"
+     (b) a revert SHA listed under `reverts touching this file`, with its
+         subject quoted: "Revert 'b3a9f01: pydantic v2 migration'"
+     (c) an ADR / README / ARCHITECTURE path AND its actual heading, e.g.
+         "ADR `docs/adr/0003-drop-pydantic.md` ('Drop pydantic from user
+         routes')"
+   The quoted subject/heading MUST be copied verbatim from the input — do
+   not invent SHAs, do not paraphrase headings. If you cannot locate the
+   exact wording, omit the citation and use [no-evidence].
+
    If no such evidence is available (or the blocks are empty), set
    `confidence: "low"` and prefix `reason` with "[no-evidence]".
+
    DO NOT generate generic justifications like "best practice", "more readable",
    or "industry standard" as the sole reason. Drop the rule instead — extracting
    the senior's *actual* recorded reasoning is the whole point.
+
+   When the senior gave a substantive explanation (e.g. a Revert body with
+   trade-off discussion), QUOTE A KEY SENTENCE from it in `reason`. The
+   user reading the output should hear the senior's voice, not yours.
 
 ---
 

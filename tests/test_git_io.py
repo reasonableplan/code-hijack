@@ -114,6 +114,43 @@ class TestGetRevertsTouching:
         _commit(tmp_path, "a.py", "x", "feat: clean addition")
         assert get_reverts_touching(tmp_path, tmp_path / "a.py") == []
 
+    def test_rollback_subject_detected(self, tmp_path: Path) -> None:
+        # Phase A review fix: ^[Rr]evert was too narrow. Senior repos commonly
+        # use rollback / back out / undo as rollback markers too.
+        _init_repo(tmp_path)
+        _commit(tmp_path, "a.py", "v1", "feat: try X")
+        _commit(tmp_path, "a.py", "v2", "rollback: X caused regression")
+
+        reverts = get_reverts_touching(tmp_path, tmp_path / "a.py")
+        assert len(reverts) == 1
+        assert "rollback" in reverts[0].subject.lower()
+
+    def test_back_out_subject_detected(self, tmp_path: Path) -> None:
+        _init_repo(tmp_path)
+        _commit(tmp_path, "a.py", "v1", "feat: experiment")
+        _commit(tmp_path, "a.py", "v2", "Back out experiment — broke prod")
+
+        reverts = get_reverts_touching(tmp_path, tmp_path / "a.py")
+        assert len(reverts) == 1
+        assert "back out" in reverts[0].subject.lower()
+
+    def test_undo_subject_detected(self, tmp_path: Path) -> None:
+        _init_repo(tmp_path)
+        _commit(tmp_path, "a.py", "v1", "feat: change")
+        _commit(tmp_path, "a.py", "v2", "Undo: revert to dataclasses")
+
+        reverts = get_reverts_touching(tmp_path, tmp_path / "a.py")
+        assert len(reverts) == 1
+        assert "undo" in reverts[0].subject.lower()
+
+    def test_rollback_word_mid_sentence_not_matched(self, tmp_path: Path) -> None:
+        # The rollback/undo grep is anchored at start — mid-sentence mentions
+        # don't qualify as rollback commits.
+        _init_repo(tmp_path)
+        _commit(tmp_path, "a.py", "v1", "feat: add rollback button to UI")
+
+        assert get_reverts_touching(tmp_path, tmp_path / "a.py") == []
+
 
 class TestGetFileArchaeology:
     def test_combines_history_and_reverts(self, tmp_path: Path) -> None:

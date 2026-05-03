@@ -193,6 +193,19 @@ async def run_full_analysis(
     session_id = create_session_id(target or str(repo_root))
     files_by_layer = {layer: len(flist) for layer, flist in preprocess.by_layer.items()}
 
+    # Collect the SHAs surfaced to the LLM so evidence.classify_rule can detect
+    # hallucinated commit citations. Reverts are part of the same evidence pool.
+    historic_shas: set[str] = set()
+    for f in files:
+        if f.history is None:
+            continue
+        for c in f.history.commits:
+            if c.sha:
+                historic_shas.add(c.sha)
+        for c in f.history.reverts:
+            if c.sha:
+                historic_shas.add(c.sha)
+
     session = SessionResult(
         session_id=session_id,
         target=target or repo_root.as_posix(),
@@ -203,6 +216,7 @@ async def run_full_analysis(
         analysis_duration_seconds=round(duration, 3),
         project_structure=preprocess.project_structure,
         files_by_layer=files_by_layer,
+        historic_shas=sorted(historic_shas),
     )
 
     if critic and any(c.rules for c in category_results):

@@ -100,6 +100,11 @@ class SessionResult:
     analysis_duration_seconds: float
     project_structure: str
     files_by_layer: dict[str, int] = field(default_factory=dict)
+    # Sorted list of full SHAs surfaced to the LLM via <history> blocks.
+    # Used by evidence.classify_rule to detect hallucinated commit citations:
+    # if a rule's `reason` cites "commit XXX" and XXX prefix-matches no entry
+    # here, the citation was invented and the rule lands in `fake_citation`.
+    historic_shas: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -112,6 +117,7 @@ class SessionResult:
             "analysis_duration_seconds": self.analysis_duration_seconds,
             "project_structure": self.project_structure,
             "files_by_layer": self.files_by_layer,
+            "historic_shas": self.historic_shas,
         }
 
     @classmethod
@@ -126,4 +132,5 @@ class SessionResult:
             analysis_duration_seconds=data["analysis_duration_seconds"],
             project_structure=data["project_structure"],
             files_by_layer=data.get("files_by_layer", {}),
+            historic_shas=data.get("historic_shas", []),
         )

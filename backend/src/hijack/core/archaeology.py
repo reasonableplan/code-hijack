@@ -122,11 +122,16 @@ def render_history_for_prompt(
     history: FileHistory | None,
     *,
     max_commits: int = 3,
-    max_body_chars: int = 200,
+    max_body_chars: int = 800,
 ) -> str:
     """Render a FileHistory as a compact <history> block for prompt injection.
 
     Returns "" when there is nothing to show — caller can drop the block entirely.
+
+    Body cap is generous (800 chars) on purpose: the senior's actual rationale
+    often lives in commit bodies, not subjects. Cutting at 200 chars erased the
+    very evidence we want the LLM to cite. Multi-line bodies are preserved
+    (each line indented two spaces) so bullet-point reasoning survives intact.
     """
     if history is None or history.is_empty():
         return ""
@@ -134,13 +139,14 @@ def render_history_for_prompt(
     lines: list[str] = ["<history>"]
     for c in history.commits[:max_commits]:
         date_short = c.date[:10] if c.date else "?"
-        body = c.body[:max_body_chars].strip()
-        line = f"- commit {c.short_sha} ({date_short}): {c.subject}"
+        body = c.body.strip()
+        if len(body) > max_body_chars:
+            body = body[:max_body_chars].rstrip() + " […truncated]"
+        lines.append(f"- commit {c.short_sha} ({date_short}): {c.subject}")
         if body:
-            # Single-line body: collapse whitespace so the prompt stays readable.
-            body_one_line = " ".join(body.split())
-            line += f"\n  body: {body_one_line}"
-        lines.append(line)
+            lines.append("  body:")
+            for body_line in body.splitlines():
+                lines.append(f"    {body_line.rstrip()}" if body_line.strip() else "")
 
     if history.reverts:
         revs = ", ".join(c.short_sha for c in history.reverts[:3])

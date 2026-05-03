@@ -126,3 +126,28 @@ def test_rule_scope_backward_compat_when_key_missing() -> None:
     payload.pop("scope", None)
     restored = AnalysisRule.from_json(payload)
     assert restored.scope == "cross_project"
+
+
+# ---------------------------------------------------------------------------
+# historic_shas — Phase A review fix: SHA verification truth pool
+# ---------------------------------------------------------------------------
+
+def test_session_result_historic_shas_default_empty() -> None:
+    session = make_session()
+    assert session.historic_shas == []
+
+
+def test_session_result_historic_shas_roundtrip() -> None:
+    session = make_session(
+        historic_shas=["a1b2c3d4e5f6", "deadbeef1234567890"]
+    )
+    restored = SessionResult.from_json(session.to_json())
+    assert restored.historic_shas == ["a1b2c3d4e5f6", "deadbeef1234567890"]
+
+
+def test_session_result_historic_shas_backward_compat_when_key_missing() -> None:
+    # Older session.json files (pre-Phase-A-review) won't have the field.
+    payload = make_session().to_json()
+    payload.pop("historic_shas", None)
+    restored = SessionResult.from_json(payload)
+    assert restored.historic_shas == []

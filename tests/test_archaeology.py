@@ -118,6 +118,26 @@ class TestRenderHistoryForPrompt:
         # 50 chars of body + framing — never the full 1000.
         assert "x" * 1000 not in out
         assert "x" * 50 in out
+        assert "[…truncated]" in out
+
+    def test_default_body_cap_is_generous(self) -> None:
+        # Phase A review fix: 200-char cap was clipping the actual WHY text.
+        # Default should comfortably fit a real revert rationale (~500-800 chars).
+        body = "First sentence about pydantic. " * 30  # ~900 chars
+        h = FileHistory(commits=[Commit(sha="aaa", subject="s", author="A", date="d", body=body)])
+        out = render_history_for_prompt(h)  # default max_body_chars
+        # At least 600 chars of body should make it through.
+        assert out.count("First sentence about pydantic.") >= 20
+
+    def test_multi_line_body_preserved(self) -> None:
+        body = "Line one of rationale.\n\n- bullet a\n- bullet b\n\nFinal line."
+        h = FileHistory(commits=[Commit(sha="aaa", subject="s", author="A", date="d", body=body)])
+        out = render_history_for_prompt(h)
+        # Each line must survive with its leading indent — no single-line collapse.
+        assert "    Line one of rationale." in out
+        assert "    - bullet a" in out
+        assert "    - bullet b" in out
+        assert "    Final line." in out
 
     def test_reverts_section_appears(self) -> None:
         h = FileHistory(
