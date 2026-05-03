@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
+from hijack.core.models import AnalysisRule, CategoryResult, Evidence, SessionResult
 
 
 def make_rule(**kwargs) -> AnalysisRule:
@@ -151,3 +151,71 @@ def test_session_result_historic_shas_backward_compat_when_key_missing() -> None
     payload.pop("historic_shas", None)
     restored = SessionResult.from_json(payload)
     assert restored.historic_shas == []
+
+
+def test_session_result_repo_doc_paths_default_empty() -> None:
+    assert make_session().repo_doc_paths == []
+
+
+def test_session_result_repo_doc_paths_roundtrip() -> None:
+    s = make_session(repo_doc_paths=["README.md", "docs/adr/0001.md"])
+    restored = SessionResult.from_json(s.to_json())
+    assert restored.repo_doc_paths == ["README.md", "docs/adr/0001.md"]
+
+
+def test_session_result_repo_doc_paths_backward_compat_when_key_missing() -> None:
+    payload = make_session().to_json()
+    payload.pop("repo_doc_paths", None)
+    restored = SessionResult.from_json(payload)
+    assert restored.repo_doc_paths == []
+
+
+# ---------------------------------------------------------------------------
+# Evidence dataclass + AnalysisRule.evidence (Phase D1)
+# ---------------------------------------------------------------------------
+
+def _evidence(**kwargs) -> Evidence:
+    defaults = dict(
+        kind="commit",
+        ref="a1b2c3d",
+        headline="fix: drop pydantic",
+        quote="Causes runtime regressions in async paths.",
+        intent_kind="rejection",
+        date="2024-08-12 14:30:00 +0900",
+    )
+    defaults.update(kwargs)
+    return Evidence(**defaults)
+
+
+def test_evidence_roundtrip() -> None:
+    e = _evidence()
+    assert Evidence.from_json(e.to_json()) == e
+
+
+def test_evidence_optional_fields_default_to_none() -> None:
+    e = Evidence(kind="commit", ref="aaa", headline="h", quote="q")
+    assert e.intent_kind is None
+    assert e.date is None
+    # JSON survives None.
+    restored = Evidence.from_json(e.to_json())
+    assert restored == e
+
+
+def test_rule_evidence_default_empty() -> None:
+    assert make_rule().evidence == []
+
+
+def test_rule_evidence_roundtrip() -> None:
+    rule = make_rule(evidence=[_evidence(), _evidence(kind="doc", ref="README.md")])
+    restored = AnalysisRule.from_json(rule.to_json())
+    assert len(restored.evidence) == 2
+    assert restored.evidence[0].kind == "commit"
+    assert restored.evidence[1].kind == "doc"
+
+
+def test_rule_evidence_backward_compat_when_key_missing() -> None:
+    # Pre-D1 session.json files don't have an evidence key on rules.
+    payload = make_rule().to_json()
+    payload.pop("evidence", None)
+    restored = AnalysisRule.from_json(payload)
+    assert restored.evidence == []

@@ -90,8 +90,17 @@ Return a JSON object with this exact structure:
       "ref_files": ["<file path>:<line_number>", "<file path>:<start>-<end>"],
       "good_example": "<ACTUAL code snippet from the repo, copy-pasted>",
       "bad_example": "<ACTUAL anti-pattern code, NOT a descriptive comment>",
-      "reason": "<why this rule>",
-      "layer": "frontend" or "backend" or "db" or "devops" or "shared"
+      "reason": "<1-sentence intent gist, ≤150 chars>",
+      "layer": "frontend" or "backend" or "db" or "devops" or "shared",
+      "evidence": [
+        {
+          "kind": "commit" or "revert" or "doc",
+          "ref": "<short SHA from <history>, or repo-relative path from <repo_context>>",
+          "headline": "<verbatim subject or section heading, ≤120 chars>",
+          "quote": "<verbatim body excerpt, ≤500 chars>",
+          "intent_kind": "rejection" or "constraint" or "incident" or "preference" or null
+        }
+      ]
     }
   ],
   "anti_patterns": [{"pattern": "", "reason": "", "alternative": ""}],
@@ -120,34 +129,45 @@ QUALITY REQUIREMENTS (non-negotiable):
    As a calibration: out of every 10 rules you extract, typically 3-4 are MUST,
    6-7 are SHOULD. If your MUST/SHOULD ratio exceeds 60/40, re-evaluate.
 
-5. `reason` — EVIDENCE OVER OPINION (this is the whole point of the tool):
+5. `reason` — 1-SENTENCE INTENT GIST:
+   ≤150 chars. The headline of the senior's why, ideally a quoted phrase from
+   one of your evidence entries. Examples:
+     "Minimise async-path runtime regressions (per Revert a1b2c3d)."
+     "Reversibility of migrations is required by RDS rollback policy."
+   Do NOT put long explanations or multiple citations here — those go in
+   `evidence`. If no evidence available, prefix with "[no-evidence]".
+
+6. `evidence` — STRUCTURED CITATIONS (this is the whole point of the tool):
    The senior's actual reasoning lives in commit bodies, ADRs, and reverts.
-   Your job is to PRESERVE that reasoning verbatim — not paraphrase it into
-   plausible-sounding generic prose.
+   Your job is to PRESERVE that reasoning verbatim, not paraphrase it.
 
-   When the input includes <history> or <repo_context> blocks, the rule's
-   `reason` MUST cite at least one of the following from the input:
-     (a) a commit short-SHA AND the actual subject in single quotes, e.g.
-         "commit a1b2c3d ('fix: drop pydantic — runtime regressions')"
-     (b) a revert SHA listed under `reverts touching this file`, with its
-         subject quoted: "Revert 'b3a9f01: pydantic v2 migration'"
-     (c) an ADR / README / ARCHITECTURE path AND its actual heading, e.g.
-         "ADR `docs/adr/0003-drop-pydantic.md` ('Drop pydantic from user
-         routes')"
-   The quoted subject/heading MUST be copied verbatim from the input — do
-   not invent SHAs, do not paraphrase headings. If you cannot locate the
-   exact wording, omit the citation and use [no-evidence].
+   For each rule, fill `evidence` with one or more entries drawn from the
+   <history> and <repo_context> blocks in the input:
 
-   If no such evidence is available (or the blocks are empty), set
-   `confidence: "low"` and prefix `reason` with "[no-evidence]".
+   - `kind`: "commit" for any commit, "revert" for entries listed under
+     `reverts touching this file`, "doc" for README / ARCHITECTURE / ADR /
+     CONTRIBUTING citations.
+   - `ref`: short SHA (commit/revert) OR repo-relative path (doc).
+     Both MUST appear in the input. NEVER invent SHAs or doc paths.
+   - `headline`: copy the actual subject (commit) or section heading (doc)
+     VERBATIM. ≤120 chars. Single-quote inside the JSON string is fine.
+   - `quote`: copy a substantive sentence from the body (commit body / doc
+     paragraph) VERBATIM. ≤500 chars. This is what the user will read in the
+     output — preserve the senior's voice, not yours.
+   - `intent_kind`: classify the WHY. Pick one or null:
+       * "rejection" — pattern was tried then rolled back (revert evidence)
+       * "constraint" — external requirement (perf SLA, security, compliance,
+         tool limitation, spec)
+       * "incident" — past failure or post-mortem driving the choice
+       * "preference" — internal philosophy / consistency / trade-off
+     If you cannot tell from the source, set null. Do NOT guess.
 
-   DO NOT generate generic justifications like "best practice", "more readable",
-   or "industry standard" as the sole reason. Drop the rule instead — extracting
-   the senior's *actual* recorded reasoning is the whole point.
+   If no evidence is available in the input, set `evidence: []`,
+   `confidence: "low"`, and prefix `reason` with "[no-evidence]".
 
-   When the senior gave a substantive explanation (e.g. a Revert body with
-   trade-off discussion), QUOTE A KEY SENTENCE from it in `reason`. The
-   user reading the output should hear the senior's voice, not yours.
+   DO NOT pad evidence with paraphrased filler. Drop a rule entirely rather
+   than inventing evidence — extracting the senior's *actual* recorded
+   reasoning is the whole point.
 
 ---
 
@@ -160,8 +180,17 @@ FEW-SHOT EXAMPLE — GOOD quality rule (learn the shape):
   "ref_files": ["src/hijack/core/fetcher.py:229-237"],
   "good_example": "result = subprocess.run(cmd, capture_output=True, text=True)\\nif result.returncode != 0:\\n    raise FetchError(FETCH_001, result.stderr.strip())",
   "bad_example": "subprocess.run([\\"git\\", \\"clone\\", target, tmpdir])",
-  "reason": "commit a1b2c3d ('fix: surface git stderr on clone failure') — without capture_output, stderr is lost and FetchError leaks an empty string to the user.",
-  "layer": "backend"
+  "reason": "Surface git stderr on clone failure (per a1b2c3d).",
+  "layer": "backend",
+  "evidence": [
+    {
+      "kind": "commit",
+      "ref": "a1b2c3d",
+      "headline": "fix: surface git stderr on clone failure",
+      "quote": "Without capture_output, stderr is lost and FetchError leaks an empty string to the user.",
+      "intent_kind": "incident"
+    }
+  ]
 }
 
 FEW-SHOT EXAMPLE — BAD quality rule (AVOID these mistakes):
@@ -174,14 +203,16 @@ FEW-SHOT EXAMPLE — BAD quality rule (AVOID these mistakes):
   "good_example": "# 좋은 예시 코드",                // ❌ 실제 코드 아닌 주석
   "bad_example": "# 이렇게 하지 말 것",              // ❌ 설명문 — 패턴 매칭 불가
   "reason": "중요하니까",                           // ❌ 설계 의도 없음
-  "layer": "shared"
+  "layer": "shared",
+  "evidence": []                                   // ❌ 출처 없음 — 룰 자체를 드롭하라
 }
 
 NEGATIVE EXAMPLE 의 모든 ❌ 를 피하라. 특히:
 - rule 은 구체 동작으로 (WHAT + WHY 암시)
 - ref_files 는 반드시 "path:line" 형식
 - good/bad_example 은 실제 코드 발췌, 주석 아님
-- reason 은 설계 철학/트레이드오프 설명"""
+- reason 은 1-sentence intent gist (≤150자)
+- evidence 가 비면 [no-evidence] 룰만 통과 — 일반 룰은 드롭"""
 
 _LAYER_INSTRUCTION = (
     "For each rule, assign a `layer` field: "

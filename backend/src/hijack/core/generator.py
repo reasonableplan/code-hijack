@@ -4,8 +4,28 @@ import json
 from pathlib import Path
 
 from hijack.core.evidence import compute_evidence_metrics, render_metrics_md
-from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
+from hijack.core.models import AnalysisRule, CategoryResult, Evidence, SessionResult
 from hijack.core.preprocessor import build_layer_stats
+
+# Strength order for evidence — higher is stronger. Used both to pick the
+# single citation surfaced as the system-prompt `because:` line and to break
+# ties when sorting evidence chronologically (entries without a date fall back
+# to this order, with stronger kinds shown first).
+_KIND_PRIORITY: dict[str, int] = {"revert": 3, "doc": 2, "commit": 1}
+
+# Display labels for the Evidence chain section. Plain text, no emojis —
+# matches the project's no-emoji convention.
+_INTENT_LABELS: dict[str, str] = {
+    "rejection": "REJECTION",
+    "constraint": "CONSTRAINT",
+    "incident": "INCIDENT",
+    "preference": "PREFERENCE",
+}
+_KIND_LABELS: dict[str, str] = {
+    "commit": "COMMIT",
+    "revert": "REVERT",
+    "doc": "DOC",
+}
 
 _LAYERS = ["frontend", "backend", "db", "devops", "shared"]
 
@@ -244,7 +264,13 @@ def render_system_prompt_md(result: SessionResult) -> str:
 
 
 def _render_rule_compact(rule: AnalysisRule) -> list[str]:
-    """One system-prompt entry: rule header + inline ✅/❌/ref (only if present)."""
+    """One system-prompt entry: rule header + inline ✅/❌/ref/because (only if present).
+
+    The `because:` line surfaces the strongest verbatim quote so a downstream
+    agent reading this prompt sees the senior's actual reasoning, not just
+    the rule's paraphrased gist. SHA is intentionally omitted — the consumer
+    can't follow it; they just need the why.
+    """
     out = [f"- [{rule.layer}]{_scope_tag(rule)} {rule.rule}"]
     good = _signature_preview(rule.good_example)
     bad = _signature_preview(rule.bad_example)
@@ -254,7 +280,25 @@ def _render_rule_compact(rule: AnalysisRule) -> list[str]:
         out.append(f"  ❌ {bad}")
     if rule.ref_files:
         out.append(f"  ref: {rule.ref_files[0]}")
+    because_line = _because_line(rule)
+    if because_line:
+        out.append(because_line)
     return out
+
+
+def _because_line(rule: AnalysisRule, *, max_quote_len: int = 100) -> str:
+    """Build the inline `because:` summary, or "" when there's nothing to show."""
+    strongest = _strongest_evidence(rule.evidence)
+    if strongest is None:
+        return ""
+    quote = (strongest.quote or strongest.headline or "").strip()
+    if not quote:
+        return ""
+    if len(quote) > max_quote_len:
+        quote = quote[: max_quote_len - 1].rstrip() + "…"
+    intent_tag = _INTENT_LABELS.get(strongest.intent_kind or "", "")
+    suffix = f" [{intent_tag}]" if intent_tag else ""
+    return f"  because: '{quote}'{suffix}"
 
 
 def _signature_preview(code: str, max_len: int = 100) -> str:
@@ -353,4 +397,53 @@ def _render_rule(rule: AnalysisRule) -> list[str]:
         lines += ["**✅ Good**:", "```", rule.good_example, "```", ""]
     if rule.bad_example:
         lines += ["**❌ Bad**:", "```", rule.bad_example, "```", ""]
+    if rule.evidence:
+        lines += _render_evidence_chain(rule.evidence)
     return lines
+
+
+def _render_evidence_chain(evidence: list[Evidence]) -> list[str]:
+    """Render the Evidence chain section under a rule.
+
+    Sorted chronologically (oldest first) so the reader sees the *story arc*:
+    a feature commit → revert → ADR sequence reads as a decision narrative.
+    Entries without a date fall to the bottom, ordered by kind strength so
+    the strongest signal (revert > doc > commit) still surfaces first there.
+    """
+    out = ["**Evidence**:", ""]
+    for i, e in enumerate(_sort_evidence(evidence), start=1):
+        intent_tag = _INTENT_LABELS.get(e.intent_kind or "", "")
+        kind_tag = _KIND_LABELS.get(e.kind, e.kind.upper())
+        header_tag = f"[{intent_tag}]" if intent_tag else f"[{kind_tag}]"
+        date_part = f" ({e.date[:10]})" if e.date else ""
+        ref_part = f"`{e.ref}`" if e.ref else ""
+        headline = e.headline or "(no headline)"
+        out.append(f"{i}. {header_tag} · {kind_tag} {ref_part}{date_part} — {headline}")
+        if e.quote:
+            for line in e.quote.splitlines():
+                out.append(f"   > {line}" if line.strip() else "   >")
+        out.append("")
+    return out
+
+
+def _sort_evidence(evidence: list[Evidence]) -> list[Evidence]:
+    def key(e: Evidence) -> tuple[int, str, int]:
+        # Primary sort: dated entries before undated. Among dated: ascending.
+        # Among undated: by kind strength descending (negate priority).
+        has_date = 0 if e.date else 1
+        date_key = e.date or ""
+        kind_rank = -_KIND_PRIORITY.get(e.kind, 0)
+        return (has_date, date_key, kind_rank)
+
+    return sorted(evidence, key=key)
+
+
+def _strongest_evidence(evidence: list[Evidence]) -> Evidence | None:
+    """Pick the single most informative entry for one-line summaries.
+
+    Strength order: revert > doc > commit. Date is ignored — for the system-
+    prompt `because:` line we want the strongest *signal*, not the latest one.
+    """
+    if not evidence:
+        return None
+    return max(evidence, key=lambda e: _KIND_PRIORITY.get(e.kind, 0))

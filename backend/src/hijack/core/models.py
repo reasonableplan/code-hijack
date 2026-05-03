@@ -11,6 +11,68 @@ from typing import Any
 #                    (e.g. "issue.priority is a 4-level enum")
 SCOPE_VALUES = ("cross_project", "framework_internal", "domain_specific")
 
+# Source kind for an Evidence entry. Kept narrow on purpose — these are the
+# three artefact types we currently surface to the LLM (git history + docs).
+# Future kinds (in-code comments, external refs) are additive in D2+.
+EVIDENCE_KIND_VALUES = ("commit", "revert", "doc")
+
+# What KIND of why does this evidence support?
+# - rejection : tried a pattern, rolled it back (strongest negative signal)
+# - constraint: external force — perf SLA, security, compliance, tool requirement
+# - incident  : past failure / post-mortem driving the choice
+# - preference: internal philosophy / tradeoff / consistency choice
+# Deliberately 4 well-separated buckets — fewer fuzzy categories than the
+# initial 7-value sketch produced cleaner LLM classification.
+INTENT_KIND_VALUES = ("rejection", "constraint", "incident", "preference")
+
+# Per-Evidence text caps. Enforced post-LLM in analyzer to bound prompt tokens
+# and keep rendered output readable.
+EVIDENCE_HEADLINE_MAX = 120
+EVIDENCE_QUOTE_MAX = 500
+
+
+@dataclass
+class Evidence:
+    """A single source-grounded citation backing a rule.
+
+    The senior's actual reasoning lives here verbatim — `headline` and `quote`
+    are copied from the source (commit subject/body, ADR heading/paragraph),
+    not paraphrased. The downstream renderer reproduces them as quoted text so
+    the output preserves the senior's voice rather than the LLM's summary.
+
+    Field provenance:
+      - LLM-provided : kind, ref, headline, quote, intent_kind
+      - System-populated post-LLM (analyzer): date
+    """
+
+    kind: str                # one of EVIDENCE_KIND_VALUES
+    ref: str                 # SHA (commit/revert) or repo-rel path (doc)
+    headline: str            # ≤120 chars, verbatim subject/heading
+    quote: str               # ≤500 chars, verbatim body/paragraph
+    intent_kind: str | None = None  # one of INTENT_KIND_VALUES, or None
+    date: str | None = None  # ISO date, populated by system from SHA lookup
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "ref": self.ref,
+            "headline": self.headline,
+            "quote": self.quote,
+            "intent_kind": self.intent_kind,
+            "date": self.date,
+        }
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> Evidence:
+        return cls(
+            kind=data["kind"],
+            ref=data["ref"],
+            headline=data["headline"],
+            quote=data["quote"],
+            intent_kind=data.get("intent_kind"),
+            date=data.get("date"),
+        )
+
 
 @dataclass
 class AnalysisRule:
@@ -23,6 +85,10 @@ class AnalysisRule:
     reason: str
     layer: str = "shared"
     scope: str = "cross_project"
+    # Structured citations backing the rule. When non-empty, the renderer emits
+    # an Evidence chain section and `evidence.classify_rule` switches from text-
+    # based to structure-based classification. Empty list = pre-D1 behaviour.
+    evidence: list[Evidence] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -35,6 +101,7 @@ class AnalysisRule:
             "reason": self.reason,
             "layer": self.layer,
             "scope": self.scope,
+            "evidence": [e.to_json() for e in self.evidence],
         }
 
     @classmethod
@@ -49,6 +116,7 @@ class AnalysisRule:
             reason=data["reason"],
             layer=data.get("layer", "shared"),
             scope=data.get("scope", "cross_project"),
+            evidence=[Evidence.from_json(e) for e in data.get("evidence", [])],
         )
 
 
@@ -105,6 +173,10 @@ class SessionResult:
     # if a rule's `reason` cites "commit XXX" and XXX prefix-matches no entry
     # here, the citation was invented and the rule lands in `fake_citation`.
     historic_shas: list[str] = field(default_factory=list)
+    # Repo-relative paths of docs surfaced via <repo_context>. Same role as
+    # historic_shas but for `kind=doc` Evidence entries: a doc citation whose
+    # ref isn't in this list was hallucinated.
+    repo_doc_paths: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -118,6 +190,7 @@ class SessionResult:
             "project_structure": self.project_structure,
             "files_by_layer": self.files_by_layer,
             "historic_shas": self.historic_shas,
+            "repo_doc_paths": self.repo_doc_paths,
         }
 
     @classmethod
@@ -133,4 +206,5 @@ class SessionResult:
             project_structure=data["project_structure"],
             files_by_layer=data.get("files_by_layer", {}),
             historic_shas=data.get("historic_shas", []),
+            repo_doc_paths=data.get("repo_doc_paths", []),
         )

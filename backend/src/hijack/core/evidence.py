@@ -102,22 +102,32 @@ def classify_rule(
     rule: AnalysisRule,
     *,
     valid_shas: set[str] | None = None,
+    valid_doc_paths: set[str] | None = None,
 ) -> str:
     """Return one of: 'cited' | 'no_evidence' | 'fake_citation' | 'generic' | 'other'.
 
-    Priority order:
-      1. Explicit [no-evidence] marker — most honest signal, beats everything.
-      2. Any non-commit citation (PR / Revert / ADR / doc path) → cited.
-         These citations don't have a verifiable SHA pool, so we accept them.
-      3. Commit SHA mentions:
-           - At least one matches `valid_shas` (or check skipped) → cited.
-           - All commit SHAs in reason are unknown → fake_citation.
-      4. Generic-justification phrase, no citation → generic.
-      5. Otherwise → other.
+    Two paths, picked by whether the rule carries structured Evidence:
 
-    `valid_shas` is the set of full SHAs surfaced to the LLM. Pass None to
-    skip verification (backward-compatible default).
+    Path A — `rule.evidence` is non-empty (Phase D1 default):
+      Validate each entry's `ref` against the truth pools. If at least one
+      entry has a valid ref (or pool is None/empty, which disables the check),
+      the rule is `cited`. If every entry's ref is invalid (and we have pools
+      to check against), classify as `fake_citation` — the LLM populated the
+      structured field but every citation was hallucinated.
+
+    Path B — `rule.evidence` is empty (Phase A/B / pre-D1 sessions):
+      Fall back to scanning `rule.reason` for citation patterns. Same priority
+      as before: [no-evidence] marker > non-commit citation > commit SHA
+      (validated) > generic phrase > other. This keeps older session.json
+      files classifiable without re-analysis.
     """
+    if rule.evidence:
+        return _classify_via_evidence(
+            rule.evidence,
+            valid_shas=valid_shas,
+            valid_doc_paths=valid_doc_paths,
+        )
+
     reason = rule.reason or ""
 
     if _NO_EVIDENCE_PATTERN.search(reason):
@@ -136,7 +146,6 @@ def classify_rule(
     if cited_shas:
         if valid_shas is None or _any_sha_valid(cited_shas, valid_shas):
             return "cited"
-        # All commit SHAs in this reason are unknown to the input pool.
         return "fake_citation"
 
     lowered = reason.lower()
@@ -146,20 +155,63 @@ def classify_rule(
     return "other"
 
 
+def _classify_via_evidence(
+    evidence_list: list,  # list[Evidence] — typed loose to avoid circular import
+    *,
+    valid_shas: set[str] | None,
+    valid_doc_paths: set[str] | None,
+) -> str:
+    """Score a non-empty Evidence list as 'cited' or 'fake_citation'."""
+    saw_real = False
+    saw_fake = False
+    for e in evidence_list:
+        if e.kind in ("commit", "revert"):
+            ref = (e.ref or "").lower()
+            if not ref:
+                saw_fake = True
+                continue
+            if valid_shas is None or not valid_shas:
+                # No truth pool → can't verify; accept as real (best-effort).
+                saw_real = True
+            elif _any_sha_valid([ref], valid_shas):
+                saw_real = True
+            else:
+                saw_fake = True
+        elif e.kind == "doc":
+            if valid_doc_paths is None or not valid_doc_paths or e.ref in valid_doc_paths:
+                saw_real = True
+            else:
+                saw_fake = True
+        else:
+            # Unknown kind shouldn't survive analyzer validation, but be safe.
+            saw_fake = True
+
+    if saw_real:
+        return "cited"
+    if saw_fake:
+        return "fake_citation"
+    return "other"
+
+
 def compute_evidence_metrics(session: SessionResult) -> EvidenceMetrics:
     """Walk all rules in `session` and tally citation classifications.
 
-    Uses `session.historic_shas` as the truth pool for SHA verification —
-    sessions analysed without git history (or pre-Phase-A) carry an empty
-    list, which disables the check.
+    Uses `session.historic_shas` and `session.repo_doc_paths` as truth pools
+    for ref verification. Sessions analysed without git history / docs (or
+    pre-Phase-A/B) carry empty lists, which disable the corresponding check.
     """
     metrics = EvidenceMetrics()
     valid_shas = {sha.lower() for sha in session.historic_shas} or None
+    valid_doc_paths = set(session.repo_doc_paths) or None
 
     for cat in session.categories:
         bucket = metrics.by_category.setdefault(cat.category, RuleClassification())
         for rule in cat.rules:
-            kind = classify_rule(rule, valid_shas=valid_shas)
+            kind = classify_rule(
+                rule,
+                valid_shas=valid_shas,
+                valid_doc_paths=valid_doc_paths,
+            )
             setattr(bucket, kind, getattr(bucket, kind) + 1)
             setattr(metrics.overall, kind, getattr(metrics.overall, kind) + 1)
 

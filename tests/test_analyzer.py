@@ -103,6 +103,138 @@ class TestRulesFromParsed:
         assert rules == []
 
 
+class TestEvidenceParsing:
+    """Phase D1: validate Evidence list in LLM output."""
+
+    _VALID_SHAS = {"a1b2c3d4e5f6789012345678901234567890abcd"}
+    _SHA_TO_DATE = {"a1b2c3d4e5f6789012345678901234567890abcd": "2024-08-12 14:30:00 +0900"}
+    _VALID_DOCS = {"README.md", "docs/adr/0001.md"}
+
+    def _rule_with_evidence(self, evidence: list[dict]) -> dict:
+        return {
+            "rule": "Use dataclasses",
+            "priority": "MUST",
+            "confidence": "high",
+            "ref_files": ["src/main.py:10"],
+            "good_example": "@dataclass class X: ...",
+            "bad_example": "class X(BaseModel): ...",
+            "reason": "Minimise async-path runtime regressions.",
+            "layer": "backend",
+            "evidence": evidence,
+        }
+
+    def test_valid_commit_evidence_kept_with_date_populated(self) -> None:
+        raw = [self._rule_with_evidence([{
+            "kind": "commit",
+            "ref": "a1b2c3d",
+            "headline": "fix: drop pydantic",
+            "quote": "runtime regressions in async paths",
+            "intent_kind": "rejection",
+        }])]
+        rules = _rules_from_parsed(
+            raw,
+            valid_shas=self._VALID_SHAS,
+            sha_to_date=self._SHA_TO_DATE,
+        )
+        assert len(rules) == 1
+        assert len(rules[0].evidence) == 1
+        e = rules[0].evidence[0]
+        assert e.kind == "commit"
+        # ref normalised to a 12-char prefix of the full SHA.
+        assert e.ref == "a1b2c3d4e5f6"
+        assert e.date == "2024-08-12 14:30:00 +0900"
+        assert e.intent_kind == "rejection"
+
+    def test_hallucinated_sha_evidence_dropped(self) -> None:
+        raw = [self._rule_with_evidence([{
+            "kind": "commit",
+            "ref": "deadbeef",
+            "headline": "made up",
+            "quote": "made up",
+            "intent_kind": None,
+        }])]
+        rules = _rules_from_parsed(raw, valid_shas=self._VALID_SHAS)
+        # Rule survives but evidence list is empty.
+        assert len(rules) == 1
+        assert rules[0].evidence == []
+
+    def test_unknown_kind_dropped(self) -> None:
+        raw = [self._rule_with_evidence([{
+            "kind": "tweet",  # not in EVIDENCE_KIND_VALUES
+            "ref": "a1b2c3d",
+            "headline": "x",
+            "quote": "y",
+        }])]
+        rules = _rules_from_parsed(raw, valid_shas=self._VALID_SHAS)
+        assert rules[0].evidence == []
+
+    def test_unknown_intent_kind_normalised_to_none(self) -> None:
+        raw = [self._rule_with_evidence([{
+            "kind": "commit",
+            "ref": "a1b2c3d",
+            "headline": "x",
+            "quote": "y",
+            "intent_kind": "philosophy",  # was in old enum, removed in D1
+        }])]
+        rules = _rules_from_parsed(raw, valid_shas=self._VALID_SHAS)
+        assert rules[0].evidence[0].intent_kind is None
+
+    def test_doc_evidence_with_valid_path_kept(self) -> None:
+        raw = [self._rule_with_evidence([{
+            "kind": "doc",
+            "ref": "docs/adr/0001.md",
+            "headline": "ADR 0001",
+            "quote": "We chose dataclasses.",
+        }])]
+        rules = _rules_from_parsed(raw, valid_doc_paths=self._VALID_DOCS)
+        assert rules[0].evidence[0].kind == "doc"
+        assert rules[0].evidence[0].ref == "docs/adr/0001.md"
+
+    def test_doc_evidence_with_unknown_path_dropped(self) -> None:
+        raw = [self._rule_with_evidence([{
+            "kind": "doc",
+            "ref": "docs/adr/9999-imaginary.md",
+            "headline": "x",
+            "quote": "y",
+        }])]
+        rules = _rules_from_parsed(raw, valid_doc_paths=self._VALID_DOCS)
+        assert rules[0].evidence == []
+
+    def test_headline_truncated_to_120_chars(self) -> None:
+        long_headline = "x" * 200
+        raw = [self._rule_with_evidence([{
+            "kind": "commit",
+            "ref": "a1b2c3d",
+            "headline": long_headline,
+            "quote": "y",
+        }])]
+        rules = _rules_from_parsed(raw, valid_shas=self._VALID_SHAS)
+        assert len(rules[0].evidence[0].headline) == 120
+
+    def test_quote_truncated_to_500_chars(self) -> None:
+        long_quote = "y" * 1000
+        raw = [self._rule_with_evidence([{
+            "kind": "commit",
+            "ref": "a1b2c3d",
+            "headline": "h",
+            "quote": long_quote,
+        }])]
+        rules = _rules_from_parsed(raw, valid_shas=self._VALID_SHAS)
+        assert len(rules[0].evidence[0].quote) == 500
+
+    def test_empty_pools_disable_validation_best_effort(self) -> None:
+        # When the session has no git/docs context, accept LLM-extracted
+        # citations as best-effort rather than dropping every entry.
+        raw = [self._rule_with_evidence([{
+            "kind": "commit",
+            "ref": "anything",
+            "headline": "h",
+            "quote": "q",
+        }])]
+        rules = _rules_from_parsed(raw)  # all pools default to empty
+        assert len(rules[0].evidence) == 1
+
+
 # ---------------------------------------------------------------------------
 # run_full_analysis
 # ---------------------------------------------------------------------------

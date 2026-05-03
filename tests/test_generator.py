@@ -11,7 +11,7 @@ from hijack.core.generator import (
     render_system_prompt_md,
     write_output,
 )
-from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
+from hijack.core.models import AnalysisRule, CategoryResult, Evidence, SessionResult
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -95,6 +95,146 @@ class TestRenderMetaMd:
             cat.rules = []
         md = render_meta_md(s)
         assert "## Evidence Coverage" not in md
+
+
+# ---------------------------------------------------------------------------
+# Evidence chain rendering (Phase D1)
+# ---------------------------------------------------------------------------
+
+def _ev(**kwargs) -> Evidence:
+    defaults = dict(
+        kind="commit",
+        ref="a1b2c3d",
+        headline="fix: drop pydantic",
+        quote="Causes runtime regressions in async paths.",
+        intent_kind="rejection",
+        date="2024-08-12 14:30:00 +0900",
+    )
+    defaults.update(kwargs)
+    return Evidence(**defaults)
+
+
+class TestEvidenceChainRendering:
+    def test_evidence_section_omitted_when_empty(self) -> None:
+        rule = _rule()
+        rule.evidence = []
+        md = render_category_md(_category())
+        # Default fixture has no evidence — section header must not appear.
+        assert "**Evidence**:" not in md
+
+    def test_evidence_chain_renders_label_ref_date_headline_quote(self) -> None:
+        rule = _rule()
+        rule.evidence = [_ev()]
+        cat = _category()
+        cat.rules = [rule]
+        md = render_category_md(cat)
+
+        assert "**Evidence**:" in md
+        assert "[REJECTION]" in md           # intent label, not emoji
+        assert "COMMIT" in md                # kind label
+        assert "`a1b2c3d`" in md             # ref
+        assert "(2024-08-12)" in md          # date trimmed
+        assert "fix: drop pydantic" in md    # headline
+        # Quote rendered as a markdown blockquote.
+        assert "> Causes runtime regressions in async paths." in md
+
+    def test_evidence_sorted_chronologically(self) -> None:
+        rule = _rule()
+        rule.evidence = [
+            _ev(date="2024-08-12 14:30:00", headline="newer"),
+            _ev(date="2023-01-01 09:00:00", headline="older"),
+            _ev(date="2024-02-15 12:00:00", headline="middle"),
+        ]
+        cat = _category()
+        cat.rules = [rule]
+        md = render_category_md(cat)
+
+        older_idx = md.index("older")
+        middle_idx = md.index("middle")
+        newer_idx = md.index("newer")
+        assert older_idx < middle_idx < newer_idx
+
+    def test_undated_evidence_falls_to_bottom_by_kind_strength(self) -> None:
+        rule = _rule()
+        # Three undated entries: revert > doc > commit by _KIND_PRIORITY.
+        rule.evidence = [
+            _ev(kind="commit", date=None, headline="commit-undated"),
+            _ev(kind="doc", date=None, ref="README.md", headline="doc-undated"),
+            _ev(kind="revert", date=None, headline="revert-undated"),
+        ]
+        cat = _category()
+        cat.rules = [rule]
+        md = render_category_md(cat)
+
+        revert_idx = md.index("revert-undated")
+        doc_idx = md.index("doc-undated")
+        commit_idx = md.index("commit-undated")
+        assert revert_idx < doc_idx < commit_idx
+
+    def test_kind_label_used_when_intent_kind_missing(self) -> None:
+        rule = _rule()
+        rule.evidence = [_ev(intent_kind=None)]
+        cat = _category()
+        cat.rules = [rule]
+        md = render_category_md(cat)
+        # Without intent_kind, header tag falls back to the kind label.
+        assert "[COMMIT]" in md
+
+
+class TestBecauseLineInSystemPrompt:
+    def test_because_line_appears_when_evidence_present(self) -> None:
+        rule = _rule()
+        rule.evidence = [_ev(quote="async-path runtime regression")]
+        s = _session()
+        s.categories[0].rules = [rule]
+        md = render_system_prompt_md(s)
+        assert "because: 'async-path runtime regression'" in md
+        assert "[REJECTION]" in md
+
+    def test_because_line_omitted_when_no_evidence(self) -> None:
+        rule = _rule()
+        rule.evidence = []
+        s = _session()
+        s.categories[0].rules = [rule]
+        md = render_system_prompt_md(s)
+        assert "because:" not in md
+
+    def test_because_line_picks_strongest_evidence(self) -> None:
+        rule = _rule()
+        rule.evidence = [
+            _ev(kind="commit", quote="weakest"),
+            _ev(kind="revert", quote="strongest"),
+            _ev(kind="doc", ref="README.md", quote="middle"),
+        ]
+        s = _session()
+        s.categories[0].rules = [rule]
+        md = render_system_prompt_md(s)
+        assert "'strongest'" in md
+        assert "'weakest'" not in md
+        assert "'middle'" not in md
+
+    def test_because_line_truncates_long_quote(self) -> None:
+        rule = _rule()
+        rule.evidence = [_ev(quote="x" * 500)]
+        s = _session()
+        s.categories[0].rules = [rule]
+        md = render_system_prompt_md(s)
+        # The because line caps at ~100 chars + ellipsis.
+        because_lines = [line for line in md.splitlines() if "because:" in line]
+        assert because_lines, "no because line emitted"
+        assert any("…" in line for line in because_lines)
+        assert "x" * 200 not in md  # full 500-char quote should not survive
+
+    def test_because_line_drops_sha_for_consumer_brevity(self) -> None:
+        rule = _rule()
+        rule.evidence = [_ev(quote="reasoning text")]
+        s = _session()
+        s.categories[0].rules = [rule]
+        md = render_system_prompt_md(s)
+        because_line = next(line for line in md.splitlines() if "because:" in line)
+        # SHA should not appear on the because line — consumer agents can't
+        # follow it; it's pure noise.
+        assert "a1b2c3d" not in because_line
 
 
 # ---------------------------------------------------------------------------

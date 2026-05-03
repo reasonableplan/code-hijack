@@ -7,7 +7,12 @@ from hijack.core.evidence import (
     compute_evidence_metrics,
     render_metrics_md,
 )
-from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
+from hijack.core.models import (
+    AnalysisRule,
+    CategoryResult,
+    Evidence,
+    SessionResult,
+)
 
 
 def _rule(reason: str) -> AnalysisRule:
@@ -210,6 +215,117 @@ class TestSHAVerification:
         out = render_metrics_md(compute_evidence_metrics(s))
         assert "Fake citation" in out
         assert "hallucinated" in out.lower() or "Fake citation" in out
+
+
+# ---------------------------------------------------------------------------
+# classify_rule via structured Evidence list (Phase D1, Path A)
+# ---------------------------------------------------------------------------
+
+def _ev(**kwargs) -> Evidence:
+    defaults = dict(
+        kind="commit",
+        ref="a1b2c3d",
+        headline="h",
+        quote="q",
+        intent_kind=None,
+        date=None,
+    )
+    defaults.update(kwargs)
+    return Evidence(**defaults)
+
+
+def _rule_with_ev(evidence: list[Evidence], reason: str = "") -> AnalysisRule:
+    return AnalysisRule(
+        rule="r",
+        priority="MUST",
+        confidence="high",
+        ref_files=[],
+        good_example="",
+        bad_example="",
+        reason=reason,
+        evidence=evidence,
+    )
+
+
+class TestClassifyViaEvidenceList:
+    """When rule.evidence is non-empty, structured path takes priority."""
+
+    _VALID_SHAS = {"a1b2c3d4e5f6789012345678901234567890abcd"}
+    _VALID_DOCS = {"docs/adr/0001.md"}
+
+    def test_valid_commit_evidence_is_cited(self) -> None:
+        rule = _rule_with_ev([_ev(kind="commit", ref="a1b2c3d")])
+        assert (
+            classify_rule(rule, valid_shas=self._VALID_SHAS) == "cited"
+        )
+
+    def test_invalid_commit_evidence_is_fake_citation(self) -> None:
+        rule = _rule_with_ev([_ev(kind="commit", ref="deadbeef")])
+        assert (
+            classify_rule(rule, valid_shas=self._VALID_SHAS) == "fake_citation"
+        )
+
+    def test_mixed_real_and_fake_resolves_to_cited(self) -> None:
+        rule = _rule_with_ev(
+            [
+                _ev(kind="commit", ref="a1b2c3d"),
+                _ev(kind="commit", ref="deadbeef"),
+            ]
+        )
+        assert (
+            classify_rule(rule, valid_shas=self._VALID_SHAS) == "cited"
+        )
+
+    def test_valid_doc_evidence_is_cited(self) -> None:
+        rule = _rule_with_ev([_ev(kind="doc", ref="docs/adr/0001.md")])
+        assert (
+            classify_rule(rule, valid_doc_paths=self._VALID_DOCS) == "cited"
+        )
+
+    def test_unknown_doc_path_is_fake_citation(self) -> None:
+        rule = _rule_with_ev([_ev(kind="doc", ref="docs/adr/9999.md")])
+        assert (
+            classify_rule(rule, valid_doc_paths=self._VALID_DOCS)
+            == "fake_citation"
+        )
+
+    def test_evidence_path_overrides_reason_text(self) -> None:
+        # Even if reason has [no-evidence] marker, a populated evidence list
+        # takes priority — the structured field is the authoritative signal.
+        rule = _rule_with_ev(
+            [_ev(kind="commit", ref="a1b2c3d")],
+            reason="[no-evidence] inferred",
+        )
+        assert (
+            classify_rule(rule, valid_shas=self._VALID_SHAS) == "cited"
+        )
+
+    def test_empty_pools_disable_validation(self) -> None:
+        # No truth pool → evidence accepted as-is (best-effort, e.g. the
+        # repo had no git history at all).
+        rule = _rule_with_ev([_ev(kind="commit", ref="anything")])
+        assert classify_rule(rule, valid_shas=None) == "cited"
+        assert classify_rule(rule, valid_shas=set()) == "cited"
+
+    def test_empty_evidence_list_falls_through_to_reason_path(self) -> None:
+        # Confirms backward compat with Phase A/B sessions.
+        rule = _rule_with_ev([], reason="[no-evidence] inferred")
+        assert classify_rule(rule) == "no_evidence"
+
+        rule = _rule_with_ev([], reason="commit a1b2c3d shows it")
+        assert classify_rule(rule, valid_shas=self._VALID_SHAS) == "cited"
+
+    def test_compute_metrics_uses_session_repo_doc_paths(self) -> None:
+        s = _session({"architecture": [_rule_with_ev([_ev(kind="doc", ref="docs/adr/0001.md")])]})
+        s.repo_doc_paths = ["docs/adr/0001.md"]
+        m = compute_evidence_metrics(s)
+        assert m.overall.cited == 1
+
+    def test_doc_evidence_with_unknown_path_via_session_paths_is_fake(self) -> None:
+        s = _session({"architecture": [_rule_with_ev([_ev(kind="doc", ref="docs/adr/9999.md")])]})
+        s.repo_doc_paths = ["docs/adr/0001.md"]
+        m = compute_evidence_metrics(s)
+        assert m.overall.fake_citation == 1
 
 
 # ---------------------------------------------------------------------------

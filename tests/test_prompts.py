@@ -48,43 +48,55 @@ def test_invalid_category_raises_value_error() -> None:
 
 
 class TestEvidenceCitationRequirement:
-    """Phase A: prompts must steer the LLM toward citing git history in `reason`."""
+    """Phase D1: prompts demand structured `evidence` list with verbatim quotes."""
 
-    def test_prompt_demands_evidence_in_reason(self) -> None:
+    def test_prompt_describes_structured_evidence_field(self) -> None:
+        # Phase D1 moves citations from reason text into a structured field.
         result = build_category_prompt("architecture", ["sample"])
-        assert "EVIDENCE OVER OPINION" in result
+        assert "STRUCTURED CITATIONS" in result
+        assert '"evidence"' in result
         assert "<history>" in result
         assert "[no-evidence]" in result
 
-    def test_prompt_warns_against_generic_justifications(self) -> None:
+    def test_prompt_warns_against_paraphrased_filler(self) -> None:
+        # Equivalent of "no generic justifications" guard, restated for the
+        # structured field — drop a rule rather than inventing evidence.
         result = build_category_prompt("coding_style", ["sample"])
-        assert "best practice" in result.lower() or "industry standard" in result.lower()
+        assert "paraphrased filler" in result.lower()
 
-    def test_few_shot_good_example_cites_a_commit(self) -> None:
-        # The few-shot example should model the citation pattern, not LLM opinion.
+    def test_few_shot_good_example_includes_evidence(self) -> None:
+        # The few-shot good example should model the new evidence schema:
+        # kind=commit, a real-looking ref, and a verbatim headline + quote.
         result = build_category_prompt("api_design", ["sample"])
-        assert "commit a1b2c3d" in result
+        assert '"kind": "commit"' in result
+        assert '"ref": "a1b2c3d"' in result
+        assert '"headline":' in result
+        assert '"quote":' in result
 
-    def test_prompt_lists_adr_as_third_citation_form(self) -> None:
+    def test_prompt_lists_adr_as_doc_evidence_kind(self) -> None:
         result = build_category_prompt("architecture", ["sample"])
         assert "<repo_context>" in result
         assert "ADR" in result
+        assert '"kind"' in result and '"doc"' in result
 
-    def test_prompt_demands_verbatim_quoted_subjects(self) -> None:
-        # Review fix: paraphrasing erases the senior's voice. Citations must
-        # include the actual subject/heading copied verbatim from the input.
+    def test_prompt_demands_verbatim_quotes_in_evidence(self) -> None:
+        # Verbatim is the entire point — ban paraphrase explicitly.
         result = build_category_prompt("coding_style", ["sample"])
-        assert "verbatim" in result.lower()
-        assert "single quotes" in result.lower()
-        # Reinforces anti-hallucination directive (line breaks may sit between
-        # words in the prompt, so match a tight substring).
-        assert "invent shas" in result.lower()
+        assert "VERBATIM" in result
+        # Anti-hallucination — never invent SHAs / paths.
+        assert "NEVER invent SHAs" in result
 
-    def test_prompt_asks_to_quote_a_key_sentence(self) -> None:
-        # When the senior wrote a substantive body, that prose must reach the
-        # output — instruction explicitly demands a quoted sentence.
+    def test_prompt_lists_intent_kind_enum_values(self) -> None:
+        # All four intent kinds must appear so the LLM knows the closed set.
         result = build_category_prompt("coding_style", ["sample"])
-        assert "QUOTE A KEY SENTENCE" in result
+        for value in ("rejection", "constraint", "incident", "preference"):
+            assert f'"{value}"' in result
+
+    def test_prompt_makes_reason_a_one_sentence_gist(self) -> None:
+        # reason changed from "carry citations" to "1-sentence intent gist".
+        result = build_category_prompt("coding_style", ["sample"])
+        assert "1-SENTENCE INTENT GIST" in result
+        assert "≤150 chars" in result
 
 
 class TestRepoContextInjection:

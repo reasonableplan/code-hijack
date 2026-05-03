@@ -147,6 +147,7 @@ async def refine(result: SessionResult, llm: BaseLLM, *, model: str) -> SessionR
                     reason=rule.reason,
                     layer=rule.layer,
                     scope=new_scope,
+                    evidence=rule.evidence,
                 )
             )
 
