@@ -82,6 +82,20 @@ class TestRenderMetaMd:
         md = render_meta_md(s)
         assert "LLM_002" in md
 
+    def test_evidence_coverage_section_appears(self) -> None:
+        # Default fixture rules use reason="readability" → classified as 'other'.
+        # The metrics section should still render because there are rules.
+        md = render_meta_md(_session())
+        assert "## Evidence Coverage" in md
+        assert "**Total rules**: 2" in md
+
+    def test_evidence_coverage_section_omitted_when_no_rules(self) -> None:
+        s = _session()
+        for cat in s.categories:
+            cat.rules = []
+        md = render_meta_md(s)
+        assert "## Evidence Coverage" not in md
+
 
 # ---------------------------------------------------------------------------
 # render_category_md

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from hijack.core.evidence import compute_evidence_metrics, render_metrics_md
 from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
 from hijack.core.preprocessor import build_layer_stats
 
@@ -81,6 +82,12 @@ def render_meta_md(result: SessionResult) -> str:
             n = scope_counts.get(scope_key, 0)
             pct = (n * 100 // total) if total else 0
             lines.append(f"- **{scope_key}**: {n} ({pct}%)")
+
+    # Evidence coverage — Phase A's reason field grounding visualised.
+    metrics_block = render_metrics_md(compute_evidence_metrics(result))
+    if metrics_block:
+        lines += ["", metrics_block]
+
     return "\n".join(lines)
 
 
