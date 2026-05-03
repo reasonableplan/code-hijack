@@ -7,8 +7,12 @@ from click.testing import CliRunner
 
 from hijack.cli import cli
 from hijack.core.harness_export import export_session
-from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
-
+from hijack.core.models import (
+    AnalysisRule,
+    CategoryResult,
+    Evidence,
+    SessionResult,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -295,3 +299,63 @@ class TestEdgeCases:
         files = {p.name for p in summary.guideline_paths}
         assert "structure.md" in files
         assert "api.md" in files
+
+
+# ---------------------------------------------------------------------------
+# Evidence propagation (Phase D1 review fix)
+# ---------------------------------------------------------------------------
+
+def _evidence_rule(layer: str = "backend", scope: str = "cross_project") -> AnalysisRule:
+    rule = _rule("Use dataclasses", layer=layer, scope=scope)
+    rule.evidence = [
+        Evidence(
+            kind="revert",
+            ref="a1b2c3d4e5f6",
+            headline="Revert: drop pydantic",
+            quote="Pydantic v2 caused runtime regressions in async paths.",
+            intent_kind="rejection",
+            date="2024-08-12 14:30:00 +0900",
+        )
+    ]
+    return rule
+
+
+class TestEvidencePropagation:
+    """Without these tests, generator updates and harness_export updates
+    drift apart silently — exactly the bug Phase D1 review caught."""
+
+    def test_evidence_chain_appears_in_guideline_md(self, tmp_path: Path) -> None:
+        s = _session(_category("architecture", rules=[_evidence_rule()]))
+        summary = export_session(s, tmp_path)
+
+        guideline = next(p for p in summary.guideline_paths if p.name == "structure.md")
+        body = guideline.read_text(encoding="utf-8")
+        # Evidence section header + verbatim quote must reach the guideline.
+        assert "**Evidence**:" in body
+        assert "[REJECTION]" in body
+        assert "Pydantic v2 caused runtime regressions in async paths." in body
+
+    def test_evidence_renders_in_lesson_candidates_for_domain_rules(
+        self, tmp_path: Path
+    ) -> None:
+        s = _session(_category("architecture", rules=[
+            _evidence_rule(scope="domain_specific"),
+        ]))
+        summary = export_session(s, tmp_path)
+
+        assert summary.lesson_candidates_path is not None
+        body = summary.lesson_candidates_path.read_text(encoding="utf-8")
+        # Domain-specific rules also surface their evidence so reviewers see
+        # WHY the rule was project-specific, not just that it was.
+        assert "**Evidence**:" in body
+        assert "Pydantic v2 caused runtime regressions in async paths." in body
+
+    def test_no_evidence_section_when_rule_has_none(self, tmp_path: Path) -> None:
+        # Pre-D1 rules / rules where LLM couldn't extract evidence: section
+        # should not appear at all (don't emit empty Evidence header).
+        s = _session(_category("architecture", rules=[_rule("plain")]))
+        summary = export_session(s, tmp_path)
+
+        guideline = next(p for p in summary.guideline_paths if p.name == "structure.md")
+        body = guideline.read_text(encoding="utf-8")
+        assert "**Evidence**:" not in body

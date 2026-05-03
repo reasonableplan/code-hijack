@@ -234,6 +234,67 @@ class TestEvidenceParsing:
         rules = _rules_from_parsed(raw)  # all pools default to empty
         assert len(rules[0].evidence) == 1
 
+    def test_revert_kind_coerces_intent_to_rejection(self) -> None:
+        # D1 review fix: a revert IS, by definition, a rejection. Whatever
+        # the LLM emitted for intent_kind gets overridden.
+        raw = [self._rule_with_evidence([{
+            "kind": "revert",
+            "ref": "a1b2c3d",
+            "headline": "Revert: drop pydantic",
+            "quote": "Async path regressions",
+            "intent_kind": "preference",  # LLM disagrees — we override
+        }])]
+        rules = _rules_from_parsed(raw, valid_shas=self._VALID_SHAS)
+        assert rules[0].evidence[0].intent_kind == "rejection"
+
+    def test_revert_with_no_intent_still_set_to_rejection(self) -> None:
+        # Even when LLM omits intent_kind on a revert, we fill it.
+        raw = [self._rule_with_evidence([{
+            "kind": "revert",
+            "ref": "a1b2c3d",
+            "headline": "rollback: pydantic",
+            "quote": "perf regression",
+        }])]
+        rules = _rules_from_parsed(raw, valid_shas=self._VALID_SHAS)
+        assert rules[0].evidence[0].intent_kind == "rejection"
+
+    def test_headline_newlines_collapsed_to_single_line(self) -> None:
+        # Multi-line subjects would break the single-line bullet rendering.
+        raw = [self._rule_with_evidence([{
+            "kind": "commit",
+            "ref": "a1b2c3d",
+            "headline": "fix: drop pydantic\n\nMore explanation\nthird line",
+            "quote": "body",
+        }])]
+        rules = _rules_from_parsed(raw, valid_shas=self._VALID_SHAS)
+        headline = rules[0].evidence[0].headline
+        assert "\n" not in headline
+        # Whitespace runs collapse to single spaces.
+        assert headline == "fix: drop pydantic More explanation third line"
+
+    def test_whitespace_only_quote_becomes_empty(self) -> None:
+        # Quote of "   \n  \t" must strip down to "" so the renderer's
+        # truthiness check skips emitting a hollow blockquote section.
+        raw = [self._rule_with_evidence([{
+            "kind": "commit",
+            "ref": "a1b2c3d",
+            "headline": "fix: x",
+            "quote": "   \n  \t  ",
+        }])]
+        rules = _rules_from_parsed(raw, valid_shas=self._VALID_SHAS)
+        assert rules[0].evidence[0].quote == ""
+
+    def test_entry_with_both_headline_and_quote_empty_dropped(self) -> None:
+        # No useful info to render → drop the entry.
+        raw = [self._rule_with_evidence([{
+            "kind": "commit",
+            "ref": "a1b2c3d",
+            "headline": "   ",
+            "quote": "\t\n",
+        }])]
+        rules = _rules_from_parsed(raw, valid_shas=self._VALID_SHAS)
+        assert rules[0].evidence == []
+
 
 # ---------------------------------------------------------------------------
 # run_full_analysis

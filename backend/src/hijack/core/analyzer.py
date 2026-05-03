@@ -146,11 +146,20 @@ def _evidence_from_parsed(
       1. Must be a dict.
       2. `kind` ∈ EVIDENCE_KIND_VALUES (else drop).
       3. `intent_kind`: keep if ∈ INTENT_KIND_VALUES, else None.
+         A `kind="revert"` entry is, by definition, a rejection — coerce its
+         intent_kind to "rejection" regardless of what the LLM emitted.
       4. `ref` non-empty (else drop).
       5. `ref` matches truth pool — SHA prefix for commit/revert, exact path
          for doc. Empty pool disables the check (best-effort).
-      6. Truncate headline / quote to configured caps.
-      7. Populate `date` from sha_to_date if commit/revert and known.
+      6. Sanitize text:
+         - headline: collapse whitespace runs (kills newlines that would break
+           the single-line bullet rendering), then truncate to 120 chars.
+         - quote: strip outer whitespace then truncate to 500 chars. A quote
+           that's whitespace-only collapses to "" so the renderer's truthiness
+           check skips emitting a hollow blockquote.
+      7. Drop the entry if BOTH headline and quote are empty post-sanitize —
+         nothing useful to render.
+      8. Populate `date` from sha_to_date if commit/revert and known.
     """
     if not isinstance(raw_evidence, list):
         return []
@@ -180,13 +189,22 @@ def _evidence_from_parsed(
             if valid_doc_paths and ref not in valid_doc_paths:
                 continue
 
-        intent_kind_raw = raw.get("intent_kind")
-        intent_kind = (
-            intent_kind_raw if intent_kind_raw in INTENT_KIND_VALUES else None
-        )
+        if kind == "revert":
+            # A revert IS a rejection — definitional. Override LLM disagreement.
+            intent_kind: str | None = "rejection"
+        else:
+            intent_kind_raw = raw.get("intent_kind")
+            intent_kind = (
+                intent_kind_raw if intent_kind_raw in INTENT_KIND_VALUES else None
+            )
 
-        headline = (raw.get("headline") or "").strip()[:EVIDENCE_HEADLINE_MAX]
+        # Collapse whitespace in headline so a multi-line subject can't break
+        # the single-line bullet that wraps it during render.
+        headline = " ".join((raw.get("headline") or "").split())[:EVIDENCE_HEADLINE_MAX]
         quote = (raw.get("quote") or "").strip()[:EVIDENCE_QUOTE_MAX]
+
+        if not headline and not quote:
+            continue
 
         out.append(
             Evidence(

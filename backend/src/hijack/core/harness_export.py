@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from hijack.core.generator import render_evidence_chain
 from hijack.core.models import AnalysisRule, SessionResult
 
 # code-hijack layer -> HarnessAI guidelines/ subdirectory.
@@ -312,6 +313,11 @@ def _render_full_rule(rule: AnalysisRule) -> list[str]:
         out += ["**✅ Good**:", "```", rule.good_example, "```", ""]
     if rule.bad_example:
         out += ["**❌ Bad**:", "```", rule.bad_example, "```", ""]
+    if rule.evidence:
+        # Mirror generator.py: the senior's verbatim rationale must propagate
+        # through harness-export to HarnessAI guidelines too. Without this,
+        # downstream consumers of HarnessAI docs see only the 1-line gist.
+        out += render_evidence_chain(rule.evidence)
     return out
 
 
@@ -378,6 +384,8 @@ def _render_lesson_candidates(
                     f"**Reference**: {', '.join(f'`{f}`' for f in rule.ref_files)}"
                 )
                 lines.append("")
+            if rule.evidence:
+                lines += render_evidence_chain(rule.evidence)
 
     return "\n".join(lines)
 

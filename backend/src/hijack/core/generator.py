@@ -398,11 +398,11 @@ def _render_rule(rule: AnalysisRule) -> list[str]:
     if rule.bad_example:
         lines += ["**❌ Bad**:", "```", rule.bad_example, "```", ""]
     if rule.evidence:
-        lines += _render_evidence_chain(rule.evidence)
+        lines += render_evidence_chain(rule.evidence)
     return lines
 
 
-def _render_evidence_chain(evidence: list[Evidence]) -> list[str]:
+def render_evidence_chain(evidence: list[Evidence]) -> list[str]:
     """Render the Evidence chain section under a rule.
 
     Sorted chronologically (oldest first) so the reader sees the *story arc*:
