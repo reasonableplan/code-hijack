@@ -47,6 +47,25 @@ def test_invalid_category_raises_value_error() -> None:
         build_category_prompt("invalid_category", ["some content"])
 
 
+class TestEvidenceCitationRequirement:
+    """Phase A: prompts must steer the LLM toward citing git history in `reason`."""
+
+    def test_prompt_demands_evidence_in_reason(self) -> None:
+        result = build_category_prompt("architecture", ["sample"])
+        assert "EVIDENCE OVER OPINION" in result
+        assert "<history>" in result
+        assert "[no-evidence]" in result
+
+    def test_prompt_warns_against_generic_justifications(self) -> None:
+        result = build_category_prompt("coding_style", ["sample"])
+        assert "best practice" in result.lower() or "industry standard" in result.lower()
+
+    def test_few_shot_good_example_cites_a_commit(self) -> None:
+        # The few-shot example should model the citation pattern, not LLM opinion.
+        result = build_category_prompt("api_design", ["sample"])
+        assert "commit a1b2c3d" in result
+
+
 class TestNewCategoryPrompts:
     """7개 신규 카테고리 프롬프트 기본 동작 검증."""
 

@@ -120,6 +120,17 @@ QUALITY REQUIREMENTS (non-negotiable):
    As a calibration: out of every 10 rules you extract, typically 3-4 are MUST,
    6-7 are SHOULD. If your MUST/SHOULD ratio exceeds 60/40, re-evaluate.
 
+5. `reason` — EVIDENCE OVER OPINION:
+   When a file has a <history> block, the rule's `reason` MUST cite at least
+   one of the following from the input, verbatim:
+     (a) a commit short-SHA from <history>, e.g. "commit a1b2c3d: '<subject>'"
+     (b) a revert SHA listed under `reverts touching this file`
+   If no such evidence is available (or the history is empty), set
+   `confidence: "low"` and prefix `reason` with "[no-evidence]".
+   DO NOT generate generic justifications like "best practice", "more readable",
+   or "industry standard" as the sole reason. Drop the rule instead — extracting
+   the senior's *actual* recorded reasoning is the whole point.
+
 ---
 
 FEW-SHOT EXAMPLE — GOOD quality rule (learn the shape):
@@ -131,7 +142,7 @@ FEW-SHOT EXAMPLE — GOOD quality rule (learn the shape):
   "ref_files": ["src/hijack/core/fetcher.py:229-237"],
   "good_example": "result = subprocess.run(cmd, capture_output=True, text=True)\\nif result.returncode != 0:\\n    raise FetchError(FETCH_001, result.stderr.strip())",
   "bad_example": "subprocess.run([\\"git\\", \\"clone\\", target, tmpdir])",
-  "reason": "returncode/stderr 에 접근하지 못하면 실패 원인 사용자에게 전달 불가 — 디버깅 블라인드",
+  "reason": "commit a1b2c3d ('fix: surface git stderr on clone failure') — without capture_output, stderr is lost and FetchError leaks an empty string to the user.",
   "layer": "backend"
 }
 

@@ -5,6 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from hijack.core.archaeology import render_history_for_prompt
 from hijack.core.fetcher import SourceFile
 
 _MIN_MEANINGFUL_CHARS = 500
@@ -125,11 +126,20 @@ def _dedupe_near_duplicates(files: list[SourceFile]) -> list[SourceFile]:
 
 
 def build_file_summary_for_llm(files: list[SourceFile]) -> list[str]:
-    """각 SourceFile을 LLM에 전달할 문자열로 변환한다."""
+    """각 SourceFile을 LLM에 전달할 문자열로 변환한다.
+
+    Appends a <history> block when git archaeology is attached — recent commits
+    + reverts. The block is omitted entirely when there is no history, so files
+    in non-git contexts produce the same prompt as before.
+    """
     summaries: list[str] = []
     for f in files:
         header = f"### {f.path.as_posix()} [role={f.role}, layer={f.layer}]"
-        summaries.append(f"{header}\n```\n{f.content}\n```")
+        body = f"{header}\n```\n{f.content}\n```"
+        history_block = render_history_for_prompt(f.history)
+        if history_block:
+            body = f"{body}\n{history_block}"
+        summaries.append(body)
     return summaries
 
 

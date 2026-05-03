@@ -12,6 +12,7 @@ try:
 except ImportError:
     import tomllib  # type: ignore[no-redef]
 
+from hijack.core.archaeology import FileHistory
 from hijack.errors import FETCH_001, INPUT_001, INPUT_002, FetchError, InputError
 
 # ---------------------------------------------------------------------------
@@ -39,6 +40,7 @@ class SourceFile:
     content: str    # 파일 전체 내용 (2000줄 초과 시 부분 추출)
     layer: str      # "frontend"|"backend"|"db"|"devops"|"shared"
     role: str       # "entry_point"|"model"|"api"|"test"|"config"|"service"|"other"
+    history: FileHistory | None = None  # git archaeology — None when unavailable
 
 
 # ---------------------------------------------------------------------------
@@ -221,8 +223,15 @@ def fetch_source(
     target: str,
     *,
     subpath: str | None = None,
+    attach_history: bool = True,
+    history_depth: int = 3,
 ) -> tuple[list[SourceFile], Path]:
-    """(files, repo_root) 반환."""
+    """(files, repo_root) 반환.
+
+    attach_history: when True (default), each SourceFile gets `git log --follow`
+    history attached. Disabled in `--no-archaeology` mode and in tests that
+    don't care about git context.
+    """
 
     # 1. 소스 위치 결정
     local_path = Path(target)
@@ -230,11 +239,20 @@ def fetch_source(
         repo_root = local_path / subpath if subpath else local_path
     elif target.startswith(("http://", "https://")) or "github.com" in target:
         tmpdir = tempfile.mkdtemp()
+        # `--filter=blob:none` keeps the full commit graph (so `git log --follow`
+        # works for archaeology) while skipping old blob downloads. Falls back to
+        # `--depth=1` when the server rejects partial-clone filters.
         result = subprocess.run(
-            ["git", "clone", "--depth=1", target, tmpdir],
+            ["git", "clone", "--filter=blob:none", target, tmpdir],
             capture_output=True,
             text=True,
         )
+        if result.returncode != 0:
+            result = subprocess.run(
+                ["git", "clone", "--depth=1", target, tmpdir],
+                capture_output=True,
+                text=True,
+            )
         if result.returncode != 0:
             raise FetchError(FETCH_001, f"git clone 실패: {result.stderr.strip()}")
         repo_root = Path(tmpdir) / subpath if subpath else Path(tmpdir)
@@ -270,4 +288,26 @@ def fetch_source(
         role = _detect_role(rel)
         files.append(SourceFile(path=rel, content=content, layer=layer, role=role))
 
+    # 6. Attach git history (best-effort; skipped when not in a git repo).
+    if attach_history:
+        _attach_git_history(files, repo_root, depth=history_depth)
+
     return files, repo_root
+
+
+def _attach_git_history(
+    files: list[SourceFile],
+    repo_root: Path,
+    *,
+    depth: int,
+) -> None:
+    """Mutate `files` in place to attach FileHistory. Silent on non-git roots."""
+    # Imported locally so the pure `core` modules don't pull in subprocess wrapping
+    # at import time (keeps test isolation cheap).
+    from hijack.io.git import get_file_archaeology, is_git_repo
+
+    if not is_git_repo(repo_root):
+        return
+
+    for f in files:
+        f.history = get_file_archaeology(repo_root, repo_root / f.path, depth=depth)

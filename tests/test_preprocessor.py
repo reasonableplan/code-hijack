@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from hijack.core.archaeology import Commit, FileHistory
 from hijack.core.fetcher import SourceFile
 from hijack.core.preprocessor import (
     PreprocessResult,
@@ -109,6 +110,29 @@ class TestBuildFileSummaryForLlm:
 
     def test_empty_files(self) -> None:
         assert build_file_summary_for_llm([]) == []
+
+    def test_no_history_block_when_history_is_none(self) -> None:
+        f = _make_file("src/main.py")
+        summary = build_file_summary_for_llm([f])[0]
+        assert "<history>" not in summary
+
+    def test_history_block_appended_when_present(self) -> None:
+        f = _make_file("src/main.py", role="entry_point", layer="backend")
+        f.history = FileHistory(
+            commits=[
+                Commit(
+                    sha="a1b2c3d4e5f6",
+                    subject="refactor: drop pydantic",
+                    author="Alice",
+                    date="2024-08-12 14:30:00 +0900",
+                    body="dataclasses are simpler.",
+                )
+            ]
+        )
+        summary = build_file_summary_for_llm([f])[0]
+        assert "<history>" in summary
+        assert "a1b2c3d" in summary
+        assert "drop pydantic" in summary
 
 
 class TestBuildLayerStats:

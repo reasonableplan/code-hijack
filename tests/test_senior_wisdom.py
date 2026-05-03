@@ -133,6 +133,63 @@ async def test_full_pipeline_with_fixture(tmp_path: Path) -> None:
     assert "Always use type hints" in backend_md
 
 
+# ---------------------------------------------------------------------------
+# Archaeology integration — verifies git history flows into prompts
+# ---------------------------------------------------------------------------
+
+class TestArchaeologyIntegration:
+    """Phase A: fetch_source attaches history; preprocessor renders it."""
+
+    def test_history_attached_to_files_with_commits(
+        self, senior_wisdom_with_git: Path
+    ) -> None:
+        files, _ = fetch_source(str(senior_wisdom_with_git))
+        by_path = {f.path.as_posix(): f for f in files}
+
+        # Every file got at least the scaffold commit.
+        for f in files:
+            assert f.history is not None
+            assert len(f.history.commits) >= 1, f"no history for {f.path}"
+
+        # The churned file has multiple commits, newest first.
+        churned = by_path["backend/routes/users.py"]
+        assert len(churned.history.commits) >= 3
+        assert churned.history.commits[0].subject.startswith("fix: settle")
+
+    def test_revert_detected_for_churned_file(
+        self, senior_wisdom_with_git: Path
+    ) -> None:
+        files, _ = fetch_source(str(senior_wisdom_with_git))
+        by_path = {f.path.as_posix(): f for f in files}
+
+        churned = by_path["backend/routes/users.py"]
+        assert len(churned.history.reverts) == 1
+        assert "drop pydantic" in churned.history.reverts[0].subject
+
+        # A file without revert noise should report no reverts.
+        clean = by_path["frontend/App.tsx"]
+        assert clean.history.reverts == []
+
+    def test_history_block_appears_in_prompt_summary(
+        self, senior_wisdom_with_git: Path
+    ) -> None:
+        from hijack.core.preprocessor import build_file_summary_for_llm
+
+        files, _ = fetch_source(str(senior_wisdom_with_git))
+        churned = next(f for f in files if f.path.as_posix() == "backend/routes/users.py")
+        summary = build_file_summary_for_llm([churned])[0]
+
+        assert "<history>" in summary
+        assert "Revert" in summary or "drop pydantic" in summary
+
+    def test_attach_history_false_skips_git(
+        self, senior_wisdom_with_git: Path
+    ) -> None:
+        files, _ = fetch_source(str(senior_wisdom_with_git), attach_history=False)
+        # All histories should be None when explicitly disabled.
+        assert all(f.history is None for f in files)
+
+
 @pytest.mark.asyncio
 async def test_layer_distribution_in_output(tmp_path: Path) -> None:
     """레이어별 파일이 올바른 integrated/*.md에 배치되는지 검증한다."""
