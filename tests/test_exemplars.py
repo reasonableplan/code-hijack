@@ -6,6 +6,7 @@ from pathlib import Path
 from hijack.core.exemplars import (
     Exemplar,
     _score_length,
+    _score_length_class,
     _score_public,
     render_exemplars_md,
     select_exemplars,
@@ -69,6 +70,35 @@ class TestScoreLength:
     def test_over_50_low(self) -> None:
         assert _score_length(51) == 0.3
         assert _score_length(200) == 0.3
+
+
+class TestScoreLengthClass:
+    def test_below_5_returns_zero(self) -> None:
+        assert _score_length_class(4) == 0.0
+
+    def test_5_to_7_returns_half(self) -> None:
+        assert _score_length_class(5) == 0.5
+        assert _score_length_class(7) == 0.5
+
+    def test_sweet_spot_extends_to_200(self) -> None:
+        assert _score_length_class(8) == 1.0
+        assert _score_length_class(50) == 1.0
+        assert _score_length_class(150) == 1.0
+        assert _score_length_class(200) == 1.0
+
+    def test_201_to_400_moderate(self) -> None:
+        assert _score_length_class(201) == 0.6
+        assert _score_length_class(400) == 0.6
+
+    def test_over_400_low(self) -> None:
+        assert _score_length_class(401) == 0.3
+        assert _score_length_class(1000) == 0.3
+
+    def test_class_sweet_spot_wider_than_function(self) -> None:
+        # A 100-line class scores 1.0 but a 100-line function scores 0.3 —
+        # the differentiation is the whole point of the separate curve.
+        assert _score_length_class(100) == 1.0
+        assert _score_length(100) == 0.3
 
 
 class TestScorePublic:
@@ -183,17 +213,71 @@ class TestSelectExemplars:
         result = select_exemplars(files)
         assert result == []
 
-    def test_max_per_layer_enforced(self) -> None:
-        # Three backend files, each with a scoreable function
+    def test_skips_files_in_tests_dir(self) -> None:
+        # Code that would otherwise score well, but lives under tests/
+        files = [_sf(GOOD_FUNCTION, path="tests/test_user.py")]
+        result = select_exemplars(files)
+        assert result == []
+
+    def test_skips_files_in_nested_tests_dir(self) -> None:
+        files = [_sf(GOOD_FUNCTION, path="src/pkg/tests/helpers.py")]
+        result = select_exemplars(files)
+        assert result == []
+
+    def test_skips_files_in_docs_src_dir(self) -> None:
+        files = [_sf(GOOD_FUNCTION, path="docs_src/tutorial001.py")]
+        result = select_exemplars(files)
+        assert result == []
+
+    def test_skips_files_in_scripts_dir(self) -> None:
+        files = [_sf(GOOD_FUNCTION, path="scripts/build_helper.py")]
+        result = select_exemplars(files)
+        assert result == []
+
+    def test_skips_files_in_examples_dir(self) -> None:
+        files = [_sf(GOOD_FUNCTION, path="examples/quickstart.py")]
+        result = select_exemplars(files)
+        assert result == []
+
+    def test_does_not_skip_top_level_tests_py_file(self) -> None:
+        # A library file literally named "tests.py" at the top level should
+        # NOT be excluded — only directory prefixes like tests/ count.
+        files = [_sf(GOOD_FUNCTION, path="tests.py")]
+        result = select_exemplars(files)
+        assert len(result) == 1
+
+    def test_max_per_layer_caps_first_pass_only(self) -> None:
+        # max_per_layer is a soft cap: pass 1 enforces it for diversity, pass 2
+        # fills remaining slots ignoring it so single-layer libraries don't
+        # ship a half-empty exemplars.md.
         f1 = _sf(GOOD_FUNCTION, path="backend/a.py")
         f2 = _sf(TYPED_CLASS, path="backend/b.py")
         f3 = _sf(LONG_FUNCTION, path="backend/c.py")
-        result = select_exemplars([f1, f2, f3], max_per_layer=2)
-        backend_count = sum(1 for e in result if e.layer == "backend")
-        assert backend_count <= 2
+        result = select_exemplars([f1, f2, f3], max_per_layer=2, max_total=8)
+        # All three picked: pass 1 picks 2, pass 2 picks the remaining 1.
+        assert len(result) == 3
 
-    def test_max_total_enforced(self) -> None:
-        # Five files across different layers
+    def test_max_per_layer_diversity_preserved_when_other_layers_present(
+        self,
+    ) -> None:
+        # When multiple layers have candidates, pass 1 keeps each layer
+        # represented up to its cap before pass 2 fills the rest by score.
+        files = [
+            _sf(GOOD_FUNCTION, path="backend/a.py", layer="backend"),
+            _sf(TYPED_CLASS, path="backend/b.py", layer="backend"),
+            _sf(LONG_FUNCTION, path="backend/c.py", layer="backend"),
+            _sf(GOOD_FUNCTION, path="frontend/a.py", layer="frontend"),
+        ]
+        result = select_exemplars(files, max_per_layer=2, max_total=8)
+        layers = {e.layer for e in result}
+        # frontend candidate must appear — pass 1 guarantees it before
+        # backend's third candidate fills via pass 2.
+        assert "frontend" in layers
+        assert "backend" in layers
+
+    def test_max_total_is_hard_cap(self) -> None:
+        # max_total caps the final result regardless of candidate count
+        # or per-layer values. This is the hard ceiling.
         files = [
             _sf(GOOD_FUNCTION, path="backend/a.py", layer="backend"),
             _sf(TYPED_CLASS, path="backend/b.py", layer="backend"),
@@ -202,7 +286,7 @@ class TestSelectExemplars:
             _sf(GOOD_FUNCTION, path="db/e.py", layer="db"),
         ]
         result = select_exemplars(files, max_total=3)
-        assert len(result) <= 3
+        assert len(result) == 3
 
     def test_all_below_threshold_returns_empty(self) -> None:
         # Only tiny stubs → all below _MIN_SCORE

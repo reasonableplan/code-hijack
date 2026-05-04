@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import textwrap
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from hijack.core.fetcher import SourceFile
@@ -19,6 +20,25 @@ _TRUNCATION_MARKER = "# [TRUNCATED:"
 # Files below this composite score are rejected — prevents picking junk when
 # a repo has only very small, untyped, or undocumented code.
 _MIN_SCORE = 0.4
+
+# Path prefixes excluded from exemplar selection. These directories typically
+# hold pedagogical or auxiliary code (tutorials, fixtures, build scripts) whose
+# style is not representative of the senior library code we want agents to
+# imitate. Match is on the posix-style relative path with a trailing slash so
+# "tests" never matches a top-level "tests.py" file.
+_EXCLUDED_PATH_PREFIXES: tuple[str, ...] = (
+    "tests/",
+    "test/",
+    "docs/",
+    "docs_src/",
+    "scripts/",
+    "examples/",
+    "examples_src/",
+    "tutorial/",
+    "tutorials/",
+    "benchmarks/",
+    "e2e/",
+)
 
 # Scoring weights (must sum to 1.0).
 _W_LENGTH = 0.30
@@ -73,7 +93,7 @@ class Exemplar:
 # ---------------------------------------------------------------------------
 
 def _score_length(n_lines: int) -> float:
-    """Map line count to [0, 1] with a sweet spot at 8-30 lines."""
+    """Map function line count to [0, 1] with a sweet spot at 8-30 lines."""
     if n_lines < 5:
         return 0.0
     if n_lines < 8:
@@ -82,6 +102,24 @@ def _score_length(n_lines: int) -> float:
         return 1.0
     if n_lines <= 50:
         return 0.7
+    return 0.3
+
+
+def _score_length_class(n_lines: int) -> float:
+    """Class line-count curve — separate from functions.
+
+    Senior library classes routinely run 50-200 lines because typed __init__
+    plus methods belong together; the same length signals "junk" for a
+    function but "thoroughness" for a class. Reject only on the extremes.
+    """
+    if n_lines < 5:
+        return 0.0
+    if n_lines < 8:
+        return 0.5
+    if n_lines <= 200:
+        return 1.0
+    if n_lines <= 400:
+        return 0.6
     return 0.3
 
 
@@ -186,7 +224,7 @@ def _build_why_chosen(
 
     if length_score == 1.0:
         parts.append(f"sweet-spot length ({n_lines} lines)")
-    elif length_score == 0.7:
+    elif length_score >= 0.6:
         parts.append(f"moderate length ({n_lines} lines)")
 
     if not parts:
@@ -212,10 +250,26 @@ class _Candidate:
     why_chosen: str
 
 
+def _is_excluded_path(path: Path) -> bool:
+    """Return True for paths under tutorial/test/script directories.
+
+    The senior library code we want to surface lives outside these areas;
+    including them lets pedagogical or auxiliary files outscore the real API.
+    """
+    posix = path.as_posix()
+    return any(
+        posix.startswith(prefix) or f"/{prefix}" in posix
+        for prefix in _EXCLUDED_PATH_PREFIXES
+    )
+
+
 def _extract_candidates(sf: SourceFile) -> list[_Candidate]:
     """Parse a Python SourceFile and score all top-level function/class defs."""
     # Only Python files
     if sf.path.suffix != ".py":
+        return []
+
+    if _is_excluded_path(sf.path):
         return []
 
     content = sf.content
@@ -243,16 +297,17 @@ def _extract_candidates(sf: SourceFile) -> list[_Candidate]:
         raw_lines = source_lines[start - 1 : end]
         code = textwrap.dedent("\n".join(raw_lines))
 
-        length_score = _score_length(n_lines)
+        if isinstance(node, ast.ClassDef):
+            length_score = _score_length_class(n_lines)
+            annotation_score = _score_annotation_class(node)
+        else:
+            length_score = _score_length(n_lines)
+            annotation_score = _score_annotation_function(node)
+
         # Hard gate: fewer than 5 lines is always too trivial — skip before
         # annotation/docstring scores can rescue a stub.
         if length_score == 0.0:
             continue
-
-        if isinstance(node, ast.ClassDef):
-            annotation_score = _score_annotation_class(node)
-        else:
-            annotation_score = _score_annotation_function(node)
         docstring_score = _score_docstring(node)
         public_score = _score_public(node.name)
 
@@ -288,7 +343,7 @@ def select_exemplars(
     files: list[SourceFile],
     *,
     max_total: int = 8,
-    max_per_layer: int = 2,
+    max_per_layer: int = 4,
 ) -> list[Exemplar]:
     """Pick 6-9 representative functions/classes across layers.
 
@@ -311,25 +366,42 @@ def select_exemplars(
 
     layer_counts: dict[str, int] = {}
     selected: list[Exemplar] = []
+    picked: set[tuple[str, int, str]] = set()
 
+    def _make_exemplar(cand: _Candidate) -> Exemplar:
+        return Exemplar(
+            file_path=cand.file_path,
+            line_range=(cand.start_line, cand.end_line),
+            code=cand.code,
+            layer=cand.layer,
+            role=cand.role,
+            name=cand.name,
+            why_chosen=cand.why_chosen,
+        )
+
+    # Pass 1: enforce max_per_layer for diversity in multi-layer repos
     for cand in all_candidates:
         if len(selected) >= max_total:
             break
-        layer_count = layer_counts.get(cand.layer, 0)
-        if layer_count >= max_per_layer:
+        if layer_counts.get(cand.layer, 0) >= max_per_layer:
             continue
-        layer_counts[cand.layer] = layer_count + 1
-        selected.append(
-            Exemplar(
-                file_path=cand.file_path,
-                line_range=(cand.start_line, cand.end_line),
-                code=cand.code,
-                layer=cand.layer,
-                role=cand.role,
-                name=cand.name,
-                why_chosen=cand.why_chosen,
-            )
-        )
+        layer_counts[cand.layer] = layer_counts.get(cand.layer, 0) + 1
+        key = (cand.file_path, cand.start_line, cand.name)
+        picked.add(key)
+        selected.append(_make_exemplar(cand))
+
+    # Pass 2: single-layer libraries (e.g. a pure-Python framework) hit the
+    # per-layer cap before max_total is filled. Fill remaining slots from any
+    # layer so we don't ship a half-empty exemplars.md.
+    if len(selected) < max_total:
+        for cand in all_candidates:
+            if len(selected) >= max_total:
+                break
+            key = (cand.file_path, cand.start_line, cand.name)
+            if key in picked:
+                continue
+            picked.add(key)
+            selected.append(_make_exemplar(cand))
 
     return selected
 
