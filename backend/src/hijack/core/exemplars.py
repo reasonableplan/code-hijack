@@ -123,8 +123,18 @@ def _score_length_class(n_lines: int) -> float:
     return 0.3
 
 
-def _score_annotation_function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> float:
-    """Annotation density for a function node."""
+def _score_annotation_function(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    return_implicit_none: bool = False,
+) -> float:
+    """Annotation density for a function node.
+
+    `return_implicit_none=True` is set when scoring `__init__` (and similar
+    void-by-convention methods) where authors routinely omit the `-> None`
+    annotation. Without this flag a senior `__init__` with 50 fully-annotated
+    parameters scores only 0.6 because of the missing trivial return type.
+    """
     args = node.args
     # Collect all regular + keyword-only + positional-only args, excluding self/cls.
     all_args = [
@@ -141,7 +151,7 @@ def _score_annotation_function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> 
     if all_args and all_args[0].arg in ("self", "cls"):
         all_args = all_args[1:]
 
-    returns_annotated = node.returns is not None
+    returns_annotated = node.returns is not None or return_implicit_none
     returns_factor = 1.0 if returns_annotated else 0.6
 
     if not all_args:
@@ -157,7 +167,7 @@ def _score_annotation_class(node: ast.ClassDef) -> float:
     """Annotation density for a class node (looks at __init__ args)."""
     for item in node.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__":
-            return _score_annotation_function(item)
+            return _score_annotation_function(item, return_implicit_none=True)
     # No __init__ found
     return 0.7  # non-trivial dataclass / ABC / protocol style — give partial credit
 
@@ -263,6 +273,41 @@ def _is_excluded_path(path: Path) -> bool:
     )
 
 
+def _file_subdir(file_path: str) -> str:
+    """Return the directory component of a posix-style relative path.
+
+    Used by `select_exemplars` to spread picks across subpackages so a
+    single subdirectory (e.g. fastapi/) doesn't crowd out a domain-specific
+    one (e.g. fastapi/security/) that carries different patterns.
+    """
+    if "/" in file_path:
+        return file_path.rsplit("/", 1)[0]
+    return "."
+
+
+def _refresh_content_from_disk(sf: SourceFile, repo_root: Path) -> SourceFile:
+    """Re-read the source file from disk so AST extraction sees the full body.
+
+    The fetcher truncates files past `_MAX_LINES` to keep LLM prompts bounded,
+    but truncated files lose the bodies of long senior classes (e.g. FastAPI's
+    `params.py` clocks in at 3500+ lines and demonstrates the canonical
+    `_Unset` sentinel pattern). Reading fresh from disk bypasses that limit
+    for AST consumers without changing the LLM prompt size.
+    """
+    full_path = repo_root / sf.path
+    try:
+        full = full_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return sf
+    return SourceFile(
+        path=sf.path,
+        content=full,
+        layer=sf.layer,
+        role=sf.role,
+        history=sf.history,
+    )
+
+
 def _extract_candidates(sf: SourceFile) -> list[_Candidate]:
     """Parse a Python SourceFile and score all top-level function/class defs."""
     # Only Python files
@@ -344,12 +389,25 @@ def select_exemplars(
     *,
     max_total: int = 8,
     max_per_layer: int = 4,
+    repo_root: Path | None = None,
 ) -> list[Exemplar]:
     """Pick 6-9 representative functions/classes across layers.
 
     For each Python SourceFile with parseable AST, walks top-level
     FunctionDef / AsyncFunctionDef / ClassDef nodes, scores each candidate,
-    then selects up to max_per_layer per layer until max_total reached.
+    then selects across three passes:
+
+    1. Pass 1 — top by score, capped at `max_per_layer` for diversity in
+       multi-layer repos (frontend/backend/db split).
+    2. Pass 2a — fill remaining slots preferring candidates from
+       subdirectories not yet represented. Surfaces e.g. fastapi/security/
+       even when fastapi/ root has higher absolute scores.
+    3. Pass 2b — fill any leftover slots by raw score.
+
+    When `repo_root` is provided, content is re-read fresh from disk so the
+    AST sees the full file body even for sources the fetcher truncated for
+    LLM prompt budgeting. Required for capturing senior patterns from large
+    files (FastAPI's `params.py`, `dependencies/utils.py`, `routing.py`).
 
     TypeScript / JSX files are skipped — AST-based selection only works for Python.
     Files with a truncation marker or syntax errors are silently skipped.
@@ -357,6 +415,9 @@ def select_exemplars(
 
     Returns an empty list when no candidates meet the quality threshold.
     """
+    if repo_root is not None:
+        files = [_refresh_content_from_disk(sf, repo_root) for sf in files]
+
     all_candidates: list[_Candidate] = []
     for sf in files:
         all_candidates.extend(_extract_candidates(sf))
@@ -367,6 +428,7 @@ def select_exemplars(
     layer_counts: dict[str, int] = {}
     selected: list[Exemplar] = []
     picked: set[tuple[str, int, str]] = set()
+    seen_buckets: set[tuple[str, str]] = set()
 
     def _make_exemplar(cand: _Candidate) -> Exemplar:
         return Exemplar(
@@ -379,20 +441,46 @@ def select_exemplars(
             why_chosen=cand.why_chosen,
         )
 
-    # Pass 1: enforce max_per_layer for diversity in multi-layer repos
+    # Phase 1 — diversity guarantee: take the top *public* scorer from each
+    # (layer, subdir) bucket. A single-layer repo with one dominant package
+    # otherwise crowds out subpackages whose patterns differ (e.g.
+    # fastapi/security/ holds the auth-scheme inheritance pattern that
+    # fastapi/ root files don't carry). Stops at max_per_layer per layer.
+    # Private names are deferred to phase 2/3 — a `_helper` shouldn't get
+    # the slot reserved for "what this subpackage exports."
     for cand in all_candidates:
         if len(selected) >= max_total:
             break
+        if cand.name.startswith("_"):
+            continue
+        bucket = (cand.layer, _file_subdir(cand.file_path))
+        if bucket in seen_buckets:
+            continue
         if layer_counts.get(cand.layer, 0) >= max_per_layer:
             continue
+        seen_buckets.add(bucket)
         layer_counts[cand.layer] = layer_counts.get(cand.layer, 0) + 1
         key = (cand.file_path, cand.start_line, cand.name)
         picked.add(key)
         selected.append(_make_exemplar(cand))
 
-    # Pass 2: single-layer libraries (e.g. a pure-Python framework) hit the
-    # per-layer cap before max_total is filled. Fill remaining slots from any
-    # layer so we don't ship a half-empty exemplars.md.
+    # Phase 2 — fill by score, still respecting max_per_layer.
+    if len(selected) < max_total:
+        for cand in all_candidates:
+            if len(selected) >= max_total:
+                break
+            key = (cand.file_path, cand.start_line, cand.name)
+            if key in picked:
+                continue
+            if layer_counts.get(cand.layer, 0) >= max_per_layer:
+                continue
+            layer_counts[cand.layer] = layer_counts.get(cand.layer, 0) + 1
+            picked.add(key)
+            selected.append(_make_exemplar(cand))
+
+    # Phase 3 — relax the layer cap if we still have room. Single-layer
+    # libraries (pure-Python frameworks) hit the per-layer cap before
+    # max_total fills; without this they'd ship a half-empty exemplars.md.
     if len(selected) < max_total:
         for cand in all_candidates:
             if len(selected) >= max_total:

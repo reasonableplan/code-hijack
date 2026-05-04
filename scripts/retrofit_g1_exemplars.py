@@ -34,7 +34,7 @@ def main() -> int:
     print(f"  → {len(files)} files (root: {repo_root.as_posix()})")
 
     print("[2/3] selecting exemplars (AST-based, no LLM) ...")
-    exemplars = select_exemplars(files)
+    exemplars = select_exemplars(files, repo_root=repo_root)
     print(f"  → {len(exemplars)} exemplars selected")
     for ex in exemplars:
         print(f"    - {ex.file_path}:{ex.line_range[0]}-{ex.line_range[1]} "

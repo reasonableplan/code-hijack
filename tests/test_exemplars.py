@@ -288,6 +288,87 @@ class TestSelectExemplars:
         result = select_exemplars(files, max_total=3)
         assert len(result) == 3
 
+    def test_subdir_diversity_surfaces_new_subpackage(self) -> None:
+        # 5 candidates in pkg/ root, 1 in pkg/security/ — without subdir
+        # diversity the subpackage gets crowded out by the better-scoring
+        # root candidates. With diversity (pass 2a) it must surface.
+        files = [
+            _sf(GOOD_FUNCTION, path=f"pkg/a{i}.py", layer="backend")
+            for i in range(5)
+        ]
+        files.append(
+            _sf(GOOD_FUNCTION, path="pkg/security/scheme.py", layer="backend")
+        )
+        result = select_exemplars(files, max_total=3, max_per_layer=4)
+        subdirs = {e.file_path.rsplit("/", 1)[0] for e in result}
+        assert "pkg/security" in subdirs
+
+    def test_subdir_diversity_does_not_block_when_only_one_dir(self) -> None:
+        # All candidates live in the same subdirectory — pass 2a finds no
+        # new dirs to spread to, so pass 2b must fill the rest.
+        files = [
+            _sf(GOOD_FUNCTION, path=f"pkg/a{i}.py", layer="backend")
+            for i in range(5)
+        ]
+        result = select_exemplars(files, max_total=4, max_per_layer=4)
+        assert len(result) == 4
+
+    def test_phase1_skips_private_names(self) -> None:
+        # A new subdirectory whose top scorer is private (e.g. _helper) must
+        # not steal phase-1's diversity slot — the slot is for "what this
+        # subpackage exports." Private candidates can still surface in
+        # phase 2/3 if they outscore public candidates.
+        public_class = TYPED_CLASS  # public name (UserService)
+        # GOOD_FUNCTION's func is `process_user` (public). Make a private
+        # variant by tweaking the name in a separate fixture.
+        private_func = GOOD_FUNCTION.replace("process_user", "_process_user")
+        files = [
+            _sf(public_class, path="pkg/main.py"),
+            _sf(private_func, path="pkg/internal/helpers.py"),
+        ]
+        result = select_exemplars(files, max_total=1, max_per_layer=4)
+        names = {e.name for e in result}
+        # Phase 1 should pick the public class, not the private function,
+        # even though `pkg/internal` is a "new" subdirectory.
+        assert "UserService" in names
+        assert "_process_user" not in names
+
+    def test_init_without_return_annotation_not_penalised(self) -> None:
+        # Senior `__init__` methods routinely omit the trivial `-> None`.
+        # The class score must not be dragged down for that.
+        init_no_return = """\
+class TypedInit:
+    \"\"\"A class with a fully typed __init__ but no `-> None` on it.\"\"\"
+    def __init__(self, name: str, count: int = 0):
+        self.name = name
+        self.count = count
+"""
+        files = [_sf(init_no_return, path="pkg/typed.py")]
+        result = select_exemplars(files)
+        assert len(result) == 1
+        assert result[0].name == "TypedInit"
+
+    def test_repo_root_recovers_truncated_file(self, tmp_path: Path) -> None:
+        # The fetcher prepends "# [TRUNCATED:" to large files. Without
+        # repo_root, exemplars can't recover the body and skips the file.
+        # With repo_root, content is re-read from disk.
+        target_file = tmp_path / "big.py"
+        target_file.write_text(GOOD_FUNCTION, encoding="utf-8")
+
+        truncated = (
+            "# [TRUNCATED: 5000 lines → key signatures only]\n"
+            "def noop(): pass\n"
+        )
+        sf = _sf(truncated, path="big.py")
+
+        # Without repo_root: skipped because content starts with marker.
+        assert select_exemplars([sf]) == []
+
+        # With repo_root: disk read recovers the real body.
+        result = select_exemplars([sf], repo_root=tmp_path)
+        assert len(result) == 1
+        assert result[0].name == "process_user"
+
     def test_all_below_threshold_returns_empty(self) -> None:
         # Only tiny stubs → all below _MIN_SCORE
         files = [

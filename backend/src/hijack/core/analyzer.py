@@ -341,8 +341,10 @@ async def run_full_analysis(
     valid_doc_paths: set[str] = {d.path for d in preprocess.repo_docs}
 
     # Select exemplars before the LLM loop — we still have source content here.
+    # Pass repo_root so exemplars.py can re-read large senior files from disk
+    # (the fetcher truncates past _MAX_LINES, which would hide e.g. params.py).
     from hijack.core.exemplars import select_exemplars
-    exemplars = select_exemplars(files)
+    exemplars = select_exemplars(files, repo_root=repo_root)
 
     category_results: list[CategoryResult] = []
     for category in categories:
