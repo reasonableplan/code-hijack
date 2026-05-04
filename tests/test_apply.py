@@ -10,6 +10,7 @@ from hijack.core.apply import (
     classify_rule_against_stack,
     render_applied_md,
 )
+from hijack.core.exemplars import Exemplar
 from hijack.core.models import AnalysisRule, CategoryResult, SessionResult
 from hijack.core.target_stack import TargetStack
 
@@ -462,3 +463,73 @@ class TestRenderAppliedMd:
         assert "Code Style" in md
         assert "Universal Rules" not in md
         assert "Domain Rules" not in md
+
+
+# ---------------------------------------------------------------------------
+# Exemplars pass-through in apply (Phase G1)
+# ---------------------------------------------------------------------------
+
+def _exemplar_for_apply(name: str = "process") -> Exemplar:
+    return Exemplar(
+        file_path="backend/service.py",
+        line_range=(1, 12),
+        code="def process(x: int) -> str:\n    return str(x)",
+        layer="backend",
+        role="service",
+        name=name,
+        why_chosen="fully type-annotated",
+    )
+
+
+class TestExemplarsInApply:
+    def test_apply_session_carries_exemplars_to_result(self, tmp_path: Path) -> None:
+        ex = _exemplar_for_apply("get_user")
+        session = _session([])
+        session.exemplars = [ex]
+        result = apply_session_to_target(session, tmp_path)
+        assert len(result.exemplars) == 1
+        assert result.exemplars[0].name == "get_user"
+
+    def test_apply_session_empty_exemplars_passthrough(self, tmp_path: Path) -> None:
+        session = _session([])
+        session.exemplars = []
+        result = apply_session_to_target(session, tmp_path)
+        assert result.exemplars == []
+
+    def test_render_applied_md_includes_exemplar_section(self, tmp_path: Path) -> None:
+        stack = TargetStack(repo_root=tmp_path)
+        result = ApplyResult(
+            target_stack=stack,
+            by_verdict={"as_is": [], "adapted": [], "domain_adapt": [], "reference_only": []},
+            total_input_rules=0,
+            summary="Applied 0 rules.",
+            exemplars=[_exemplar_for_apply("some_func")],
+        )
+        md = render_applied_md(result, source_target="senior-repo")
+        assert "Senior Exemplars" in md
+        assert "some_func" in md
+
+    def test_render_applied_md_no_exemplar_section_when_empty(self, tmp_path: Path) -> None:
+        stack = TargetStack(repo_root=tmp_path)
+        result = ApplyResult(
+            target_stack=stack,
+            by_verdict={"as_is": [], "adapted": [], "domain_adapt": [], "reference_only": []},
+            total_input_rules=0,
+            summary="Applied 0 rules.",
+            exemplars=[],
+        )
+        md = render_applied_md(result, source_target="senior-repo")
+        assert "Senior Exemplars" not in md
+
+    def test_render_applied_md_exemplar_code_in_fence(self, tmp_path: Path) -> None:
+        stack = TargetStack(repo_root=tmp_path)
+        result = ApplyResult(
+            target_stack=stack,
+            by_verdict={"as_is": [], "adapted": [], "domain_adapt": [], "reference_only": []},
+            total_input_rules=0,
+            summary="Applied 0 rules.",
+            exemplars=[_exemplar_for_apply("my_handler")],
+        )
+        md = render_applied_md(result, source_target="senior-repo")
+        assert "```python" in md
+        assert "my_handler" in md

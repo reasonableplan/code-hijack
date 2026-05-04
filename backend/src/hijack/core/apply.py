@@ -7,11 +7,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from hijack.core.generator import _render_rule
 from hijack.core.models import AnalysisRule, SessionResult
 from hijack.core.scope_critic import extract_top_level_packages
 from hijack.core.target_stack import TargetStack, detect_target_stack
+
+if TYPE_CHECKING:
+    from hijack.core.exemplars import Exemplar
 
 # ---------------------------------------------------------------------------
 # Framework relationship maps
@@ -162,6 +166,9 @@ class ApplyResult:
     by_verdict: dict[str, list[AppliedRule]] = field(default_factory=dict)
     total_input_rules: int = 0
     summary: str = ""
+    # Exemplars from the senior session, passed through for downstream rendering.
+    # Empty when the source session had no exemplars (pre-G1 or non-Python repos).
+    exemplars: list[Exemplar] = field(default_factory=list)
 
 
 def apply_session_to_target(
@@ -215,6 +222,7 @@ def apply_session_to_target(
         by_verdict=by_verdict,
         total_input_rules=total,
         summary=summary,
+        exemplars=list(session.exemplars),
     )
 
 
@@ -266,6 +274,7 @@ def render_applied_md(result: ApplyResult, *, source_target: str) -> str:
       ## Adapted Rules                            — adapted
       ## Domain Rules                             — domain_adapt
       ## For Reference (incompatible)             — reference_only
+      ## Senior Exemplars (rhythm reference)      — when exemplars are non-empty
     """
     stack = result.target_stack
     dep_str = ", ".join(sorted(stack.all_deps)) if stack.all_deps else "none detected"
@@ -320,5 +329,34 @@ def render_applied_md(result: ApplyResult, *, source_target: str) -> str:
         lines += ["## For Reference (incompatible — manual translation needed)", ""]
         for applied in reference:
             lines += _render_applied_rule(applied)
+
+    if result.exemplars:
+        from hijack.core.exemplars import render_exemplars_md
+        exemplar_md = render_exemplars_md(result.exemplars, source_target=source_target)
+        if exemplar_md:
+            lines += [
+                "",
+                "## Senior Exemplars (rhythm reference)",
+                "",
+                "> Match the structure, annotation density, and docstring style of these"
+                " representative functions from the senior repo.",
+                "",
+            ]
+            # Append the rendered exemplars block (skip the top-level H1 header
+            # since we already placed a section header above).
+            exemplar_lines = exemplar_md.splitlines()
+            # Drop the first H1 heading block (lines up to and including the blank
+            # line after the blockquote preamble) so rendering nests cleanly.
+            in_preamble = True
+            for line in exemplar_lines:
+                if in_preamble:
+                    if line.startswith("#"):
+                        continue
+                    if line.startswith(">"):
+                        continue
+                    if line == "":
+                        in_preamble = False
+                        continue
+                lines.append(line)
 
     return "\n".join(lines)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from hijack.core.exemplars import Exemplar
 from hijack.core.generator import (
     render_category_md,
     render_claude_md_entrypoint,
@@ -499,3 +500,66 @@ class TestSystemPromptInlineExamples:
         s.categories = [cat]
         md = render_system_prompt_md(s)
         assert "- [frontend] Use keyword-only params" in md
+
+
+# ---------------------------------------------------------------------------
+# Exemplars wiring in generator (Phase G1)
+# ---------------------------------------------------------------------------
+
+def _exemplar_fixture(name: str = "process_user", layer: str = "backend") -> Exemplar:
+    return Exemplar(
+        file_path="backend/service.py",
+        line_range=(1, 12),
+        code="def process_user(user_id: int) -> dict:\n    ...",
+        layer=layer,
+        role="service",
+        name=name,
+        why_chosen="fully type-annotated, sweet-spot length",
+    )
+
+
+class TestExemplarsInGenerator:
+    def test_write_output_creates_exemplars_md_when_present(self, tmp_path: Path) -> None:
+        s = _session()
+        s.exemplars = [_exemplar_fixture()]
+        write_output(s, tmp_path)
+        assert (tmp_path / "integrated" / "exemplars.md").exists()
+
+    def test_write_output_no_exemplars_md_when_empty(self, tmp_path: Path) -> None:
+        s = _session()
+        s.exemplars = []
+        write_output(s, tmp_path)
+        assert not (tmp_path / "integrated" / "exemplars.md").exists()
+
+    def test_claude_md_pointer_present_when_exemplars(self) -> None:
+        s = _session()
+        s.exemplars = [_exemplar_fixture()]
+        md = render_claude_md_entrypoint(s)
+        assert "exemplars.md" in md
+
+    def test_claude_md_no_pointer_when_no_exemplars(self) -> None:
+        s = _session()
+        s.exemplars = []
+        md = render_claude_md_entrypoint(s)
+        assert "exemplars.md" not in md
+
+    def test_system_prompt_pointer_present_when_exemplars(self) -> None:
+        s = _session()
+        s.exemplars = [_exemplar_fixture()]
+        md = render_system_prompt_md(s)
+        assert "exemplars.md" in md
+
+    def test_system_prompt_no_pointer_when_no_exemplars(self) -> None:
+        s = _session()
+        s.exemplars = []
+        md = render_system_prompt_md(s)
+        assert "exemplars.md" not in md
+
+    def test_exemplars_md_content_correct(self, tmp_path: Path) -> None:
+        s = _session()
+        s.exemplars = [_exemplar_fixture(name="my_func")]
+        write_output(s, tmp_path)
+        content = (tmp_path / "integrated" / "exemplars.md").read_text(encoding="utf-8")
+        assert "my_func" in content
+        assert "backend/service.py" in content
+        assert "```python" in content

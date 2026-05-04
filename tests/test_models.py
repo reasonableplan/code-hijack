@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hijack.core.exemplars import Exemplar
 from hijack.core.models import AnalysisRule, CategoryResult, Evidence, SessionResult
 
 
@@ -219,3 +220,70 @@ def test_rule_evidence_backward_compat_when_key_missing() -> None:
     payload.pop("evidence", None)
     restored = AnalysisRule.from_json(payload)
     assert restored.evidence == []
+
+
+# ---------------------------------------------------------------------------
+# Exemplar dataclass + SessionResult.exemplars (Phase G1)
+# ---------------------------------------------------------------------------
+
+def _exemplar(**kwargs) -> Exemplar:
+    defaults = dict(
+        file_path="backend/service.py",
+        line_range=(5, 20),
+        code="def process(x: int) -> str:\n    return str(x)",
+        layer="backend",
+        role="service",
+        name="process",
+        why_chosen="fully type-annotated, sweet-spot length (16 lines)",
+    )
+    defaults.update(kwargs)
+    return Exemplar(**defaults)
+
+
+def test_exemplar_roundtrip() -> None:
+    ex = _exemplar()
+    restored = Exemplar.from_json(ex.to_json())
+    assert restored == ex
+
+
+def test_exemplar_line_range_stored_as_tuple() -> None:
+    ex = _exemplar(line_range=(3, 17))
+    assert ex.line_range == (3, 17)
+    # JSON stores it as list, from_json restores it as tuple
+    data = ex.to_json()
+    assert data["line_range"] == [3, 17]
+    restored = Exemplar.from_json(data)
+    assert restored.line_range == (3, 17)
+
+
+def test_session_result_exemplars_default_empty() -> None:
+    session = make_session()
+    assert session.exemplars == []
+
+
+def test_session_result_exemplars_roundtrip() -> None:
+    ex = _exemplar()
+    session = make_session(exemplars=[ex])
+    restored = SessionResult.from_json(session.to_json())
+    assert len(restored.exemplars) == 1
+    assert restored.exemplars[0] == ex
+
+
+def test_session_result_exemplars_backward_compat_when_key_missing() -> None:
+    # Pre-G1 session.json files don't have an exemplars key.
+    payload = make_session().to_json()
+    payload.pop("exemplars", None)
+    restored = SessionResult.from_json(payload)
+    assert restored.exemplars == []
+
+
+def test_session_result_exemplars_multiple_roundtrip() -> None:
+    exs = [
+        _exemplar(name="func_a", layer="backend"),
+        _exemplar(name="func_b", layer="shared", file_path="shared/util.py"),
+    ]
+    session = make_session(exemplars=exs)
+    restored = SessionResult.from_json(session.to_json())
+    assert len(restored.exemplars) == 2
+    assert restored.exemplars[0].name == "func_a"
+    assert restored.exemplars[1].layer == "shared"

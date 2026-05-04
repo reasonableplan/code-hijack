@@ -220,6 +220,12 @@ def render_claude_md_entrypoint(result: SessionResult) -> str:
     for rule in must_rules:
         lines.append(f"- **[{rule.layer}/{rule.priority}]**{_scope_tag(rule)} {rule.rule}")
 
+    if result.exemplars:
+        lines += [
+            "",
+            "See `exemplars.md` for representative senior code to match.",
+        ]
+
     return "\n".join(lines)
 
 
@@ -259,6 +265,12 @@ def render_system_prompt_md(result: SessionResult) -> str:
             pattern = ap.get("pattern", "")
             if pattern:
                 lines.append(f"- {pattern}")
+
+    if result.exemplars:
+        lines += [
+            "",
+            "Match the rhythm of `exemplars.md` (representative senior functions).",
+        ]
 
     return "\n".join(lines)
 
@@ -374,6 +386,12 @@ def _write_integrated_files(result: SessionResult, integrated_dir: Path) -> None
     (integrated_dir / "system-prompt.md").write_text(
         render_system_prompt_md(result), encoding="utf-8"
     )
+
+    if result.exemplars:
+        from hijack.core.exemplars import render_exemplars_md
+        md = render_exemplars_md(result.exemplars, source_target=result.target)
+        if md:
+            (integrated_dir / "exemplars.md").write_text(md, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

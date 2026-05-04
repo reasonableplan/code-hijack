@@ -177,6 +177,11 @@ class SessionResult:
     # historic_shas but for `kind=doc` Evidence entries: a doc citation whose
     # ref isn't in this list was hallucinated.
     repo_doc_paths: list[str] = field(default_factory=list)
+    # Representative functions/classes selected from the senior repo source.
+    # Populated by select_exemplars() in run_full_analysis() (Phase G1).
+    # Pre-G1 session.json files omit this key — from_json defaults to [].
+    # list[Exemplar] — typed as Any to avoid circular import with exemplars module.
+    exemplars: list[Any] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -191,10 +196,12 @@ class SessionResult:
             "files_by_layer": self.files_by_layer,
             "historic_shas": self.historic_shas,
             "repo_doc_paths": self.repo_doc_paths,
+            "exemplars": [e.to_json() for e in self.exemplars],
         }
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> SessionResult:
+        from hijack.core.exemplars import Exemplar  # local import to avoid circular
         return cls(
             session_id=data["session_id"],
             target=data["target"],
@@ -207,4 +214,5 @@ class SessionResult:
             files_by_layer=data.get("files_by_layer", {}),
             historic_shas=data.get("historic_shas", []),
             repo_doc_paths=data.get("repo_doc_paths", []),
+            exemplars=[Exemplar.from_json(e) for e in data.get("exemplars", [])],
         )

@@ -340,6 +340,10 @@ async def run_full_analysis(
                     sha_to_date[c.sha] = c.date
     valid_doc_paths: set[str] = {d.path for d in preprocess.repo_docs}
 
+    # Select exemplars before the LLM loop — we still have source content here.
+    from hijack.core.exemplars import select_exemplars
+    exemplars = select_exemplars(files)
+
     category_results: list[CategoryResult] = []
     for category in categories:
         result = await _analyze_category(
@@ -369,6 +373,7 @@ async def run_full_analysis(
         files_by_layer=files_by_layer,
         historic_shas=sorted(historic_shas),
         repo_doc_paths=sorted(valid_doc_paths),
+        exemplars=exemplars,
     )
 
     if critic and any(c.rules for c in category_results):
