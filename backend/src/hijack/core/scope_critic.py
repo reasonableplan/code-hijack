@@ -58,11 +58,13 @@ _IMPORT_RE: re.Pattern[str] = re.compile(
 # 내부 헬퍼
 # ---------------------------------------------------------------------------
 
-def _extract_top_level_packages(code: str) -> frozenset[str]:
+def extract_top_level_packages(code: str) -> frozenset[str]:
     """good_example 에서 모든 import 의 최상위 패키지를 추출한다.
 
     `from fastapi.routing import APIRouter` → `fastapi`
     `import os, sys`                        → `os`, `sys`
+
+    Public API — used by scope_critic (mechanical_scope) and apply (classify_rule).
     """
     pkgs: set[str] = set()
     for m in _IMPORT_RE.finditer(code):
@@ -103,7 +105,7 @@ def mechanical_scope(rule: AnalysisRule) -> str | None:
     if not example:
         return None
 
-    packages = _extract_top_level_packages(example)
+    packages = extract_top_level_packages(example)
 
     # 1. 프레임워크 import 가 있으면 확정
     if packages & _FRAMEWORK_PACKAGES:

@@ -10,6 +10,7 @@ import click
 
 from hijack import __version__
 from hijack.core.analyzer import run_full_analysis
+from hijack.core.apply import apply_session_to_target, render_applied_md
 from hijack.core.fetcher import fetch_source
 from hijack.core.generator import write_output
 from hijack.core.harness_export import export_session
@@ -208,6 +209,81 @@ def harness_export_cmd(session: str, output_dir: str) -> None:
     click.echo(f"  anti-patterns: {summary.anti_pattern_count}")
     click.echo("")
     click.echo("다음 단계: 출력 파일을 검토 후 HarnessAI 프로젝트의 docs/ 로 복사하세요.")
+
+
+@cli.command("apply")
+@click.argument("session")
+@click.argument("target_repo", type=click.Path(exists=True, file_okay=False))
+@click.option("--output", "-o", default=None, metavar="FILE",
+              help="출력 경로 (기본: <target_repo>/CLAUDE.md)")
+@click.option("--strict", is_flag=True,
+              help="reference_only 규칙을 결과에서 제외")
+@click.option("--quiet", "-q", is_flag=True, help="진행 메시지 억제")
+def apply_cmd(
+    session: str,
+    target_repo: str,
+    output: str | None,
+    strict: bool,
+    quiet: bool,
+) -> None:
+    """시니어 세션의 규칙을 타겟 레포 스택에 맞게 조정해 CLAUDE.md를 생성한다.
+
+    SESSION: 이전 `analyze` 실행의 session.json 또는 세션 디렉토리.
+    TARGET_REPO: 규칙을 적용할 로컬 프로젝트 경로.
+    """
+    session_result = _load_session_json(session)
+    target_path = Path(target_repo)
+    out_path = Path(output) if output else target_path / "CLAUDE.md"
+
+    if out_path.exists() and not quiet:
+        prompt = f"\n기존 파일({out_path.as_posix()})을 덮어쓸까요?"
+        if not click.confirm(prompt, default=True):
+            click.echo("취소되었습니다.")
+            return
+
+    result = apply_session_to_target(session_result, target_path, strict=strict)
+    md = render_applied_md(result, source_target=session_result.target)
+    out_path.write_text(md, encoding="utf-8")
+
+    if not quiet:
+        by_v = result.by_verdict
+        as_is = by_v.get("as_is", [])
+        universal = [a for a in as_is if (a.rule.scope or "cross_project") == "cross_project"]
+        stack_specific = [a for a in as_is if (a.rule.scope or "cross_project") != "cross_project"]
+        adapted = by_v.get("adapted", [])
+        domain = by_v.get("domain_adapt", [])
+        reference = by_v.get("reference_only", [])
+
+        stack = result.target_stack
+        stack_pkgs = ", ".join(sorted(stack.all_deps)) if stack.all_deps else "none"
+
+        adapted_note = ""
+        if adapted:
+            senior_pkgs = sorted({p for a in adapted for p in a.matched_packages})
+            target_pkgs = sorted(stack.all_deps)
+            if senior_pkgs and target_pkgs:
+                adapted_note = (
+                    f"senior used {', '.join(senior_pkgs)}; "
+                    f"you use {', '.join(target_pkgs)} — translation noted"
+                )
+            else:
+                adapted_note = "translation noted"
+
+        click.echo(
+            f"\n[apply] Applied {result.total_input_rules} rules to {target_repo}:"
+        )
+        click.echo(f"  - {len(universal)} universal (apply directly)")
+        click.echo(
+            f"  - {len(stack_specific)} stack-specific"
+            f" (your project uses {stack_pkgs})"
+        )
+        if adapted_note:
+            click.echo(f"  - {len(adapted)} adapted ({adapted_note})")
+        else:
+            click.echo(f"  - {len(adapted)} adapted")
+        click.echo(f"  - {len(domain)} domain (review literal values)")
+        click.echo(f"  - {len(reference)} reference-only (incompatible)")
+        click.echo(f"Output: {out_path.as_posix()}")
 
 
 # ---------------------------------------------------------------------------

@@ -492,3 +492,167 @@ class TestDiffCommand:
         runner = CliRunner()
         result = runner.invoke(cli, ["diff", str(existing), "/does/not/exist.json"])
         assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# apply subcommand
+# ---------------------------------------------------------------------------
+
+class TestApplyCommand:
+    def _session_json(self, path: Path, rules_scopes: list[str] | None = None) -> Path:
+        """Write a session.json with rules of specified scopes."""
+        from hijack.core.models import AnalysisRule, CategoryResult
+
+        rules_scopes = rules_scopes or ["cross_project"]
+        rules = [
+            AnalysisRule(
+                rule=f"Rule {i}",
+                priority="MUST",
+                confidence="high",
+                ref_files=[],
+                good_example=(
+                    "import os\nx = 1"
+                    if sc == "cross_project"
+                    else "from fastapi import FastAPI"
+                ),
+                bad_example="",
+                reason="test",
+                layer="backend",
+                scope=sc,
+            )
+            for i, sc in enumerate(rules_scopes)
+        ]
+        cat = CategoryResult(
+            category="architecture",
+            design_intent="clean",
+            rules=rules,
+            anti_patterns=[], file_type_guides={}, checklist=[],
+            raw_llm_output="",
+        )
+        session = SessionResult(
+            session_id="2026-05-01_senior",
+            target="senior-repo",
+            model="claude-test",
+            timestamp="2026-05-01T00:00:00",
+            selected_files=[],
+            categories=[cat],
+            analysis_duration_seconds=1.0,
+            project_structure="",
+        )
+        path.mkdir(parents=True, exist_ok=True)
+        json_path = path / "session.json"
+        json_path.write_text(json.dumps(session.to_json()), encoding="utf-8")
+        return json_path
+
+    def test_apply_writes_claude_md_to_target(self, tmp_path: Path) -> None:
+        session_json = self._session_json(tmp_path / "session", ["cross_project"])
+        target = tmp_path / "target_repo"
+        target.mkdir()
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["apply", str(session_json), str(target), "--quiet"]
+        )
+        assert result.exit_code == 0, result.output
+        assert (target / "CLAUDE.md").exists()
+
+    def test_apply_default_output_is_target_claude_md(self, tmp_path: Path) -> None:
+        session_json = self._session_json(tmp_path / "session")
+        target = tmp_path / "target"
+        target.mkdir()
+        runner = CliRunner()
+        runner.invoke(cli, ["apply", str(session_json), str(target), "--quiet"])
+        assert (target / "CLAUDE.md").exists()
+
+    def test_apply_custom_output_path(self, tmp_path: Path) -> None:
+        session_json = self._session_json(tmp_path / "session")
+        target = tmp_path / "target"
+        target.mkdir()
+        out_file = tmp_path / "my_claude.md"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["apply", str(session_json), str(target), "--output", str(out_file), "--quiet"]
+        )
+        assert result.exit_code == 0
+        assert out_file.exists()
+
+    def test_apply_strict_produces_smaller_output(self, tmp_path: Path) -> None:
+        # Both cross_project and framework_internal rules
+        session_json = self._session_json(
+            tmp_path / "session",
+            ["cross_project", "framework_internal"],
+        )
+        target = tmp_path / "target"
+        target.mkdir()
+        runner = CliRunner()
+
+        # strict=False — keeps reference rules
+        out_loose = tmp_path / "loose.md"
+        runner.invoke(
+            cli,
+            ["apply", str(session_json), str(target), "--output", str(out_loose), "--quiet"],
+        )
+
+        # strict=True — drops reference rules
+        out_strict = tmp_path / "strict.md"
+        runner.invoke(
+            cli,
+            ["apply", str(session_json), str(target), "--output", str(out_strict),
+             "--quiet", "--strict"],
+        )
+
+        # strict output should be strictly smaller or same (reference section removed)
+        loose_content = out_loose.read_text(encoding="utf-8")
+        strict_content = out_strict.read_text(encoding="utf-8")
+        assert len(strict_content) <= len(loose_content)
+        assert "For Reference" not in strict_content
+
+    def test_apply_shows_summary_output(self, tmp_path: Path) -> None:
+        session_json = self._session_json(tmp_path / "session", ["cross_project"])
+        target = tmp_path / "target"
+        target.mkdir()
+        runner = CliRunner()
+        result = runner.invoke(cli, ["apply", str(session_json), str(target)])
+        assert result.exit_code == 0
+        assert "[apply]" in result.output
+        assert "Output:" in result.output
+
+    def test_apply_existing_file_prompts_confirm(self, tmp_path: Path) -> None:
+        session_json = self._session_json(tmp_path / "session")
+        target = tmp_path / "target"
+        target.mkdir()
+        # Pre-create CLAUDE.md
+        (target / "CLAUDE.md").write_text("existing content", encoding="utf-8")
+        runner = CliRunner()
+        # Provide "y" to confirm overwrite
+        result = runner.invoke(
+            cli, ["apply", str(session_json), str(target)], input="y\n"
+        )
+        # The prompt should have appeared
+        assert result.exit_code == 0
+        # File was overwritten
+        content = (target / "CLAUDE.md").read_text(encoding="utf-8")
+        assert content != "existing content"
+
+    def test_apply_quiet_overwrites_without_prompt(self, tmp_path: Path) -> None:
+        session_json = self._session_json(tmp_path / "session")
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "CLAUDE.md").write_text("old", encoding="utf-8")
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["apply", str(session_json), str(target), "--quiet"]
+        )
+        assert result.exit_code == 0
+        content = (target / "CLAUDE.md").read_text(encoding="utf-8")
+        assert content != "old"
+
+    def test_apply_content_has_universal_rules(self, tmp_path: Path) -> None:
+        session_json = self._session_json(tmp_path / "session", ["cross_project"])
+        target = tmp_path / "target"
+        target.mkdir()
+        runner = CliRunner()
+        runner.invoke(cli, ["apply", str(session_json), str(target), "--quiet"])
+        content = (target / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "Universal Rules" in content
+        assert "senior-repo" in content
