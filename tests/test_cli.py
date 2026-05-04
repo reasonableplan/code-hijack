@@ -656,3 +656,94 @@ class TestApplyCommand:
         content = (target / "CLAUDE.md").read_text(encoding="utf-8")
         assert "Universal Rules" in content
         assert "senior-repo" in content
+
+    def test_apply_stack_override_no_pyproject(self, tmp_path: Path) -> None:
+        # target has no pyproject.toml, but --stack provides fastapi explicitly.
+        # A framework_internal rule referencing fastapi should land in as_is.
+        session_json = self._session_json(tmp_path / "session", ["framework_internal"])
+        target = tmp_path / "target"
+        target.mkdir()
+        # No pyproject.toml in target
+        out_file = tmp_path / "out.md"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "apply", str(session_json), str(target),
+                "--stack", "fastapi,pydantic",
+                "--output", str(out_file),
+                "--quiet",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        content = out_file.read_text(encoding="utf-8")
+        # fastapi rule should appear in Stack-Specific section (as_is), not For Reference
+        assert "Stack-Specific Rules" in content
+        assert "For Reference" not in content
+
+    def test_apply_stack_normalizes_and_dedupes(self, tmp_path: Path) -> None:
+        # --stack "fastapi, Pydantic, FastAPI" should dedupe and lowercase.
+        session_json = self._session_json(tmp_path / "session", ["cross_project"])
+        target = tmp_path / "target"
+        target.mkdir()
+        out_file = tmp_path / "out.md"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "apply", str(session_json), str(target),
+                "--stack", "fastapi, Pydantic, FastAPI",
+                "--output", str(out_file),
+                "--quiet",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        # Stack should contain exactly fastapi and pydantic (deduped, lowercased)
+        content = out_file.read_text(encoding="utf-8")
+        # Header line shows "Target stack: fastapi, pydantic" — both present, no duplicate
+        assert "fastapi" in content
+        assert "pydantic" in content
+
+    def test_apply_empty_target_no_stack_warns(self, tmp_path: Path) -> None:
+        # No pyproject.toml + no --stack → warning emitted (stderr, mixed into output
+        # by the default CliRunner which merges streams).
+        session_json = self._session_json(tmp_path / "session", ["cross_project"])
+        target = tmp_path / "target"
+        target.mkdir()
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["apply", str(session_json), str(target)],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        assert "Warning" in result.output
+        assert "no dependencies detected" in result.output
+
+    def test_apply_stack_provided_no_warning(self, tmp_path: Path) -> None:
+        # --stack is explicitly given → no warning even if target is empty.
+        session_json = self._session_json(tmp_path / "session", ["cross_project"])
+        target = tmp_path / "target"
+        target.mkdir()
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["apply", str(session_json), str(target), "--stack", "fastapi"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        assert "Warning" not in result.output
+
+    def test_apply_quiet_no_warning(self, tmp_path: Path) -> None:
+        # --quiet suppresses the empty-stack warning too.
+        session_json = self._session_json(tmp_path / "session", ["cross_project"])
+        target = tmp_path / "target"
+        target.mkdir()
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["apply", str(session_json), str(target), "--quiet"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0
+        assert "Warning" not in result.output

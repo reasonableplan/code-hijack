@@ -5,6 +5,7 @@ from pathlib import Path
 from hijack.core.apply import (
     AppliedRule,
     ApplyResult,
+    _expand_target_deps,
     apply_session_to_target,
     classify_rule_against_stack,
     render_applied_md,
@@ -111,17 +112,29 @@ class TestClassifyRuleAgainstStack:
         assert applied.verdict == "as_is"
         assert "fastapi" in applied.matched_packages
 
-    def test_framework_internal_compatible_sibling_adapted(self) -> None:
+    def test_framework_internal_fastapi_rule_starlette_target_reference_only(self) -> None:
+        # FastAPI is built ON Starlette, not the other way around.
+        # A rule about FastAPI does not apply to a plain Starlette project.
         rule = _rule(
             scope="framework_internal",
             good_example="from fastapi import FastAPI",
         )
-        # target uses starlette (compatible with fastapi)
+        # target uses starlette only — fastapi features not available
         stack = _stack(python_deps=frozenset({"starlette"}))
         applied = classify_rule_against_stack(rule, stack)
-        assert applied.verdict == "adapted"
-        assert "fastapi" in applied.adaptation_note
-        assert "starlette" in applied.adaptation_note
+        assert applied.verdict == "reference_only"
+
+    def test_framework_internal_starlette_rule_fastapi_target_as_is(self) -> None:
+        # FastAPI is built on Starlette — the fastapi target's expanded deps
+        # include starlette, so a starlette rule applies as-is to a fastapi project.
+        rule = _rule(
+            scope="framework_internal",
+            good_example="from starlette.requests import Request",
+        )
+        stack = _stack(python_deps=frozenset({"fastapi"}))
+        applied = classify_rule_against_stack(rule, stack)
+        assert applied.verdict == "as_is"
+        assert "starlette" in applied.matched_packages
 
     def test_framework_internal_incompatible_stack_reference_only(self) -> None:
         rule = _rule(
@@ -173,6 +186,72 @@ class TestClassifyRuleAgainstStack:
         stack = _stack(js_deps=frozenset({"react"}))
         applied = classify_rule_against_stack(rule, stack)
         assert applied.verdict == "as_is"
+
+    def test_drf_rule_django_target_reference_only(self) -> None:
+        # DRF is built ON Django, not the other way.
+        # A rule about DRF does not apply to a plain Django project.
+        rule = _rule(
+            scope="framework_internal",
+            good_example="from rest_framework.views import APIView",
+        )
+        stack = _stack(python_deps=frozenset({"django"}))
+        applied = classify_rule_against_stack(rule, stack)
+        assert applied.verdict == "reference_only"
+
+    def test_django_rule_drf_target_as_is(self) -> None:
+        # DRF target's expanded deps include django, so a django rule applies as-is.
+        rule = _rule(
+            scope="framework_internal",
+            good_example="from django.db import models",
+        )
+        stack = _stack(python_deps=frozenset({"djangorestframework"}))
+        applied = classify_rule_against_stack(rule, stack)
+        assert applied.verdict == "as_is"
+        assert "django" in applied.matched_packages
+
+    def test_flask_rule_quart_target_adapted(self) -> None:
+        # flask ↔ quart are genuine siblings (sync vs async Flask API)
+        rule = _rule(
+            scope="framework_internal",
+            good_example="from flask import Flask",
+        )
+        stack = _stack(python_deps=frozenset({"quart"}))
+        applied = classify_rule_against_stack(rule, stack)
+        assert applied.verdict == "adapted"
+        assert "quart" in applied.adaptation_note
+
+    def test_quart_rule_flask_target_adapted(self) -> None:
+        # Sibling relationship is symmetric — quart rule adapts to flask too.
+        rule = _rule(
+            scope="framework_internal",
+            good_example="from quart import Quart",
+        )
+        stack = _stack(python_deps=frozenset({"flask"}))
+        applied = classify_rule_against_stack(rule, stack)
+        assert applied.verdict == "adapted"
+        assert "flask" in applied.adaptation_note
+
+
+# ---------------------------------------------------------------------------
+# _expand_target_deps
+# ---------------------------------------------------------------------------
+
+class TestExpandTargetDeps:
+    def test_fastapi_expands_to_include_starlette(self) -> None:
+        result = _expand_target_deps(frozenset({"fastapi"}))
+        assert result == frozenset({"fastapi", "starlette"})
+
+    def test_drf_expands_to_include_django(self) -> None:
+        result = _expand_target_deps(frozenset({"djangorestframework", "sqlalchemy"}))
+        assert result == frozenset({"djangorestframework", "django", "sqlalchemy"})
+
+    def test_plain_pkg_unchanged(self) -> None:
+        result = _expand_target_deps(frozenset({"flask", "sqlalchemy"}))
+        assert result == frozenset({"flask", "sqlalchemy"})
+
+    def test_empty_set_unchanged(self) -> None:
+        result = _expand_target_deps(frozenset())
+        assert result == frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +317,26 @@ class TestApplySessionToTarget:
         result = apply_session_to_target(_session(rules), tmp_path)
         # summary should have some numeric info
         assert any(c.isdigit() for c in result.summary)
+
+    def test_prebuilt_target_stack_overrides_detection(self, tmp_path: Path) -> None:
+        # tmp_path has no pyproject.toml, but we pass in a pre-built stack with fastapi
+        rules = [
+            _rule(
+                "R1",
+                scope="framework_internal",
+                good_example="from fastapi import FastAPI",
+            )
+        ]
+        prebuilt = TargetStack(
+            repo_root=tmp_path,
+            python_deps=frozenset({"fastapi"}),
+            js_deps=frozenset(),
+            detected_files=["<--stack override>"],
+        )
+        result = apply_session_to_target(_session(rules), tmp_path, target_stack=prebuilt)
+        # Rule should be as_is because we provided fastapi in the override stack
+        assert len(result.by_verdict["as_is"]) == 1
+        assert result.target_stack is prebuilt
 
 
 # ---------------------------------------------------------------------------

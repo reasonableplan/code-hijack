@@ -17,6 +17,7 @@ from hijack.core.harness_export import export_session
 from hijack.core.models import SessionResult
 from hijack.core.prompts import MVP_CATEGORIES
 from hijack.core.session import SessionDiff
+from hijack.core.target_stack import TargetStack, normalize_pkg_name
 from hijack.errors import LLM_001, OUTPUT_001, LLMError, OutputError
 from hijack.llm.api import DEFAULT_MODEL, ClaudeAPIClient
 from hijack.llm.base import BaseLLM
@@ -218,12 +219,21 @@ def harness_export_cmd(session: str, output_dir: str) -> None:
               help="출력 경로 (기본: <target_repo>/CLAUDE.md)")
 @click.option("--strict", is_flag=True,
               help="reference_only 규칙을 결과에서 제외")
+@click.option(
+    "--stack",
+    default=None,
+    metavar="PKGS",
+    help="Override target stack detection. Comma-separated package names "
+         "(e.g., 'fastapi,pydantic,sqlalchemy'). Skips pyproject.toml/package.json "
+         "parsing entirely.",
+)
 @click.option("--quiet", "-q", is_flag=True, help="진행 메시지 억제")
 def apply_cmd(
     session: str,
     target_repo: str,
     output: str | None,
     strict: bool,
+    stack: str | None,
     quiet: bool,
 ) -> None:
     """시니어 세션의 규칙을 타겟 레포 스택에 맞게 조정해 CLAUDE.md를 생성한다.
@@ -235,13 +245,37 @@ def apply_cmd(
     target_path = Path(target_repo)
     out_path = Path(output) if output else target_path / "CLAUDE.md"
 
+    # Build override TargetStack when --stack is provided
+    override_stack: TargetStack | None = None
+    if stack is not None:
+        raw_pkgs = [p.strip() for p in stack.split(",") if p.strip()]
+        normalized = frozenset(normalize_pkg_name(p) for p in raw_pkgs if normalize_pkg_name(p))
+        override_stack = TargetStack(
+            repo_root=target_path,
+            python_deps=normalized,
+            js_deps=frozenset(),
+            detected_files=["<--stack override>"],
+        )
+
     if out_path.exists() and not quiet:
         prompt = f"\n기존 파일({out_path.as_posix()})을 덮어쓸까요?"
         if not click.confirm(prompt, default=True):
             click.echo("취소되었습니다.")
             return
 
-    result = apply_session_to_target(session_result, target_path, strict=strict)
+    result = apply_session_to_target(
+        session_result, target_path, strict=strict, target_stack=override_stack
+    )
+
+    # Warn when stack detection found nothing and user did not override via --stack
+    if stack is None and result.target_stack.is_empty and not quiet:
+        click.echo(
+            "[apply] Warning: no dependencies detected in target_repo "
+            "(no pyproject.toml or package.json). All framework_internal rules will "
+            'fall to "For Reference" section. '
+            "Use --stack <pkg1,pkg2,...> to override.",
+            err=True,
+        )
     md = render_applied_md(result, source_target=session_result.target)
     out_path.write_text(md, encoding="utf-8")
 

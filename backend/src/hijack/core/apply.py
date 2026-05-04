@@ -14,19 +14,37 @@ from hijack.core.scope_critic import extract_top_level_packages
 from hijack.core.target_stack import TargetStack, detect_target_stack
 
 # ---------------------------------------------------------------------------
-# Compatible framework families
-# When the senior repo uses A and the target uses B from the same family,
-# the rule applies with a minor adaptation note.
+# Framework relationship maps
 # ---------------------------------------------------------------------------
 
-_COMPATIBLE_FAMILIES: dict[str, frozenset[str]] = {
+# A "is built on" B: any rule referencing B's symbols transfers to A
+# transparently because A's import surface includes B's. The reverse does
+# NOT hold — A adds layers above B that B doesn't know about.
+_FRAMEWORK_BASES: dict[str, frozenset[str]] = {
     "fastapi": frozenset({"starlette"}),
-    "starlette": frozenset({"fastapi"}),
-    "flask": frozenset({"quart"}),
-    "quart": frozenset({"flask"}),
-    "django": frozenset({"djangorestframework"}),
     "djangorestframework": frozenset({"django"}),
 }
+
+# A and B are sibling-compatible: rules transfer in either direction with
+# minor adaptation. Use this for parallel frameworks that target the same
+# problem space (sync vs async Flask), not for "built-on" inheritance.
+_SIBLING_COMPAT: dict[str, frozenset[str]] = {
+    "flask": frozenset({"quart"}),
+    "quart": frozenset({"flask"}),
+}
+
+
+def _expand_target_deps(deps: frozenset[str]) -> frozenset[str]:
+    """Add each dep's transitive bases to the set.
+
+    target deps = {fastapi}     → {fastapi, starlette}
+    target deps = {drf}         → {drf, django}
+    target deps = {fastapi, sqlalchemy} → {fastapi, starlette, sqlalchemy}
+    """
+    expanded = set(deps)
+    for dep in deps:
+        expanded |= _FRAMEWORK_BASES.get(dep, frozenset())
+    return frozenset(expanded)
 
 
 # ---------------------------------------------------------------------------
@@ -78,9 +96,10 @@ def classify_rule_against_stack(
 
     # scope == "framework_internal"
     pkgs = extract_top_level_packages(rule.good_example or "")
+    expanded_target = _expand_target_deps(target_stack.all_deps)
 
-    # a. Direct match — target uses the same framework
-    direct_match = pkgs & target_stack.all_deps
+    # a. Direct or transitive match — target uses (or is built on) the framework
+    direct_match = pkgs & expanded_target
     if direct_match:
         return AppliedRule(
             rule=rule,
@@ -89,9 +108,9 @@ def classify_rule_against_stack(
             matched_packages=direct_match,
         )
 
-    # b. Compatible sibling match
+    # b. Sibling-compat match — adapted with translation note
     for senior_pkg in pkgs:
-        siblings = _COMPATIBLE_FAMILIES.get(senior_pkg, frozenset())
+        siblings = _SIBLING_COMPAT.get(senior_pkg, frozenset())
         matching_siblings = siblings & target_stack.all_deps
         if matching_siblings:
             sibling_list = ", ".join(sorted(matching_siblings))
@@ -150,13 +169,17 @@ def apply_session_to_target(
     target_root: Path,
     *,
     strict: bool = False,
+    target_stack: TargetStack | None = None,
 ) -> ApplyResult:
     """Walk every rule in session, classify against target stack.
 
     strict=True: drop reference_only rules entirely.
     strict=False: keep them in their own bucket.
+    target_stack: pre-built TargetStack to use instead of detecting from disk.
+                  When None, detect_target_stack(target_root) is called.
     """
-    target_stack = detect_target_stack(target_root)
+    if target_stack is None:
+        target_stack = detect_target_stack(target_root)
 
     by_verdict: dict[str, list[AppliedRule]] = {
         "as_is": [],

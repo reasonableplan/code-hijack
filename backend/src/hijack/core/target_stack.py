@@ -97,6 +97,15 @@ def _parse_package_json_deps(pkg_json_path: Path) -> frozenset[str] | None:
 # Public API
 # ---------------------------------------------------------------------------
 
+def normalize_pkg_name(raw: str) -> str:
+    """Public alias for _normalize_pkg_name (PEP 503 normalization).
+
+    Exposed for callers (e.g. CLI --stack flag) that need to normalize
+    user-supplied package names without importing the private helper.
+    """
+    return _normalize_pkg_name(raw)
+
+
 def detect_target_stack(repo_root: Path) -> TargetStack:
     """Walk repo_root looking for pyproject.toml / package.json (top-level only).
 
