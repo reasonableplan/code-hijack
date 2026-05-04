@@ -38,6 +38,12 @@ _EXCLUDED_PATH_PREFIXES: tuple[str, ...] = (
     "tutorials/",
     "benchmarks/",
     "e2e/",
+    # Dev/CI automation and explicitly-legacy code shouldn't represent
+    # senior style. .github/ holds workflow scripts; deprecated/ and
+    # legacy/ hold code the project itself flags as not-the-current-way.
+    ".github/",
+    "deprecated/",
+    "legacy/",
 )
 
 # Scoring weights (must sum to 1.0).

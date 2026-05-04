@@ -239,6 +239,24 @@ class TestSelectExemplars:
         result = select_exemplars(files)
         assert result == []
 
+    def test_skips_files_in_github_dir(self) -> None:
+        # .github/ holds CI workflow scripts and automation, not library code.
+        files = [_sf(GOOD_FUNCTION, path=".github/actions/people/people.py")]
+        result = select_exemplars(files)
+        assert result == []
+
+    def test_skips_files_in_deprecated_dir(self) -> None:
+        # `deprecated/` is a project's own marker that the code is no longer
+        # the senior pattern.
+        files = [_sf(GOOD_FUNCTION, path="pkg/deprecated/json.py")]
+        result = select_exemplars(files)
+        assert result == []
+
+    def test_skips_files_in_legacy_dir(self) -> None:
+        files = [_sf(GOOD_FUNCTION, path="pkg/legacy/v1.py")]
+        result = select_exemplars(files)
+        assert result == []
+
     def test_does_not_skip_top_level_tests_py_file(self) -> None:
         # A library file literally named "tests.py" at the top level should
         # NOT be excluded — only directory prefixes like tests/ count.
