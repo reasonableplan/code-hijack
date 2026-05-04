@@ -287,6 +287,38 @@ class TestRenderLayerMd:
         md = render_layer_md("shared", cats)
         assert "2" in md  # rule count appears in header
 
+    def test_appends_codebase_invariants_when_fingerprint_provided(self) -> None:
+        from hijack.core.style_fingerprint import (
+            NegativeSpaceFinding,
+            StyleFingerprint,
+        )
+        cats = [_category("architecture", layer="backend")]
+        fp = StyleFingerprint(
+            layer="backend",
+            file_count=42,
+            negative_space=[
+                NegativeSpaceFinding(
+                    name="bare_except",
+                    description="never catches bare exceptions",
+                    occurrences=0,
+                    file_count=42,
+                )
+            ],
+            substitutions=[],
+        )
+        md = render_layer_md("backend", cats, style_fingerprint=fp)
+        assert "Codebase Invariants" in md
+        assert "bare exceptions" in md
+
+    def test_no_invariants_section_when_fingerprint_empty(self) -> None:
+        from hijack.core.style_fingerprint import StyleFingerprint
+        cats = [_category("architecture", layer="backend")]
+        empty_fp = StyleFingerprint(
+            layer="backend", file_count=0, negative_space=[], substitutions=[]
+        )
+        md = render_layer_md("backend", cats, style_fingerprint=empty_fp)
+        assert "Codebase Invariants" not in md
+
 
 # ---------------------------------------------------------------------------
 # render_claude_md_entrypoint

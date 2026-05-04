@@ -346,6 +346,11 @@ async def run_full_analysis(
     from hijack.core.exemplars import select_exemplars
     exemplars = select_exemplars(files, repo_root=repo_root)
 
+    # Mechanical per-layer fingerprint (Phase G2): negative space + symbol
+    # substitution map. Pure regex pass over loaded content — no LLM, no I/O.
+    from hijack.core.style_fingerprint import extract_style
+    style_fingerprints = extract_style(files)
+
     category_results: list[CategoryResult] = []
     for category in categories:
         result = await _analyze_category(
@@ -376,6 +381,7 @@ async def run_full_analysis(
         historic_shas=sorted(historic_shas),
         repo_doc_paths=sorted(valid_doc_paths),
         exemplars=exemplars,
+        style_fingerprints=style_fingerprints,
     )
 
     if critic and any(c.rules for c in category_results):

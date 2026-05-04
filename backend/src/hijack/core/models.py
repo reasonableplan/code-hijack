@@ -182,6 +182,13 @@ class SessionResult:
     # Pre-G1 session.json files omit this key — from_json defaults to [].
     # list[Exemplar] — typed as Any to avoid circular import with exemplars module.
     exemplars: list[Any] = field(default_factory=list)
+    # Per-layer mechanical style fingerprints (negative space + symbol
+    # substitution map). Populated by extract_style() in run_full_analysis()
+    # (Phase G2). Not persisted to session.json — the data is derived from
+    # source content and can be recomputed; storing it would couple session
+    # files to fingerprint catalog versions.
+    # dict[str, StyleFingerprint] — typed as Any to avoid circular import.
+    style_fingerprints: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return {

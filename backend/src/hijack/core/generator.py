@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from hijack.core.evidence import compute_evidence_metrics, render_metrics_md
 from hijack.core.models import AnalysisRule, CategoryResult, Evidence, SessionResult
@@ -159,7 +160,18 @@ def render_category_md(cat: CategoryResult) -> str:
     return "\n".join(lines)
 
 
-def render_layer_md(layer: str, categories: list[CategoryResult]) -> str:
+def render_layer_md(
+    layer: str,
+    categories: list[CategoryResult],
+    style_fingerprint: Any = None,
+) -> str:
+    """Render the per-layer markdown file.
+
+    `style_fingerprint`, when provided, contributes a "Codebase Invariants"
+    section appended after the rules — Phase G2 statistical patterns
+    (negative space, symbol substitutions) that the rule extractor doesn't
+    capture textually.
+    """
     rules = [r for cat in categories for r in cat.rules if r.layer == layer]
     lines = [
         f"# {layer.title()} Layer Rules",
@@ -171,18 +183,23 @@ def render_layer_md(layer: str, categories: list[CategoryResult]) -> str:
     ]
     if not rules:
         lines += [f"*No rules tagged `{layer}` in this session.*", ""]
-        return "\n".join(lines)
+    else:
+        by_category: dict[str, list[AnalysisRule]] = {}
+        for cat in categories:
+            for r in cat.rules:
+                if r.layer == layer:
+                    by_category.setdefault(cat.category, []).append(r)
 
-    by_category: dict[str, list[AnalysisRule]] = {}
-    for cat in categories:
-        for r in cat.rules:
-            if r.layer == layer:
-                by_category.setdefault(cat.category, []).append(r)
+        for category, cat_rules in by_category.items():
+            lines += [f"## {category.replace('_', ' ').title()}", ""]
+            for rule in cat_rules:
+                lines += _render_rule(rule)
 
-    for category, cat_rules in by_category.items():
-        lines += [f"## {category.replace('_', ' ').title()}", ""]
-        for rule in cat_rules:
-            lines += _render_rule(rule)
+    if style_fingerprint is not None:
+        from hijack.core.style_fingerprint import render_layer_invariants_md
+        invariants_md = render_layer_invariants_md(style_fingerprint)
+        if invariants_md:
+            lines.append(invariants_md)
 
     return "\n".join(lines)
 
@@ -376,8 +393,10 @@ def _write_integrated_files(result: SessionResult, integrated_dir: Path) -> None
 
     for layer in _LAYERS:
         fname = _LAYER_FILE_NAMES[layer]
+        fp = result.style_fingerprints.get(layer) if result.style_fingerprints else None
         (integrated_dir / fname).write_text(
-            render_layer_md(layer, result.categories), encoding="utf-8"
+            render_layer_md(layer, result.categories, style_fingerprint=fp),
+            encoding="utf-8",
         )
 
     (integrated_dir / "CLAUDE.md").write_text(
