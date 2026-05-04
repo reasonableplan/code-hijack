@@ -15,6 +15,7 @@ import json
 import logging
 
 from hijack.core.models import SCOPE_VALUES, AnalysisRule, CategoryResult, SessionResult
+from hijack.core.scope_critic import reclassify_session_scopes
 from hijack.llm.base import BaseLLM
 
 logger = logging.getLogger(__name__)
@@ -164,19 +165,9 @@ async def refine(result: SessionResult, llm: BaseLLM, *, model: str) -> SessionR
 
     dropped = len(drop_set)
     downgraded = sum(1 for s in downgrade_set if s not in drop_set)
-    logger.info(
-        "critic: 원본 %d → 최종 %d (drop %d, downgrade %d) | "
-        "scope: cross_project=%d framework_internal=%d domain_specific=%d",
-        len(all_rules),
-        sum(len(c.rules) for c in refined_categories),
-        dropped,
-        downgraded,
-        scope_counts["cross_project"],
-        scope_counts["framework_internal"],
-        scope_counts["domain_specific"],
-    )
 
-    return SessionResult(
+    # D1 필드 포함 — historic_shas / repo_doc_paths 를 반드시 전달 (버그픽스)
+    pre_mechanical = SessionResult(
         session_id=result.session_id,
         target=result.target,
         model=result.model,
@@ -186,7 +177,30 @@ async def refine(result: SessionResult, llm: BaseLLM, *, model: str) -> SessionR
         analysis_duration_seconds=result.analysis_duration_seconds,
         project_structure=result.project_structure,
         files_by_layer=result.files_by_layer,
+        historic_shas=result.historic_shas,
+        repo_doc_paths=result.repo_doc_paths,
     )
+
+    # 기계적 scope 보정 패스 — LLM 이 cross_project 로 오태깅한 규칙 수정
+    reclassified, change_counts = reclassify_session_scopes(pre_mechanical)
+
+    logger.info(
+        "critic: 원본 %d → 최종 %d (drop %d, downgrade %d) | "
+        "scope: cross_project=%d framework_internal=%d domain_specific=%d | "
+        "mechanical override: fw=%d domain=%d unchanged=%d",
+        len(all_rules),
+        sum(len(c.rules) for c in refined_categories),
+        dropped,
+        downgraded,
+        scope_counts["cross_project"],
+        scope_counts["framework_internal"],
+        scope_counts["domain_specific"],
+        change_counts["cross_project_to_framework_internal"],
+        change_counts["cross_project_to_domain_specific"],
+        change_counts["unchanged"],
+    )
+
+    return reclassified
 
 
 def _parse_critic_response(raw: str) -> dict | None:
