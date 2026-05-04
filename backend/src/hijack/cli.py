@@ -19,6 +19,7 @@ from hijack.core.session import SessionDiff
 from hijack.errors import LLM_001, OUTPUT_001, LLMError, OutputError
 from hijack.llm.api import DEFAULT_MODEL, ClaudeAPIClient
 from hijack.llm.base import BaseLLM
+from hijack.llm.local import LocalLLM
 
 _COST_PER_TOKEN = 3e-6
 _AVG_TOKENS_PER_FILE = 600
@@ -82,6 +83,20 @@ def cli() -> None:
 @click.option("--dry-run", is_flag=True, help="LLM 호출 없이 예상 비용만 출력")
 @click.option("--critic/--no-critic", default=True,
               help="Critic 레이어로 중복/MUST 인플레 재평가 (기본 on, +1 LLM 호출)")
+@click.option(
+    "--llm-mode",
+    type=click.Choice(["api", "local"]),
+    default="api",
+    show_default=True,
+    help="api: Anthropic API (ANTHROPIC_API_KEY 필요). "
+         "local: file-IPC — 외부 응답자가 prompt를 읽고 response를 써준다 (skill mode).",
+)
+@click.option(
+    "--comms-dir",
+    default=None,
+    metavar="DIR",
+    help="--llm-mode local 의 prompt/response 디렉토리 (기본: <output>/comms/).",
+)
 @click.option("--verbose", "-v", is_flag=True, help="상세 로그")
 @click.option("--quiet", "-q", is_flag=True, help="진행 메시지 억제")
 def analyze(
@@ -93,6 +108,8 @@ def analyze(
     resume: str | None,
     dry_run: bool,
     critic: bool,
+    llm_mode: str,
+    comms_dir: str | None,
     verbose: bool,
     quiet: bool,
 ) -> None:
@@ -128,6 +145,8 @@ def analyze(
         output_dir=output_dir,
         dry_run=dry_run,
         critic=critic,
+        llm_mode=llm_mode,
+        comms_dir=comms_dir,
         quiet=quiet,
     )
 
@@ -211,6 +230,8 @@ def _run(
     output_dir: str | None,
     dry_run: bool,
     critic: bool,
+    llm_mode: str = "api",
+    comms_dir: str | None = None,
     quiet: bool,
 ) -> None:
     if not quiet:
@@ -227,24 +248,37 @@ def _run(
     cost = _estimate_cost(len(files), len(category_list))
     if not quiet:
         click.echo("\n[2/4] 비용 추정")
-        click.echo(f"  → 예상 비용: ~${cost:.2f} ({model})")
+        if llm_mode == "local":
+            click.echo("  → LLM 모드: local (file-IPC, $0)")
+        else:
+            click.echo(f"  → 예상 비용: ~${cost:.2f} ({model})")
         click.echo(f"  → 카테고리: {', '.join(category_list)}")
 
     if dry_run:
         click.echo("\n[dry-run] LLM 호출 없이 종료합니다.")
         return
 
-    if not quiet:
+    # Local mode is always non-interactive — the responding agent doesn't have
+    # a TTY to confirm to. API mode keeps the safety prompt.
+    if not quiet and llm_mode == "api":
         confirmed = click.confirm("\n분석을 시작할까요?", default=True)
         if not confirmed:
             click.echo("취소되었습니다.")
             return
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise LLMError(LLM_001, "ANTHROPIC_API_KEY가 설정되지 않았습니다.")
-
-    llm: BaseLLM = ClaudeAPIClient(api_key=api_key)
+    base = Path(output_dir) if output_dir else repo_root / "docs" / "hijacked"
+    llm: BaseLLM
+    if llm_mode == "local":
+        comms_path = Path(comms_dir) if comms_dir else base / "comms"
+        comms_path.mkdir(parents=True, exist_ok=True)
+        llm = LocalLLM(comms_path)
+        if not quiet:
+            click.echo(f"  → comms 디렉토리: {comms_path.as_posix()}")
+    else:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise LLMError(LLM_001, "ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+        llm = ClaudeAPIClient(api_key=api_key)
 
     if not quiet:
         click.echo("\n[3/4] LLM 분석 중...")
@@ -261,7 +295,6 @@ def _run(
         )
     )
 
-    base = Path(output_dir) if output_dir else repo_root / "docs" / "hijacked"
     integrated = base / "integrated"
     if integrated.exists() and not quiet:
         prompt = f"\n기존 통합 파일({integrated.as_posix()})을 덮어쓸까요?"
