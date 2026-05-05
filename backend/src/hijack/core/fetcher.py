@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -279,6 +282,82 @@ def _detect_role(rel: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Persistent remote-repo cache
+# ---------------------------------------------------------------------------
+
+_CACHE_DIR_ENV = "HIJACK_CACHE_DIR"
+_CACHE_DISABLE_ENV = "HIJACK_NO_CACHE"
+
+
+def _cache_root() -> Path:
+    """Persistent repo 캐시 루트. HIJACK_CACHE_DIR 로 override 가능."""
+    if override := os.environ.get(_CACHE_DIR_ENV):
+        return Path(override)
+    return Path.home() / ".cache" / "code-hijack" / "repos"
+
+
+def _cache_key(url: str) -> str:
+    """16-char hex digest. URL trailing slash / case 는 normalize."""
+    normalized = url.rstrip("/").lower()
+    return hashlib.sha256(normalized.encode()).hexdigest()[:16]
+
+
+def _cache_enabled() -> bool:
+    """HIJACK_NO_CACHE 가 truthy 가 아니면 캐시 사용."""
+    return os.environ.get(_CACHE_DISABLE_ENV, "") in ("", "0", "false", "False")
+
+
+def _git_clone(target: str, dest: str) -> None:
+    """git clone with --filter=blob:none, fallback --depth=1.
+
+    파일 위치만 dest 로 다르고 로직은 기존과 동일. 실패 시 FetchError(FETCH_001).
+    """
+    result = subprocess.run(
+        ["git", "clone", "--filter=blob:none", target, dest],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        result = subprocess.run(
+            ["git", "clone", "--depth=1", target, dest],
+            capture_output=True,
+            text=True,
+        )
+    if result.returncode != 0:
+        raise FetchError(FETCH_001, f"git clone 실패: {result.stderr.strip()}")
+
+
+def _fetch_remote(target: str) -> Path:
+    """원격 레포를 clone 해서 repo_root 반환. 캐시 우선.
+
+    캐시 hit: <cache_root>/<key>/.git 존재 시 그대로 재사용.
+    캐시 miss: 캐시 dir 에 clone (실패 시 FetchError).
+    캐시 비활성화: HIJACK_NO_CACHE=1 → 매번 tempfile.mkdtemp.
+
+    skill 모드처럼 같은 URL 을 다중 process 에서 호출할 때 두 번째 이후
+    호출이 git clone 없이 즉시 반환되도록 한다.
+    """
+    if not _cache_enabled():
+        tmpdir = tempfile.mkdtemp()
+        _git_clone(target, tmpdir)
+        return Path(tmpdir)
+
+    cache_dir = _cache_root() / _cache_key(target)
+
+    # 캐시 hit
+    if (cache_dir / ".git").is_dir():
+        return cache_dir
+
+    # 부분 clone 실패 잔재 (디렉토리는 있는데 .git 없음) → wipe & retry
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+
+    cache_dir.parent.mkdir(parents=True, exist_ok=True)
+    _git_clone(target, str(cache_dir))
+    return cache_dir
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -301,24 +380,8 @@ def fetch_source(
     if local_path.exists():
         repo_root = local_path / subpath if subpath else local_path
     elif target.startswith(("http://", "https://")) or "github.com" in target:
-        tmpdir = tempfile.mkdtemp()
-        # `--filter=blob:none` keeps the full commit graph (so `git log --follow`
-        # works for archaeology) while skipping old blob downloads. Falls back to
-        # `--depth=1` when the server rejects partial-clone filters.
-        result = subprocess.run(
-            ["git", "clone", "--filter=blob:none", target, tmpdir],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            result = subprocess.run(
-                ["git", "clone", "--depth=1", target, tmpdir],
-                capture_output=True,
-                text=True,
-            )
-        if result.returncode != 0:
-            raise FetchError(FETCH_001, f"git clone 실패: {result.stderr.strip()}")
-        repo_root = Path(tmpdir) / subpath if subpath else Path(tmpdir)
+        cloned_root = _fetch_remote(target)
+        repo_root = cloned_root / subpath if subpath else cloned_root
     else:
         raise InputError(INPUT_001, f"유효하지 않은 경로 또는 URL: {target!r}")
 

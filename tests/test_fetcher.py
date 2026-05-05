@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+from unittest.mock import MagicMock
+
 import pytest
 
 from hijack.core.fetcher import (
     SourceFile,
+    _cache_enabled,
+    _cache_key,
     _read_file_content,
     detect_layer,
     fetch_source,
@@ -271,3 +277,99 @@ class TestFetchSourceErrors:
         with pytest.raises(InputError) as exc_info:
             fetch_source(str(tmp_path))
         assert exc_info.value.code == INPUT_002
+
+
+# ---------------------------------------------------------------------------
+# fetch_source remote cache tests
+# ---------------------------------------------------------------------------
+
+class TestFetchSourceCache:
+    """원격 URL 분기의 persistent cache 검증."""
+
+    def _stub_clone(self, monkeypatch, *, populate_with: str = "x = 1\n"):
+        """subprocess.run 을 mock 해서 git clone 흉내. clone 호출 카운터 반환."""
+        clone_calls: list[str] = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:2] == ["git", "clone"]:
+                dest = Path(cmd[-1])
+                dest.mkdir(parents=True, exist_ok=True)
+                (dest / ".git").mkdir(exist_ok=True)
+                (dest / "main.py").write_text(populate_with, encoding="utf-8")
+                clone_calls.append(cmd[-1])
+            result = MagicMock()
+            result.returncode = 0
+            result.stderr = ""
+            return result
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        return clone_calls
+
+    def test_cache_hit_skips_git_clone(self, tmp_path: Path, monkeypatch):
+        """두 번째 호출은 git clone 안 해야 한다."""
+        monkeypatch.setenv("HIJACK_CACHE_DIR", str(tmp_path))
+        monkeypatch.delenv("HIJACK_NO_CACHE", raising=False)
+        clone_calls = self._stub_clone(monkeypatch)
+
+        URL = "https://github.com/example/cache-test"
+        files1, root1 = fetch_source(URL, attach_history=False)
+        files2, root2 = fetch_source(URL, attach_history=False)
+
+        assert root1 == root2  # 같은 캐시 dir
+        assert len(clone_calls) == 1  # 두 번째 호출은 clone 없이 hit
+
+    def test_cache_dir_is_url_hash(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HIJACK_CACHE_DIR", str(tmp_path))
+        monkeypatch.delenv("HIJACK_NO_CACHE", raising=False)
+        self._stub_clone(monkeypatch)
+
+        URL = "https://github.com/example/repo"
+        _, root = fetch_source(URL, attach_history=False)
+        assert root.name == _cache_key(URL)
+        assert root.parent == tmp_path
+
+    def test_no_cache_env_uses_tempdir(self, tmp_path: Path, monkeypatch):
+        """HIJACK_NO_CACHE=1 이면 캐시 안 쓰고 매번 tmpdir."""
+        monkeypatch.setenv("HIJACK_CACHE_DIR", str(tmp_path))
+        monkeypatch.setenv("HIJACK_NO_CACHE", "1")
+        self._stub_clone(monkeypatch)
+
+        URL = "https://github.com/example/no-cache-test"
+        _, root1 = fetch_source(URL, attach_history=False)
+        _, root2 = fetch_source(URL, attach_history=False)
+
+        assert root1 != root2  # 매번 새 tmpdir
+        # 캐시 디렉토리에 안 들어감
+        assert not (tmp_path / _cache_key(URL)).exists()
+
+    def test_partial_clone_failure_recovers(self, tmp_path: Path, monkeypatch):
+        """캐시 dir 만 있고 .git 없는 경우 (이전 clone 중단) 깔끔히 재시도."""
+        monkeypatch.setenv("HIJACK_CACHE_DIR", str(tmp_path))
+        monkeypatch.delenv("HIJACK_NO_CACHE", raising=False)
+
+        URL = "https://github.com/example/partial-fail"
+        # 부분 잔재 시뮬레이션
+        partial = tmp_path / _cache_key(URL)
+        partial.mkdir(parents=True)
+        (partial / "stale.txt").write_text("leftover")
+
+        clone_calls = self._stub_clone(monkeypatch)
+        files, root = fetch_source(URL, attach_history=False)
+
+        assert root == partial
+        assert (root / ".git").exists()
+        assert not (root / "stale.txt").exists()  # wipe 됨
+        assert len(clone_calls) == 1
+
+    def test_cache_key_normalizes_trailing_slash_and_case(self) -> None:
+        assert _cache_key("https://github.com/x/y") == _cache_key("https://github.com/x/y/")
+        assert _cache_key("https://GitHub.com/x/y") == _cache_key("https://github.com/x/y")
+
+    def test_cache_disabled_via_falsy_value_uses_cache(self, monkeypatch) -> None:
+        """HIJACK_NO_CACHE=0 또는 false 면 캐시 활성."""
+        monkeypatch.setenv("HIJACK_NO_CACHE", "0")
+        assert _cache_enabled() is True
+        monkeypatch.setenv("HIJACK_NO_CACHE", "false")
+        assert _cache_enabled() is True
+        monkeypatch.setenv("HIJACK_NO_CACHE", "1")
+        assert _cache_enabled() is False

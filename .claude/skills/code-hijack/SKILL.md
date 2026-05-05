@@ -270,5 +270,9 @@ code-hijack 자기 자신을 분석한 결과가 `hijack-output/2026-04-17_unkno
 **JSON 에서 특수문자 이스케이프 실패:**
 코드 예시는 큰따옴표 문자열에 이스케이프하지 말고, 임시 JSON 파일 (Write tool) 에 저장 후 로드. Bash heredoc 안에 복잡한 코드 inline 금지.
 
+**같은 URL 반복 분석 시 느림:**
+fetch_source 는 자동 캐시 (`~/.cache/code-hijack/repos/<hash>/`). 강제 refresh 는
+`HIJACK_NO_CACHE=1` 환경변수 또는 캐시 dir 수동 삭제. 위치 override: `HIJACK_CACHE_DIR=/path`.
+
 **Windows 터미널 mojibake:**
 Python `print()` 에서 UTF-8 문자(이모지, 화살표) 출력 시 cp949 에러. ASCII 로 대체 (예: `✅` → `[DONE]`).
