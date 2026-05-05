@@ -418,6 +418,12 @@ def _write_integrated_files(result: SessionResult, integrated_dir: Path) -> None
         if md:
             (integrated_dir / "tests-distilled.md").write_text(md, encoding="utf-8")
 
+    if result.pr_decisions is not None and result.pr_decisions.has_signal:
+        from hijack.core.pr_decisions import render_pr_decisions_md
+        md = render_pr_decisions_md(result.pr_decisions, source_target=result.target)
+        if md:
+            (integrated_dir / "pr-decisions.md").write_text(md, encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers

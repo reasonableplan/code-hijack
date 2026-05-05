@@ -99,3 +99,20 @@ def senior_wisdom_with_git(tmp_path_factory: pytest.TempPathFactory) -> Path:
     )
 
     return dst
+
+
+@pytest.fixture(autouse=True)
+def _block_pr_mining(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Block Phase A1 PR mining by default in every test.
+
+    Why: PR mining shells out to `gh` and `git remote get-url origin`. In CI
+    or unauthenticated dev environments, those calls either fail or trigger
+    Python 3.13 reader-thread exceptions that surface as
+    PytestUnhandledThreadExceptionWarning. Tests that exercise PR mining
+    explicitly use the injectable `gh_runner` parameter or call
+    `_parse_github_target` directly — neither needs this guard.
+    """
+    monkeypatch.setattr(
+        "hijack.core.pr_decisions.extract_pr_decisions",
+        lambda *args, **kwargs: None,
+    )

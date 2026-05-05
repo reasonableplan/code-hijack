@@ -16,6 +16,7 @@ from hijack.core.target_stack import TargetStack, detect_target_stack
 
 if TYPE_CHECKING:
     from hijack.core.exemplars import Exemplar
+    from hijack.core.pr_decisions import PRDecisions
     from hijack.core.test_decisions import TestDecisions
 
 # ---------------------------------------------------------------------------
@@ -173,6 +174,9 @@ class ApplyResult:
     # Test-suite decisions (Phase B): edge cases, name themes, raises groups.
     # None when the source session predates Phase B or had no test files.
     test_decisions: TestDecisions | None = None
+    # PR-history signals (Phase A1): vocabulary clusters, notable/rejected PRs,
+    # recurring labels. None when Phase A1 was skipped (non-GitHub target or no auth).
+    pr_decisions: PRDecisions | None = None
 
 
 def apply_session_to_target(
@@ -228,6 +232,7 @@ def apply_session_to_target(
         summary=summary,
         exemplars=list(session.exemplars),
         test_decisions=session.test_decisions,
+        pr_decisions=session.pr_decisions,
     )
 
 
@@ -379,6 +384,31 @@ def render_applied_md(result: ApplyResult, *, source_target: str) -> str:
             # blockquote so the rendered block nests under the H2 above.
             in_preamble = True
             for line in td_md.splitlines():
+                if in_preamble:
+                    if line.startswith("#"):
+                        continue
+                    if line.startswith(">"):
+                        continue
+                    if line == "":
+                        in_preamble = False
+                        continue
+                lines.append(line)
+
+    if result.pr_decisions is not None and result.pr_decisions.has_signal:
+        from hijack.core.pr_decisions import render_pr_decisions_md
+        pr_md = render_pr_decisions_md(
+            result.pr_decisions, source_target=source_target
+        )
+        if pr_md:
+            lines += [
+                "",
+                "## PR Decisions (review concerns + rejected proposals from the senior team)",
+                "",
+            ]
+            # Same preamble-stripping pattern: drop the H1 + blockquote so the
+            # rendered block nests under the H2 above.
+            in_preamble = True
+            for line in pr_md.splitlines():
                 if in_preamble:
                     if line.startswith("#"):
                         continue

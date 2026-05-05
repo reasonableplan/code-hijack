@@ -99,6 +99,8 @@ def cli() -> None:
     metavar="DIR",
     help="--llm-mode local 의 prompt/response 디렉토리 (기본: <output>/comms/).",
 )
+@click.option("--refresh-prs", is_flag=True,
+              help="PR 캐시를 초기화하고 다시 가져온다 (Phase A1)")
 @click.option("--verbose", "-v", is_flag=True, help="상세 로그")
 @click.option("--quiet", "-q", is_flag=True, help="진행 메시지 억제")
 def analyze(
@@ -112,6 +114,7 @@ def analyze(
     critic: bool,
     llm_mode: str,
     comms_dir: str | None,
+    refresh_prs: bool,
     verbose: bool,
     quiet: bool,
 ) -> None:
@@ -149,6 +152,7 @@ def analyze(
         critic=critic,
         llm_mode=llm_mode,
         comms_dir=comms_dir,
+        refresh_prs=refresh_prs,
         quiet=quiet,
     )
 
@@ -342,6 +346,7 @@ def _run(
     critic: bool,
     llm_mode: str = "api",
     comms_dir: str | None = None,
+    refresh_prs: bool = False,
     quiet: bool,
 ) -> None:
     if not quiet:
@@ -402,6 +407,7 @@ def _run(
             model=model,
             target=target,
             critic=critic,
+            refresh_prs=refresh_prs,
         )
     )
 

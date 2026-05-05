@@ -316,6 +316,7 @@ async def run_full_analysis(
     model: str = DEFAULT_MODEL,
     target: str = "",
     critic: bool = True,
+    refresh_prs: bool = False,
 ) -> SessionResult:
     """카테고리별 LLM 분석을 실행하고 SessionResult를 반환한다.
 
@@ -356,6 +357,22 @@ async def run_full_analysis(
     from hijack.core.test_decisions import extract_test_decisions
     test_decisions = extract_test_decisions(files)
 
+    # Phase A1 — PR-history signals: vocabulary clusters, notable/rejected PRs,
+    # recurring labels. Requires GitHub URL or local repo with GitHub remote.
+    # gh CLI or GH_TOKEN must be available; failures are logged and skipped.
+    from hijack.core.pr_decisions import extract_pr_decisions
+    pr_cache_dir = repo_root / "docs" / "hijacked" / "pr_cache"
+    try:
+        pr_decisions = extract_pr_decisions(
+            target=target or repo_root.as_posix(),
+            repo_root=repo_root,
+            cache_dir=pr_cache_dir,
+            refresh=refresh_prs,
+        )
+    except Exception as e:
+        logger.warning("PR mining failed: %s — continuing without PR decisions", e)
+        pr_decisions = None
+
     category_results: list[CategoryResult] = []
     for category in categories:
         result = await _analyze_category(
@@ -388,6 +405,7 @@ async def run_full_analysis(
         exemplars=exemplars,
         style_fingerprints=style_fingerprints,
         test_decisions=test_decisions,
+        pr_decisions=pr_decisions,
     )
 
     if critic and any(c.rules for c in category_results):

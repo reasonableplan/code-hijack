@@ -267,7 +267,9 @@ class TestAnalyzeFullRun:
         (repo / "main.py").write_text("x = 1")
         captured: list[list[str]] = []
 
-        async def fake_analyze(files, repo_root, *, categories, llm, model, target, critic=True):
+        async def fake_analyze(  # noqa: E501
+            files, repo_root, *, categories, llm, model, target, critic=True, **kwargs
+        ):
             captured.append(categories)
             return _make_session()
 
@@ -321,7 +323,9 @@ class TestAnalyzeResume:
         session_json = self._write_session_json(tmp_path / "sessions", ["architecture"])
         captured: list[list[str]] = []
 
-        async def fake_analyze(files, repo_root, *, categories, llm, model, target, critic=True):
+        async def fake_analyze(  # noqa: E501
+            files, repo_root, *, categories, llm, model, target, critic=True, **kwargs
+        ):
             captured.append(categories)
             return _make_session(categories=categories)
 
@@ -377,7 +381,9 @@ class TestAnalyzeResume:
         session_dir = session_json.parent
         captured: list[list[str]] = []
 
-        async def fake_analyze(files, repo_root, *, categories, llm, model, target, critic=True):
+        async def fake_analyze(  # noqa: E501
+            files, repo_root, *, categories, llm, model, target, critic=True, **kwargs
+        ):
             captured.append(categories)
             return _make_session(categories=categories)
 
@@ -408,7 +414,9 @@ class TestAnalyzeResume:
         )
         captured: list[list[str]] = []
 
-        async def fake_analyze(files, repo_root, *, categories, llm, model, target, critic=True):
+        async def fake_analyze(  # noqa: E501
+            files, repo_root, *, categories, llm, model, target, critic=True, **kwargs
+        ):
             captured.append(categories)
             return _make_session(categories=categories)
 
