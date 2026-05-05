@@ -595,3 +595,113 @@ class TestExemplarsInGenerator:
         assert "my_func" in content
         assert "backend/service.py" in content
         assert "```python" in content
+
+
+# ---------------------------------------------------------------------------
+# TestMustCalibrationLint
+# ---------------------------------------------------------------------------
+
+class TestMustCalibrationLint:
+    """MUST 비율 lint — write_output 시점 자동 체크 (stderr 경고)."""
+
+    def _session_with_priorities(
+        self,
+        category_priorities: list[tuple[str, list[str]]],
+    ) -> SessionResult:
+        """각 카테고리의 priority 리스트로부터 session 생성."""
+        cats = []
+        for name, prios in category_priorities:
+            cats.append(CategoryResult(
+                category=name,
+                design_intent="x",
+                rules=[_rule(priority=p) for p in prios],
+                anti_patterns=[],
+                file_type_guides={},
+                checklist=[],
+                raw_llm_output='{}',
+            ))
+        return SessionResult(
+            session_id="2026-05-05_test",
+            target="https://github.com/x/y",
+            model="m",
+            timestamp="2026-05-05T00:00:00+00:00",
+            selected_files=[],
+            categories=cats,
+            analysis_duration_seconds=0.0,
+            project_structure="x",
+        )
+
+    def test_no_warn_when_overall_must_ratio_at_target(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        # 3 MUST / 7 SHOULD = 30% — well within target
+        s = self._session_with_priorities([
+            ("architecture", ["MUST"] * 3 + ["SHOULD"] * 7),
+        ])
+        write_output(s, tmp_path)
+        err = capsys.readouterr().err
+        assert "MUST 비율" not in err
+
+    def test_warn_when_overall_ratio_exceeds_40_percent(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        # 5 MUST / 5 SHOULD = 50% — over threshold
+        s = self._session_with_priorities([
+            ("architecture", ["MUST"] * 5 + ["SHOULD"] * 5),
+        ])
+        write_output(s, tmp_path)
+        err = capsys.readouterr().err
+        assert "MUST 비율" in err
+        assert "50%" in err
+
+    def test_no_warn_when_total_rules_below_min(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        # 4 rules total, all MUST (100%) — but small sample, suppress
+        s = self._session_with_priorities([
+            ("architecture", ["MUST"] * 4),
+        ])
+        write_output(s, tmp_path)
+        err = capsys.readouterr().err
+        assert "MUST 비율" not in err
+
+    def test_warn_when_category_ratio_exceeds_50_percent_even_if_overall_ok(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        # category A: 4 MUST / 4 = 100%
+        # category B: 0 MUST / 6 = 0%
+        # overall: 4/10 = 40% — at threshold (NOT over)
+        # category A: 100% > 50% → warn
+        s = self._session_with_priorities([
+            ("architecture", ["MUST"] * 4),
+            ("coding_style", ["SHOULD"] * 6),
+        ])
+        write_output(s, tmp_path)
+        err = capsys.readouterr().err
+        assert "MUST 비율" in err
+        assert "architecture" in err
+
+    def test_no_warn_for_small_category_even_if_100_percent(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        # category A: 1 MUST / 1 (100%) but < 3 rules → category check skipped
+        # category B: 1 MUST / 5 = 20% (no flag)
+        # overall: 2/6 = 33% (under threshold)
+        s = self._session_with_priorities([
+            ("architecture", ["MUST"]),
+            ("coding_style", ["MUST"] + ["SHOULD"] * 4),
+        ])
+        write_output(s, tmp_path)
+        err = capsys.readouterr().err
+        assert "MUST 비율" not in err
+
+    def test_warning_includes_target_range_hint(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        s = self._session_with_priorities([
+            ("architecture", ["MUST"] * 6 + ["SHOULD"] * 4),  # 60%
+        ])
+        write_output(s, tmp_path)
+        err = capsys.readouterr().err
+        assert "target 30-40%" in err
+        assert "PR 거부" in err  # 액션 힌트

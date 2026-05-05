@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -367,6 +368,52 @@ def _scope_tag(rule: AnalysisRule) -> str:
 # File writing
 # ---------------------------------------------------------------------------
 
+# MUST 캘리브레이션 임계값. 시니어 코드베이스에서 진짜 PR 거부 수준 규칙은
+# 통상 30-40% 비율. 60% 초과면 LLM 이 SHOULD 도 MUST 로 부풀린 정황.
+# 통계 안정 위해 작은 샘플은 검사 생략.
+_MUST_RATIO_WARN = 0.40
+_MUST_RATIO_CATEGORY_HIGH = 0.50
+_MUST_CHECK_MIN_RULES = 5
+_MUST_CHECK_MIN_CATEGORY_RULES = 3
+
+
+def _check_must_calibration(result: SessionResult) -> None:
+    """MUST 비율 lint — overall > 40% 거나 카테고리 > 50% 시 stderr 경고.
+
+    skill 모드는 critic 단계가 optional 이라 calibration 표류 자동 감지 안 됨.
+    write_output 시점에 체크해 표류가 즉시 가시화되도록 한다.
+    """
+    all_rules = [r for c in result.categories for r in c.rules]
+    if len(all_rules) < _MUST_CHECK_MIN_RULES:
+        return
+
+    overall_must = sum(1 for r in all_rules if r.priority == "MUST")
+    overall_ratio = overall_must / len(all_rules)
+
+    high_cats: list[tuple[str, int, int, float]] = []
+    for c in result.categories:
+        cat_total = len(c.rules)
+        if cat_total < _MUST_CHECK_MIN_CATEGORY_RULES:
+            continue
+        cat_must = sum(1 for r in c.rules if r.priority == "MUST")
+        cat_ratio = cat_must / cat_total
+        if cat_ratio > _MUST_RATIO_CATEGORY_HIGH:
+            high_cats.append((c.category, cat_must, cat_total, cat_ratio))
+
+    if overall_ratio <= _MUST_RATIO_WARN and not high_cats:
+        return
+
+    lines = ["[WARN] MUST 비율 캘리브레이션 — target 30-40%, MUST 는 위반 시 PR 거부 수준만"]
+    lines.append(
+        f"  overall: {overall_must}/{len(all_rules)} MUST ({overall_ratio:.0%})"
+    )
+    for cat, must, total, ratio in high_cats:
+        lines.append(
+            f"  {cat}: {must}/{total} MUST ({ratio:.0%}) — 일부 SHOULD 로 다운그레이드 검토"
+        )
+    print("\n".join(lines), file=sys.stderr)
+
+
 def write_output(result: SessionResult, output_base: Path) -> None:
     """세션별 raw 파일 + integrated 통합 파일을 모두 작성한다."""
     session_dir = output_base / result.session_id
@@ -374,6 +421,7 @@ def write_output(result: SessionResult, output_base: Path) -> None:
 
     _write_session_files(result, session_dir)
     _write_integrated_files(result, output_base / "integrated")
+    _check_must_calibration(result)
 
 
 def _write_session_files(result: SessionResult, session_dir: Path) -> None:
