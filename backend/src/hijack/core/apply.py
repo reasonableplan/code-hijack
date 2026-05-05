@@ -15,6 +15,7 @@ from hijack.core.scope_critic import extract_top_level_packages
 from hijack.core.target_stack import TargetStack, detect_target_stack
 
 if TYPE_CHECKING:
+    from hijack.core.archaeology import CommitDecisions
     from hijack.core.exemplars import Exemplar
     from hijack.core.pr_decisions import PRDecisions
     from hijack.core.test_decisions import TestDecisions
@@ -177,6 +178,9 @@ class ApplyResult:
     # PR-history signals (Phase A1): vocabulary clusters, notable/rejected PRs,
     # recurring labels. None when Phase A1 was skipped (non-GitHub target or no auth).
     pr_decisions: PRDecisions | None = None
+    # Commit-message decision trails (Phase C): "tried X / switched to Y" patterns
+    # mined from commit bodies. None when no commit history was loaded.
+    commit_decisions: CommitDecisions | None = None
 
 
 def apply_session_to_target(
@@ -233,6 +237,7 @@ def apply_session_to_target(
         exemplars=list(session.exemplars),
         test_decisions=session.test_decisions,
         pr_decisions=session.pr_decisions,
+        commit_decisions=session.commit_decisions,
     )
 
 
@@ -409,6 +414,31 @@ def render_applied_md(result: ApplyResult, *, source_target: str) -> str:
             # rendered block nests under the H2 above.
             in_preamble = True
             for line in pr_md.splitlines():
+                if in_preamble:
+                    if line.startswith("#"):
+                        continue
+                    if line.startswith(">"):
+                        continue
+                    if line == "":
+                        in_preamble = False
+                        continue
+                lines.append(line)
+
+    if result.commit_decisions is not None and result.commit_decisions.has_signal:
+        from hijack.core.archaeology import render_commit_decisions_md
+        cd_md = render_commit_decisions_md(
+            result.commit_decisions, source_target=source_target
+        )
+        if cd_md:
+            lines += [
+                "",
+                "## Commit Decisions (decision trails recorded in commit messages)",
+                "",
+            ]
+            # Same preamble-stripping pattern as exemplars/test_decisions/pr_decisions:
+            # drop the H1 + blockquote so the rendered block nests under the H2 above.
+            in_preamble = True
+            for line in cd_md.splitlines():
                 if in_preamble:
                     if line.startswith("#"):
                         continue

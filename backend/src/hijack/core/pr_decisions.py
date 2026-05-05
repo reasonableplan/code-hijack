@@ -317,6 +317,11 @@ def _parse_github_target(
 ) -> tuple[str, str] | None:
     """Return (owner, repo) if target resolves to a GitHub URL, else None.
 
+    Guards against ancestor-`.git` inheritance: a path inside another git
+    repo (test fixtures, monorepo subprojects, vendored sources) must NOT
+    be treated as that parent repo. Only consults git when the path itself
+    owns a `.git` directory.
+
     Accepts:
       - https://github.com/owner/repo
       - https://github.com/owner/repo.git

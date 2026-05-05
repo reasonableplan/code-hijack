@@ -200,6 +200,11 @@ class SessionResult:
     # when the network call fails. PRDecisions | None — typed as Any to avoid
     # circular import.
     pr_decisions: Any | None = None
+    # Commit-message decision trails (Phase C): "tried X / switched to Y" patterns
+    # mined from Commit.body strings already loaded by archaeology fetch.
+    # Populated by extract_commit_decisions() in run_full_analysis().
+    # CommitDecisions | None — typed as Any to avoid circular import.
+    commit_decisions: Any | None = None
 
     def to_json(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -220,6 +225,8 @@ class SessionResult:
             result["test_decisions"] = self.test_decisions.to_json()
         if self.pr_decisions is not None:
             result["pr_decisions"] = self.pr_decisions.to_json()
+        if self.commit_decisions is not None:
+            result["commit_decisions"] = self.commit_decisions.to_json()
         return result
 
     @classmethod
@@ -233,6 +240,10 @@ class SessionResult:
         if "pr_decisions" in data and data["pr_decisions"] is not None:
             from hijack.core.pr_decisions import PRDecisions
             pr_decisions = PRDecisions.from_json(data["pr_decisions"])
+        commit_decisions = None
+        if "commit_decisions" in data and data["commit_decisions"] is not None:
+            from hijack.core.archaeology import CommitDecisions
+            commit_decisions = CommitDecisions.from_json(data["commit_decisions"])
         return cls(
             session_id=data["session_id"],
             target=data["target"],
@@ -248,4 +259,5 @@ class SessionResult:
             exemplars=[Exemplar.from_json(e) for e in data.get("exemplars", [])],
             test_decisions=test_decisions,
             pr_decisions=pr_decisions,
+            commit_decisions=commit_decisions,
         )

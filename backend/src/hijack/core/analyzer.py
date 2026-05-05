@@ -373,6 +373,11 @@ async def run_full_analysis(
         logger.warning("PR mining failed: %s — continuing without PR decisions", e)
         pr_decisions = None
 
+    # Phase C — commit-message decision trails: regex over Commit.body strings
+    # already loaded by Phase 0's archaeology fetch. No new I/O.
+    from hijack.core.archaeology import extract_commit_decisions
+    commit_decisions = extract_commit_decisions(files)
+
     category_results: list[CategoryResult] = []
     for category in categories:
         result = await _analyze_category(
@@ -406,6 +411,7 @@ async def run_full_analysis(
         style_fingerprints=style_fingerprints,
         test_decisions=test_decisions,
         pr_decisions=pr_decisions,
+        commit_decisions=commit_decisions,
     )
 
     if critic and any(c.rules for c in category_results):
