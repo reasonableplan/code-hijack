@@ -169,6 +169,36 @@ QUALITY REQUIREMENTS (non-negotiable):
    than inventing evidence — extracting the senior's *actual* recorded
    reasoning is the whole point.
 
+7. `rule` — PRINCIPLE OVER PRESCRIPTION:
+   The rule body must describe the underlying DESIGN PRINCIPLE, not prescribe
+   a specific internal class/function/sentinel/helper name unique to this repo.
+   The rules will be consumed by an agent writing code in OTHER projects where
+   that internal symbol does not exist — so a rule that says "use BaseTransport"
+   or "use the USE_CLIENT_DEFAULT sentinel" or "call to_bytes from _utils.py"
+   transfers to nothing.
+
+   Abstract one level. Describe what design constraint the symbol satisfies.
+   Cite the internal symbol in `good_example` (concrete evidence) and `ref_files`
+   — keep the rule body principle-level.
+
+   GOOD rule body (transferable):
+     "Per-call optional parameters must distinguish 'unset' from 'explicit None'
+      via a dedicated sentinel object, so caller-level and client-level defaults
+      can fall through cleanly."
+   BAD rule body (cargo-cult, codebase-bound):
+     "Use the USE_CLIENT_DEFAULT sentinel for unset request-level params."
+
+   GOOD rule body:
+     "Multi-round-trip authentication schemes must be modeled as a generator
+      protocol yielding Request objects, so the client transport stays decoupled
+      from any specific auth algorithm."
+   BAD rule body:
+     "Authentication must be implemented via the Auth.auth_flow generator method."
+
+   Heuristic: if the rule body contains a specific identifier name you would
+   ALSO put in good_example, the body is too prescriptive. Move that identifier
+   to good_example and rewrite the rule as a constraint on shape/behavior.
+
 ---
 
 FEW-SHOT EXAMPLE — GOOD quality rule (learn the shape):

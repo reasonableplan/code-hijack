@@ -99,6 +99,33 @@ class TestEvidenceCitationRequirement:
         assert "≤150 chars" in result
 
 
+class TestCargoCultGuard:
+    """Phase: rule body must describe the design principle, not prescribe a
+    specific internal class/function/sentinel name unique to this repo."""
+
+    def test_prompt_demands_principle_over_prescription(self) -> None:
+        result = build_category_prompt("architecture", ["sample"])
+        assert "PRINCIPLE OVER PRESCRIPTION" in result
+
+    def test_prompt_explains_transferability_motivation(self) -> None:
+        # The why: rules consumed in OTHER projects where the internal symbol
+        # does not exist.
+        result = build_category_prompt("api_design", ["sample"])
+        assert "OTHER projects" in result
+
+    def test_prompt_shows_principle_vs_cargo_cult_pair(self) -> None:
+        # Concrete contrast — the prompt should include both a transferable
+        # form and a cargo-cult form so the LLM can pattern-match.
+        result = build_category_prompt("coding_style", ["sample"])
+        assert "cargo-cult" in result.lower()
+
+    def test_prompt_gives_identifier_collocation_heuristic(self) -> None:
+        # Heuristic: identifier in rule body that also appears in good_example
+        # → too prescriptive.
+        result = build_category_prompt("architecture", ["sample"])
+        assert "good_example" in result and "principle-level" in result.lower()
+
+
 class TestRepoContextInjection:
     def test_repo_context_block_prepended_when_provided(self) -> None:
         ctx = "<repo_context>\n### ARCHITECTURE.md\nWe use dataclasses.\n</repo_context>"

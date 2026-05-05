@@ -93,6 +93,28 @@ bad_example: '# user input 을 eval 로 실행 (금지)'
 
 **MUST/SHOULD 캘리브레이션**: 10 규칙 중 MUST 는 3-4개가 정상. MUST 비율 60% 초과면 재평가 필수.
 
+**rule 본문은 원리 (PRINCIPLE OVER PRESCRIPTION)** — 이 레포 내부 클래스/함수/센티넬/헬퍼 이름을 rule 본문에 그대로 박지 말 것. 규칙은 **다른 프로젝트** 에 있는 에이전트가 코드 짤 때 쓰는데, `BaseTransport`/`USE_CLIENT_DEFAULT`/`Auth.auth_flow`/`to_bytes` 같은 이름은 이 레포에만 존재해서 일반화 불가.
+
+한 단계 추상화: 그 심볼이 **충족하는 설계 제약** 을 묘사. 내부 심볼은 `good_example` 과 `ref_files` 에 두고 (구체 evidence 자리), rule 본문은 원리 수준으로.
+
+```
+# ❌ 카고컬트 (특정 심볼 처방)
+rule: "Use the USE_CLIENT_DEFAULT sentinel for unset request-level params"
+
+# ✅ 원리
+rule: "Per-call optional parameters must distinguish 'unset' from 'explicit None' via a dedicated sentinel object, so caller-level과 client-level 디폴트가 깔끔히 fall through"
+```
+
+```
+# ❌ 카고컬트
+rule: "Authentication must be implemented via the Auth.auth_flow generator method"
+
+# ✅ 원리
+rule: "Multi-round-trip auth schemes (Digest, OAuth challenge) must be modeled as a generator protocol yielding Request objects, so client transport와 auth 알고리즘이 decouple"
+```
+
+휴리스틱: rule 본문에 들어간 식별자 이름이 `good_example` 에도 똑같이 들어간다면 본문이 너무 처방적. 그 이름을 example 로 옮기고 rule 은 동작/형태에 대한 제약으로 다시 써라.
+
 라인 번호 얻는 법: Read tool 결과에 line 번호가 포함돼 있음. 또는 Bash 로 `grep -n 'pattern' <file>` 실행.
 
 ### Few-shot 예시 — 이런 규칙을 만들어라
