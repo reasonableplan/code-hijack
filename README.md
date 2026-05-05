@@ -12,12 +12,15 @@ AI agents produce generic, inconsistent code. code-hijack analyzes a senior open
 - **5-layer deterministic classification** — frontend / backend / db / devops / shared (path + extension + dep-file heuristics, no LLM guessing)
 - **Evidence-based rules** — every rule includes `ref_files:line`, verbatim ✅/❌ examples from the actual repo, confidence + priority
 - **Scope-tagged rules** — every rule is classified `cross_project` (transfers directly), `framework_internal` (only meaningful inside the source codebase), or `domain_specific` (re-evaluate per domain). Lets a downstream tool auto-apply the safe ones and quarantine the rest.
-- **Critic layer** — second LLM pass that drops duplicates, downgrades inflated MUST, tags scope, calibrates priority ratio
+- **Critic layer** — second LLM pass that drops duplicates, downgrades inflated MUST, tags scope, calibrates priority ratio + MUST ratio auto-lint (`write_output` stderr warn if >40%)
 - **Two execution modes**:
   - **CLI mode** (`code-hijack analyze`) — direct Anthropic API, fully automatable
   - **Skill mode** (`/code-hijack`) — uses the current Claude Code session, no API key needed
 - **HarnessAI integration** — `harness-export` subcommand converts a session into [HarnessAI](https://github.com/reasonableplan/harnessai)-shaped docs (`conventions.md` + per-area `guidelines/` + `shared-lessons-candidates.md`). Only `cross_project` rules auto-apply; the rest become reviewable candidates.
 - **Session management** — `--resume` to skip completed categories, `diff` subcommand to compare rule changes across sessions
+- **Decision mining from Git** — extracts senior reasoning from PR descriptions, review comments, commit bodies, and reverts; rule `evidence` field carries verbatim quotes with intent classification (rejection/constraint/incident/preference)
+- **Style exemplars + statistical fingerprint** — beyond rules, surfaces concrete code samples and statistical style stats (test framework, naming, line lengths, ...) for higher-fidelity agent grounding
+- **Persistent repo cache** — git clones land in `~/.cache/code-hijack/repos/<hash>/` and reuse across runs; no double-clone overhead in skill mode
 
 ## Example outputs
 
@@ -80,6 +83,17 @@ code-hijack harness-export ./docs/hijacked/2026-04-17_fastapi --output ./harness
 
 Output goes to `<output>/conventions.md`, `<output>/guidelines/<area>/<aspect>.md`, and (if any) `<output>/shared-lessons-candidates.md`. Drop these into a new project's `docs/` and a HarnessAI-style agent will pick up the rules.
 
+## Configuration
+
+Environment variables:
+
+- `HIJACK_CACHE_DIR=/path` — override cache location (default: `~/.cache/code-hijack/repos/`)
+- `HIJACK_NO_CACHE=1` — disable cache, fall back to per-run `tempfile.mkdtemp` (set to `0`/`false`/empty to keep cache enabled)
+- `ANTHROPIC_API_KEY` — required for CLI mode (`code-hijack analyze`); skill mode does not need it
+- `GH_TOKEN` — optional, used by PR-decision mining when the `gh` CLI is unavailable
+
+The MUST-ratio calibration runs automatically on `write_output` and prints a `[WARN]` line to stderr when overall MUST > 40% or any category > 50%. Sample sizes below 5 rules total or 3 per category are skipped to avoid noise.
+
 ## Output structure
 
 ```
@@ -110,14 +124,19 @@ Copy `integrated/CLAUDE.md` into your own project's Claude Code context, and you
 
 ```
 input (GitHub URL or local path)
-  ↓ Fetcher        — git clone, collect .py/.ts/.tsx, skip _SKIP_DIRS
-  ↓ detect_layer   — deterministic layer tagging (path + ext + dep-file rules)
-  ↓ Preprocessor   — role classification (entry_point/api/model/…) + per-category file selection
-                     (content-density ranking, near-duplicate dedup)
-  ↓ Analyzer       — per-category LLM calls via BaseLLM ABC
-                     (few-shot-enhanced JSON output + regex fallback, 2 retries)
-  ↓ Critic         — second LLM pass: drop duplicates, downgrade inflated MUST (optional)
-  ↓ Generator      — per-layer .md + entry-point CLAUDE.md + system-prompt.md
+  ↓ Fetcher        — git clone + persistent cache (`~/.cache/code-hijack/repos/<hash>/`)
+  ↓ detect_layer   — deterministic layer tagging
+  ↓ Preprocessor   — role classification + per-category file selection
+                     (auxiliary path demote, truncate-aware ranking, near-dup dedup)
+  ↓ Exemplars (G1) — concrete code samples extracted per category
+  ↓ Style FP (G2)  — statistical style fingerprint (frameworks, naming, line lengths)
+  ↓ Test decisions (B) — senior defense catalog from test code (parametrize edges, raises blocks)
+  ↓ PR decisions (A1)  — GitHub PR signals (vocabulary, notable PRs, rejected PRs, labels)
+  ↓ Commit decisions (C) — decision trails from commit bodies (tried/decided/instead/reverted)
+  ↓ Analyzer       — per-category LLM calls with evidence prompts
+  ↓ Critic         — drop duplicates, downgrade inflated MUST + scope tagging
+  ↓ Generator      — per-layer .md + CLAUDE.md + system-prompt.md
+                     + auto MUST calibration lint (stderr warn if >40%)
 output
 ```
 
@@ -132,6 +151,17 @@ The tool has been dogfooded on 4 real repositories with measured quality improve
 | +critic | fastapi | **35%** | **100%** | **100%** |
 
 Target: MUST 30-40% (calibrated for real PR-blocking rules), 100% ref-file line coverage, 100% real-code bad_examples.
+
+**Skill mode validation** (after 2026-05-05 selector / cargo-cult / MUST-lint / cache fixes):
+
+| Repo | Total rules | MUST% | Cargo-cult* | Quality |
+|---|---|---|---|---|
+| httpx (v1) | 18 | 39% | 4 | 8/10 |
+| httpx (v2) | 19 | **32%** | **0** | **9/10** |
+| fastapi (v1) | 18 | 44% | 5 | 7/10 |
+| fastapi (v2) | 17 | **35%** | **0** | **8/10** |
+
+\* Rules whose body prescribed a specific internal class/function name from the analyzed repo (e.g. `BaseTransport`, `USE_CLIENT_DEFAULT`, `EventSourceResponse`) instead of the underlying design principle. v2 prompts demand principle-level rule bodies with the internal symbol cited in `good_example` only.
 
 ## Project structure
 
@@ -151,18 +181,28 @@ backend/
     errors.py                          # HijackError(ClickException) hierarchy
     core/
       models.py                        # AnalysisRule / CategoryResult / SessionResult @dataclass
-      fetcher.py                       # git clone, file collection, detect_layer
-      preprocessor.py                  # role classification, 2D grouping, file selection
-      prompts.py                       # 10 category prompts + few-shot examples
+      fetcher.py                       # git clone + cache, file collection, detect_layer
+      preprocessor.py                  # role classification, file selection (auxiliary demote, truncate-aware)
+      prompts.py                       # 10 category prompts + few-shot + cargo-cult guard
       analyzer.py                      # LLM loop + parse + retry
-      critic.py                        # second-pass rule refinement (drop / downgrade / scope-tag)
+      critic.py                        # rule refinement (drop / downgrade / scope-tag)
+      scope_critic.py                  # scope tagging refinement
       session.py                       # session_id, SessionDiff
-      generator.py                     # layer .md + CLAUDE.md rendering
+      generator.py                     # rendering + MUST calibration lint
       harness_export.py                # HarnessAI conventions/guidelines/lesson-candidate adapter
+      archaeology.py                   # git history mining (file ages, reverts, commit bodies)
+      apply.py                         # render integrated CLAUDE.md
+      docs.py                          # repo-level doc ingestion (README/ARCHITECTURE/ADRs)
+      evidence.py                      # evidence chain rendering + metrics
+      exemplars.py                     # G1: senior code sample catalog
+      style_fingerprint.py             # G2: statistical style fingerprint
+      test_decisions.py                # B: senior defense catalog from tests
+      pr_decisions.py                  # A1: GitHub PR judgment signals
+      target_stack.py                  # target repo stack detection
     llm/
       base.py                          # BaseLLM ABC
       api.py                           # ClaudeAPIClient (anthropic SDK)
-tests/                                 # pytest — 227 tests, ruff clean
+tests/                                 # pytest — 783 tests, ruff clean
   fixtures/senior_wisdom/              # mini repo for layer-detection tests
 examples/                              # real analysis outputs
   fastapi/                             # latest fastapi analysis (17 rules)
@@ -178,7 +218,9 @@ In short:
 - ❌ Design judgment in novel situations
 - ❌ Trade-off reasoning for context-specific exceptions
 
-Future direction to narrow this gap: **Git history + PR discussion mining** (Phase 3) to extract not just patterns but the decisions behind them.
+What's now mitigated (since 2026-04-17): Git history + PR discussion mining is implemented (exemplars, style fingerprint, test-defense catalog, PR signals, commit decision trails). Rules now carry verbatim evidence with intent classification.
+
+Remaining gap: in skill mode, evidence chains are empty (the mechanical signal layers run only in CLI mode). Closing this requires injecting pre-computed signals into the skill-mode prompt — work in progress as "A2 LLM distillation".
 
 ## Roadmap
 
@@ -186,7 +228,9 @@ Future direction to narrow this gap: **Git history + PR discussion mining** (Pha
 - ✅ **Phase 2 (expansion)** — 10 categories, `--resume`, `diff` subcommand, SessionDiff
 - ✅ **Phase 3a (quality)** — Few-shot prompts, Critic layer, content-density selection
 - ✅ **Phase 3b (HarnessAI integration)** — `scope` field (cross_project / framework_internal / domain_specific), `harness-export` subcommand, system-prompt with inline ✅/❌/ref
-- **Phase 4 (planned)** — Git history mining, `design_decisions` category, RAG integration
+- ✅ **Phase 4a (decision mining)** — Git history + PR discussion + commit body mining. Modules: `archaeology`, `exemplars` (G1), `style_fingerprint` (G2), `test_decisions` (B), `pr_decisions` (A1), commit-decision pattern mining (C).
+- ✅ **Phase 4b (validation hardening, 2026-05-05)** — Layer detection false-positive guards, file selector docs_src demote + truncate-aware ranking, cargo-cult guard in rule extraction, MUST calibration auto-lint, persistent fetch cache.
+- **Phase 4c (planned)** — A2 LLM distillation (inject mechanical signals into skill-mode prompt to populate evidence chains), ORM-aware layer detection, additional language support (Go/Rust).
 
 ## Development
 
@@ -198,4 +242,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Background
 
-Built using the harnessai + gstack workflow (plan → build → verify → review loop). Incremental commits, 227 passing tests, dogfooded on 4 repos with documented quality progression. Phase 3b added scope tags + `harness-export` to round-trip extracted style back into HarnessAI projects. Full design document: [`backend/docs/skeleton.md`](backend/docs/skeleton.md).
+Built using the harnessai + gstack workflow (plan → build → verify → review loop). Incremental commits, 783 passing tests, dogfooded on 4 repos with documented quality progression. Phase 4b added selector hardening, cargo-cult guards, MUST calibration auto-lint, and persistent fetch cache. Full design document: [`backend/docs/skeleton.md`](backend/docs/skeleton.md).

@@ -12,12 +12,15 @@ AI 에이전트가 짜는 코드는 일반적이고 일관성 없다. code-hijac
 - **5 레이어 결정론적 분류** — frontend / backend / db / devops / shared (파일 경로/확장자/의존성 기반, LLM 추측 없음)
 - **실증적 규칙** — 각 규칙에 `ref_files:라인번호` + ✅/❌ 실제 코드 예시 + 신뢰도 + 우선순위
 - **Scope 태깅** — 모든 규칙이 `cross_project` (그대로 적용 가능) / `framework_internal` (소스 코드베이스 내부 결정 — 외부 무관) / `domain_specific` (도메인별 재평가 필요) 중 하나로 분류. 다운스트림 도구가 안전한 것만 자동 적용 가능.
-- **Critic 레이어** — 2차 LLM 패스로 중복 제거 + MUST 인플레 강등 + scope 태깅 + 우선순위 보정
+- **Critic 레이어** — 2차 LLM 패스로 중복 제거 + MUST 인플레 강등 + scope 태깅 + 우선순위 보정 + MUST 비율 자동 lint (`write_output` 시점 stderr 경고)
 - **2가지 실행 모드**:
   - **CLI 모드** (`code-hijack analyze`) — Anthropic API 직접 호출, 자동화 가능
   - **Skill 모드** (`/code-hijack`) — Claude Code 세션이 LLM 역할, API key 불필요
 - **HarnessAI 통합** — `harness-export` 서브커맨드로 세션을 [HarnessAI](https://github.com/reasonableplan/harnessai) 형식 (`conventions.md` + 영역별 `guidelines/` + `shared-lessons-candidates.md`) 으로 변환. `cross_project` 규칙만 자동 적용, 나머지는 검토 후보.
 - **세션 관리** — `--resume` 으로 재시작, `diff` 서브커맨드로 세션 간 규칙 변경사항 비교
+- **Git 결정 마이닝** — PR description, 리뷰 코멘트, commit body, revert 에서 시니어의 판단 흔적 추출. rule 의 `evidence` 필드에 verbatim 인용 + intent 분류 (rejection/constraint/incident/preference)
+- **스타일 exemplar + 통계 fingerprint** — 규칙 외에 구체 코드 sample 과 통계 (테스트 프레임워크/네이밍/라인 길이/...) 추출, 에이전트의 fidelity 향상
+- **Persistent 레포 캐시** — `~/.cache/code-hijack/repos/<hash>/` 에 자동 캐시. skill 모드 다중 process 도 같은 슬롯 공유, 중복 clone 없음
 
 ## Quickstart
 
@@ -64,6 +67,17 @@ code-hijack harness-export ./docs/hijacked/2026-04-17_fastapi --output ./harness
 
 산출: `<output>/conventions.md`, `<output>/guidelines/<area>/<aspect>.md`, (있을 때) `<output>/shared-lessons-candidates.md`. 새 프로젝트의 `docs/` 에 복사하면 HarnessAI-식 에이전트가 그대로 사용.
 
+## 설정
+
+환경 변수:
+
+- `HIJACK_CACHE_DIR=/path` — 캐시 위치 지정 (기본값: `~/.cache/code-hijack/repos/`)
+- `HIJACK_NO_CACHE=1` — 캐시 비활성화, 실행마다 `tempfile.mkdtemp` 사용 (`0`/`false`/빈 값으로 재활성화)
+- `ANTHROPIC_API_KEY` — CLI 모드 (`code-hijack analyze`) 에 필수, skill 모드는 불필요
+- `GH_TOKEN` — 선택, `gh` CLI 없을 때 PR 결정 마이닝에 사용
+
+MUST 비율 캘리브레이션은 `write_output` 시점에 자동 실행되며, 전체 MUST > 40% 또는 카테고리별 > 50% 일 때 stderr 에 `[WARN]` 출력. 전체 규칙 5개 미만 또는 카테고리 3개 미만은 noise 방지를 위해 건너뜀.
+
 ## 출력 구조
 
 ```
@@ -94,14 +108,19 @@ code-hijack harness-export ./docs/hijacked/2026-04-17_fastapi --output ./harness
 
 ```
 입력 (GitHub URL 또는 로컬 경로)
-  ↓ Fetcher        — git clone, .py/.ts/.tsx 수집, _SKIP_DIRS 제외
-  ↓ detect_layer   — 결정론적 레이어 태깅 (frontend/backend/db/devops/shared)
-  ↓ Preprocessor   — 역할 분류 (entry_point/api/model/...) + 카테고리별 파일 선별
-                     (콘텐츠 밀도 정렬, near-duplicate dedup)
-  ↓ Analyzer       — BaseLLM 인터페이스 경유 카테고리별 호출
-                     (few-shot 프롬프트 + JSON 출력 + regex 폴백, 2회 재시도)
-  ↓ Critic         — 2차 LLM 패스: 중복 제거 + MUST 강등 + scope 태깅 (옵션, 기본 on)
+  ↓ Fetcher        — git clone + persistent cache (`~/.cache/code-hijack/repos/<hash>/`)
+  ↓ detect_layer   — 결정론적 레이어 태깅
+  ↓ Preprocessor   — 역할 분류 + 카테고리별 파일 선별
+                     (auxiliary path 강등, truncate-aware 정렬, near-dup dedup)
+  ↓ Exemplars (G1) — 카테고리별 구체 코드 sample 추출
+  ↓ Style FP (G2)  — 통계 스타일 fingerprint (프레임워크, 네이밍, 라인 길이)
+  ↓ Test decisions (B) — 테스트 코드에서 시니어 방어 카탈로그 (parametrize edges, raises blocks)
+  ↓ PR decisions (A1)  — GitHub PR 신호 (어휘, 주요 PR, 거절된 PR, 레이블)
+  ↓ Commit decisions (C) — commit body 에서 결정 흔적 (tried/decided/instead/reverted)
+  ↓ Analyzer       — evidence 프롬프트 포함 카테고리별 LLM 호출
+  ↓ Critic         — 중복 제거 + MUST 강등 + scope 태깅
   ↓ Generator      — 레이어별 .md + CLAUDE.md + system-prompt.md 렌더링
+                     + MUST 자동 캘리브레이션 lint (>40% 시 stderr 경고)
 출력 (docs/hijacked/<세션>/ + integrated/ + 선택적 harness-form/)
 ```
 
@@ -116,6 +135,17 @@ code-hijack harness-export ./docs/hijacked/2026-04-17_fastapi --output ./harness
 | +critic | fastapi | **35%** | **100%** | **100%** |
 
 목표: MUST 30-40% (실제 PR 차단용으로 보정), 100% ref 라인 커버리지, 100% 실제 코드 bad_examples.
+
+**Skill 모드 검증** (2026-05-05 selector / cargo-cult / MUST-lint / cache 수정 후):
+
+| 레포 | 전체 규칙 | MUST% | 카고컬트* | 품질 |
+|---|---|---|---|---|
+| httpx (v1) | 18 | 39% | 4 | 8/10 |
+| httpx (v2) | 19 | **32%** | **0** | **9/10** |
+| fastapi (v1) | 18 | 44% | 5 | 7/10 |
+| fastapi (v2) | 17 | **35%** | **0** | **8/10** |
+
+\* 규칙 본문이 설계 원칙 대신 분석 레포의 내부 클래스/함수명 (예: `BaseTransport`, `USE_CLIENT_DEFAULT`, `EventSourceResponse`) 을 처방한 경우. v2 프롬프트는 원칙 레벨 규칙 본문을 요구하고 내부 심볼은 `good_example` 에만 인용.
 
 ## 프로젝트 구조
 
@@ -135,18 +165,28 @@ backend/
     errors.py                          # HijackError(ClickException) 계층
     core/
       models.py                        # AnalysisRule / CategoryResult / SessionResult @dataclass
-      fetcher.py                       # git clone, 파일 수집, detect_layer
-      preprocessor.py                  # 역할 분류, 2D 그룹핑, 파일 선별
-      prompts.py                       # 10 카테고리 프롬프트 + few-shot 예시
+      fetcher.py                       # git clone + cache, 파일 수집, detect_layer
+      preprocessor.py                  # 역할 분류, 파일 선별 (auxiliary 강등, truncate-aware)
+      prompts.py                       # 10 카테고리 프롬프트 + few-shot + cargo-cult 가드
       analyzer.py                      # LLM 루프 + 파싱 + 재시도
-      critic.py                        # 2차 패스 정제 (drop / downgrade / scope-tag)
+      critic.py                        # 규칙 정제 (drop / downgrade / scope-tag)
+      scope_critic.py                  # scope 태깅 정제
       session.py                       # session_id, SessionDiff
-      generator.py                     # 레이어별 .md + CLAUDE.md 렌더링
+      generator.py                     # 렌더링 + MUST 캘리브레이션 lint
       harness_export.py                # HarnessAI conventions/guidelines/lesson-candidate 어댑터
+      archaeology.py                   # git 히스토리 마이닝 (파일 나이, revert, commit body)
+      apply.py                         # integrated CLAUDE.md 렌더링
+      docs.py                          # 레포 문서 수집 (README/ARCHITECTURE/ADR)
+      evidence.py                      # evidence chain 렌더링 + 지표
+      exemplars.py                     # G1: 시니어 코드 sample 카탈로그
+      style_fingerprint.py             # G2: 통계 스타일 fingerprint
+      test_decisions.py                # B: 테스트 코드에서 시니어 방어 카탈로그
+      pr_decisions.py                  # A1: GitHub PR 판단 신호
+      target_stack.py                  # 대상 레포 스택 감지
     llm/
       base.py                          # BaseLLM ABC
       api.py                           # ClaudeAPIClient (anthropic SDK)
-tests/                                 # pytest — 227 tests, ruff clean
+tests/                                 # pytest — 783 tests, ruff clean
   fixtures/senior_wisdom/              # 레이어 감지 검증용 미니 레포
 examples/                              # 실제 분석 출력
   fastapi/                             # 최신 fastapi 분석 결과
@@ -161,7 +201,9 @@ examples/                              # 실제 분석 출력
 - ❌ 새로운 상황에서의 설계 판단
 - ❌ 컨텍스트별 예외에 대한 trade-off 추론
 
-이 갭을 좁히는 향후 방향: **Git 히스토리 + PR 토론 마이닝** (Phase 4) — 패턴뿐 아니라 그 뒤의 결정까지 추출.
+완화된 갭 (2026-04-17 이후): Git 히스토리 + PR 토론 마이닝이 구현됨 (exemplars, style fingerprint, 테스트 방어 카탈로그, PR 신호, commit 결정 흔적). 규칙에 verbatim evidence + intent 분류 포함.
+
+잔존 갭: skill 모드에서 evidence chain 이 비어 있음 (기계적 신호 레이어는 CLI 모드에서만 실행). 해결을 위해 사전 계산된 신호를 skill 모드 프롬프트에 주입하는 "A2 LLM distillation" 작업 중.
 
 ## Roadmap
 
@@ -169,7 +211,9 @@ examples/                              # 실제 분석 출력
 - ✅ **Phase 2 (확장)** — 10 카테고리, `--resume`, `diff` 서브커맨드, SessionDiff
 - ✅ **Phase 3a (품질)** — Few-shot 프롬프트, Critic 레이어, 콘텐츠 밀도 기반 선별
 - ✅ **Phase 3b (HarnessAI 통합)** — `scope` 필드 (cross_project / framework_internal / domain_specific), `harness-export` 서브커맨드, system-prompt 에 ✅/❌/ref 인라인
-- **Phase 4 (계획)** — Git 히스토리 마이닝, `design_decisions` 카테고리, RAG 통합
+- ✅ **Phase 4a (결정 마이닝)** — Git 히스토리 + PR 토론 + commit body 마이닝. 모듈: `archaeology`, `exemplars` (G1), `style_fingerprint` (G2), `test_decisions` (B), `pr_decisions` (A1), commit 결정 패턴 마이닝 (C).
+- ✅ **Phase 4b (검증 강화, 2026-05-05)** — 레이어 감지 false-positive 가드, 파일 selector docs_src 강등 + truncate-aware 정렬, 규칙 추출 cargo-cult 가드, MUST 자동 캘리브레이션 lint, persistent fetch 캐시.
+- **Phase 4c (계획)** — A2 LLM distillation (기계적 신호를 skill 모드 프롬프트에 주입해 evidence chain 채우기), ORM-aware 레이어 감지, 언어 확장 (Go/Rust).
 
 ## 개발
 
@@ -181,4 +225,4 @@ MIT — [LICENSE](LICENSE) 참조.
 
 ## 배경
 
-harnessai + gstack 워크플로우 (계획 → 구현 → 검증 → 리뷰 루프) 로 개발. 점진적 커밋, 227 passing tests, 4 레포에 도그푸딩 + 품질 진화 기록. Phase 3b 에서 scope 태그 + `harness-export` 추가로 추출된 스타일을 HarnessAI 프로젝트에 round-trip 가능. 상세 설계 문서: [`backend/docs/skeleton.md`](backend/docs/skeleton.md).
+harnessai + gstack 워크플로우 (계획 → 구현 → 검증 → 리뷰 루프) 로 개발. 점진적 커밋, 783 passing tests, 4 레포에 도그푸딩 + 품질 진화 기록. Phase 4b 에서 selector 강화, cargo-cult 가드, MUST 자동 캘리브레이션 lint, persistent fetch 캐시 추가. 상세 설계 문서: [`backend/docs/skeleton.md`](backend/docs/skeleton.md).
