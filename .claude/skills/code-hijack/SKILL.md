@@ -40,13 +40,15 @@ import json, sys
 sys.path.insert(0, 'backend/src')
 from hijack.core.fetcher import fetch_source
 from hijack.core.preprocessor import build_preprocess_result, select_files_for_category
+from hijack.core.archaeology import extract_commit_decisions
 
 TARGET = '<TARGET>'
 CATEGORIES = ['architecture', 'coding_style', 'api_design']  # 또는 사용자 지정
 
-files, root = fetch_source(TARGET)
+files, root = fetch_source(TARGET, history_depth=10)  # depth=10 (default 3) — decision-pattern hit rate 가 낮은 commit history 에서 evidence 후보 surface
 pp = build_preprocess_result(files, root)
 selected = {cat: [f.path.as_posix() for f in select_files_for_category(pp, cat, max_files=12)] for cat in CATEGORIES}
+cd = extract_commit_decisions(files)
 
 print(json.dumps({
     'repo_root': root.as_posix(),
@@ -54,11 +56,12 @@ print(json.dumps({
     'by_layer': {k: len(v) for k, v in pp.by_layer.items()},
     'selected_per_category': selected,
     'project_structure': pp.project_structure,
+    'commit_decisions': cd.to_json() if cd.has_signal else None,
 }, indent=2, ensure_ascii=False))
 "
 ```
 
-위 JSON을 파싱해 각 카테고리의 선별 파일 목록을 얻는다.
+위 JSON을 파싱해 각 카테고리의 선별 파일 목록 + `commit_decisions` (있으면) 을 얻는다. `commit_decisions` 는 step 3.5 에서 evidence 채울 때 사용.
 
 ### 2. 카테고리별 파일 읽기 (Read tool)
 
@@ -78,8 +81,9 @@ print(json.dumps({
 - `ref_files`: 근거가 된 실제 파일 경로 + **라인 번호**. 형식: `"path.py:42"` 또는 범위 `"path.py:42-58"`. 라인 번호 없이 파일명만 쓰지 말 것.
 - `good_example`: ✅ `ref_files` 에서 **그대로 복사한 실제 코드** (3-10줄). 요약/paraphrase 금지.
 - `bad_example`: ❌ **실제 안티패턴 코드**. 주석으로 "이렇게 하면 안 됨" 설명 금지. 구체적 위반 코드 형태로.
-- `reason`: 이 규칙이 왜 존재하는지
+- `reason`: 이 규칙이 왜 존재하는지 (1문장 intent gist, ≤150자)
 - `layer`: `"frontend"` / `"backend"` / `"db"` / `"devops"` / `"shared"`
+- `evidence` (선택, 강력 권장): 시니어의 결정 흔적을 verbatim 인용. step 1 의 `commit_decisions` 에서 채움. step 3.5 참조. 못 채우면 `[]` + `reason` 에 `[no-evidence]` prefix.
 
 **good/bad_example 품질 기준 (critical):**
 
@@ -154,6 +158,68 @@ rule: "Multi-round-trip auth schemes (Digest, OAuth challenge) must be modeled a
 - `file_type_guides` (dict[str, str]): `{"model": "모델 파일 작성 시 지침...", ...}`
 - `checklist` (list[str]): 코드 제출 전 자체 검증 항목
 
+### 3.5. Evidence chain 채우기 (commit_decisions 활용)
+
+step 1 의 `commit_decisions` 가 `null` 이 아니면, 각 규칙의 `evidence` 필드를 시니어의 실제 commit 인용으로 채워라. **이게 이 도구의 핵심 차별점** — rule 의 reason 을 LLM 이 paraphrase 하는 게 아니라 시니어가 직접 쓴 commit body 를 verbatim 으로 surface 한다.
+
+**`commit_decisions.commits` 구조** (각 entry):
+- `sha` (12자), `subject`, `date` (ISO), `body_excerpt` (≤240자), `matched_patterns` (예: `["instead of", "decided to"]`), `file_paths` (이 commit 이 touch 한 파일들)
+
+**규칙 별 evidence 채우는 절차**:
+
+1. 룰의 `ref_files` 에 등장한 파일들 (`path:line` 의 path 부분만) 추출
+2. `commit_decisions.commits` 중 `file_paths` 와 교집합 있는 commit 들 필터
+3. 그 중 1-2 개 가장 관련도 높은 (matched_patterns 풍부 / body_excerpt 가 룰의 의도와 맞는) commit 선택
+4. evidence entry 생성:
+
+```json
+{
+  "kind": "commit",
+  "ref": "<sha[:7]>",
+  "headline": "<subject 그대로>",
+  "quote": "<body_excerpt 그대로, ≤500자>",
+  "intent_kind": "<아래 매핑 참조>"
+}
+```
+
+5. 매칭 commit 없으면 `evidence: []` 유지 + `reason` 앞에 `[no-evidence]` prefix
+
+**`intent_kind` 매핑** (matched_patterns → intent_kind):
+
+| matched_patterns 에 포함 | intent_kind |
+|---|---|
+| `rejected`, `abandoned`, `switched from` | `rejection` (시니어가 거절한 패턴) |
+| `reverted because` | `incident` (revert = 실제 실패 발생) |
+| `instead of`, `rather than`, `decided to`, `tried`, `considered`, `decided not to`, `originally...now`, `switched to` | `preference` (의식적 선택) |
+
+여러 패턴이 매치되면 가장 강한 것 우선: rejection > incident > preference. 모르면 `null`.
+
+**evidence-rich rule 예시**:
+
+```json
+{
+  "rule": "Multi-round-trip auth schemes must be modeled as a generator protocol yielding Request objects",
+  "priority": "MUST",
+  "ref_files": ["httpx/_auth.py:22-110"],
+  "good_example": "...",
+  "bad_example": "...",
+  "reason": "Decouple client transport from auth algorithm — proven by past Digest auth refactor.",
+  "layer": "shared",
+  "evidence": [{
+    "kind": "commit",
+    "ref": "a1b2c3d",
+    "headline": "Refactor Auth into generator-based flow",
+    "quote": "Originally Auth was a simple Callable[[Request], Request], but Digest needs the response of the first request to compute the second. Switched to generator protocol so multi-round schemes don't require Client-internal hooks.",
+    "intent_kind": "preference"
+  }]
+}
+```
+
+**가드레일**:
+- `quote` 는 반드시 verbatim. 요약/paraphrase 금지. 길면 `[…truncated]` 표시 후 잘라라.
+- SHA 만들지 마라. step 1 의 `commit_decisions.commits[*].sha` 에 있는 것만 사용.
+- 매칭 commit 없으면 evidence 비우고 [no-evidence] 명시. 거짓 evidence 만드는 게 빈 evidence 보다 훨씬 나쁨.
+
 ### 4. SessionResult 조립 + 저장 (Bash tool)
 
 분석 결과를 Python 데이터클래스로 조립해 `generator.write_output` 호출. 분석 내용을 inline Python 스크립트에 쓰지 말고, 임시 JSON 파일에 써서 로드하는 방식이 컨텍스트 효율적.
@@ -177,7 +243,7 @@ TARGET = '<TARGET>'
 OUTPUT = '<OUTPUT_DIR>'
 ANALYSIS = json.load(open('/tmp/analysis.json', encoding='utf-8'))
 
-files, root = fetch_source(TARGET)
+files, root = fetch_source(TARGET, attach_history=False)  # step 1 에서 이미 history 사용했음 — 재계산 skip
 pp = build_preprocess_result(files, root)
 
 categories = [
