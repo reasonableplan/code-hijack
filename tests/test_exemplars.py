@@ -431,6 +431,48 @@ class TypedInit:
         result = select_exemplars(files)
         assert result[0].why_chosen != ""
 
+    def test_max_per_file_caps_picks_from_dominant_file(self) -> None:
+        # A dominant file with 3 high-scoring candidates plus two other files
+        # should contribute at most max_per_file=2 exemplars, preventing one
+        # file from crowding out diversity across the repo.
+        dominant = GOOD_FUNCTION + "\n" + TYPED_CLASS + "\n" + LONG_FUNCTION
+        files = [
+            _sf(dominant, path="pkg/dominant.py", layer="backend"),
+            _sf(GOOD_FUNCTION, path="pkg/other1.py", layer="backend"),
+            _sf(TYPED_CLASS, path="pkg/other2.py", layer="backend"),
+        ]
+        result = select_exemplars(files, max_per_file=2, max_total=8, max_per_layer=8)
+        dominant_picks = sum(1 for e in result if e.file_path == "pkg/dominant.py")
+        assert dominant_picks <= 2
+
+    def test_max_per_file_default_is_two(self) -> None:
+        # Without an explicit max_per_file, the default of 2 must hold — same
+        # setup as above but relying solely on the default parameter value.
+        dominant = GOOD_FUNCTION + "\n" + TYPED_CLASS + "\n" + LONG_FUNCTION
+        files = [
+            _sf(dominant, path="pkg/dominant.py", layer="backend"),
+            _sf(GOOD_FUNCTION, path="pkg/other1.py", layer="backend"),
+            _sf(TYPED_CLASS, path="pkg/other2.py", layer="backend"),
+        ]
+        result = select_exemplars(files, max_total=8, max_per_layer=8)
+        dominant_picks = sum(1 for e in result if e.file_path == "pkg/dominant.py")
+        assert dominant_picks <= 2
+
+    def test_skips_paths_with_private_dir_component(self) -> None:
+        # Any file whose directory path contains an underscore-prefixed
+        # component (Python path-private convention) must be excluded entirely.
+        files = [_sf(GOOD_FUNCTION, path="pkg/_internal/helpers.py")]
+        result = select_exemplars(files)
+        assert result == []
+
+    def test_does_not_skip_dunder_init_filename(self) -> None:
+        # A file named __init__.py at a public path should NOT be skipped —
+        # only directory components are checked, not the filename itself.
+        # This guards the `path.parent.parts` vs full-path distinction.
+        files = [_sf(GOOD_FUNCTION, path="pkg/__init__.py")]
+        result = select_exemplars(files)
+        assert len(result) == 1
+
 
 # ---------------------------------------------------------------------------
 # render_exemplars_md

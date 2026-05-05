@@ -279,6 +279,18 @@ def _is_excluded_path(path: Path) -> bool:
     )
 
 
+def _has_private_dir_component(path: Path) -> bool:
+    """Return True if any directory component starts with underscore.
+
+    Python convention treats `_internal/`, `_private/` etc. as path-private —
+    not part of the public API. Surfacing exemplars from these directories
+    contradicts the goal of capturing canonical senior style. The filename
+    itself is not checked — private functions inside public modules are
+    already weighted down by `_score_public`.
+    """
+    return any(p.startswith("_") for p in path.parent.parts)
+
+
 def _file_subdir(file_path: str) -> str:
     """Return the directory component of a posix-style relative path.
 
@@ -321,6 +333,9 @@ def _extract_candidates(sf: SourceFile) -> list[_Candidate]:
         return []
 
     if _is_excluded_path(sf.path):
+        return []
+
+    if _has_private_dir_component(sf.path):
         return []
 
     content = sf.content
@@ -395,6 +410,7 @@ def select_exemplars(
     *,
     max_total: int = 8,
     max_per_layer: int = 4,
+    max_per_file: int = 2,
     repo_root: Path | None = None,
 ) -> list[Exemplar]:
     """Pick 6-9 representative functions/classes across layers.
@@ -404,7 +420,8 @@ def select_exemplars(
     then selects across three passes:
 
     1. Pass 1 — top by score, capped at `max_per_layer` for diversity in
-       multi-layer repos (frontend/backend/db split).
+       multi-layer repos (frontend/backend/db split). At most `max_per_file`
+       picks come from any single file across all passes.
     2. Pass 2a — fill remaining slots preferring candidates from
        subdirectories not yet represented. Surfaces e.g. fastapi/security/
        even when fastapi/ root has higher absolute scores.
@@ -432,6 +449,7 @@ def select_exemplars(
     all_candidates.sort(key=lambda c: c.score, reverse=True)
 
     layer_counts: dict[str, int] = {}
+    file_counts: dict[str, int] = {}
     selected: list[Exemplar] = []
     picked: set[tuple[str, int, str]] = set()
     seen_buckets: set[tuple[str, str]] = set()
@@ -464,8 +482,11 @@ def select_exemplars(
             continue
         if layer_counts.get(cand.layer, 0) >= max_per_layer:
             continue
+        if file_counts.get(cand.file_path, 0) >= max_per_file:
+            continue
         seen_buckets.add(bucket)
         layer_counts[cand.layer] = layer_counts.get(cand.layer, 0) + 1
+        file_counts[cand.file_path] = file_counts.get(cand.file_path, 0) + 1
         key = (cand.file_path, cand.start_line, cand.name)
         picked.add(key)
         selected.append(_make_exemplar(cand))
@@ -480,7 +501,10 @@ def select_exemplars(
                 continue
             if layer_counts.get(cand.layer, 0) >= max_per_layer:
                 continue
+            if file_counts.get(cand.file_path, 0) >= max_per_file:
+                continue
             layer_counts[cand.layer] = layer_counts.get(cand.layer, 0) + 1
+            file_counts[cand.file_path] = file_counts.get(cand.file_path, 0) + 1
             picked.add(key)
             selected.append(_make_exemplar(cand))
 
@@ -494,6 +518,9 @@ def select_exemplars(
             key = (cand.file_path, cand.start_line, cand.name)
             if key in picked:
                 continue
+            if file_counts.get(cand.file_path, 0) >= max_per_file:
+                continue
+            file_counts[cand.file_path] = file_counts.get(cand.file_path, 0) + 1
             picked.add(key)
             selected.append(_make_exemplar(cand))
 
