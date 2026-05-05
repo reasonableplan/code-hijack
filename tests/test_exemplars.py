@@ -239,6 +239,14 @@ class TestSelectExemplars:
         result = select_exemplars(files)
         assert result == []
 
+    def test_skips_files_in_tools_dir(self) -> None:
+        # `tools/` typically holds dev/build/CI utilities (code generators,
+        # release scripts). Exposed by SQLAlchemy where tools/toxnox.py
+        # outscored real library APIs.
+        files = [_sf(GOOD_FUNCTION, path="tools/generate_proxy_methods.py")]
+        result = select_exemplars(files)
+        assert result == []
+
     def test_skips_files_in_github_dir(self) -> None:
         # .github/ holds CI workflow scripts and automation, not library code.
         files = [_sf(GOOD_FUNCTION, path=".github/actions/people/people.py")]

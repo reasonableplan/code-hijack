@@ -32,6 +32,12 @@ _EXCLUDED_PATH_PREFIXES: tuple[str, ...] = (
     "docs/",
     "docs_src/",
     "scripts/",
+    # `tools/` typically holds dev/build/CI utilities (code generators, file
+    # formatters, release scripts) — not senior library code. Exposed by
+    # SQLAlchemy where `tools/toxnox.py` etc. would otherwise outscore real
+    # library APIs. Repos that put library code under tools/ are rare enough
+    # that the false-negative is preferable to the false-positive.
+    "tools/",
     "examples/",
     "examples_src/",
     "tutorial/",
