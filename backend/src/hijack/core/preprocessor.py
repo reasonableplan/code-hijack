@@ -13,6 +13,30 @@ _MIN_MEANINGFUL_CHARS = 500
 _MAX_NEAR_DUPLICATES_PER_PATTERN = 2
 _DIGIT_RE = re.compile(r"\d+")
 
+_AUXILIARY_PATH_PREFIXES: tuple[str, ...] = (
+    "docs_src/",
+    "docs/",
+    "examples/",
+    "example/",
+    "tutorial/",
+    "tutorials/",
+    "samples/",
+    "sample/",
+    "demos/",
+    "demo/",
+    "scripts/",
+)
+
+
+def _is_auxiliary(rel: Path) -> bool:
+    """라이브러리 핵심이 아닌 보조 경로 (튜토리얼/예제/문서/스크립트) 인지 판정.
+
+    선별 시 같은 점수의 파일이 있을 때 후순위로 demote 해서 라이브러리 코어가
+    예제 코드에 밀려 빠지는 것을 방지한다.
+    """
+    p = rel.as_posix()
+    return any(p.startswith(prefix) for prefix in _AUXILIARY_PATH_PREFIXES)
+
 # ---------------------------------------------------------------------------
 # Category → preferred roles mapping
 # ---------------------------------------------------------------------------
@@ -91,33 +115,42 @@ def select_files_for_category(
     선별 규칙:
     1. 역할 우선순위에 따라 후보 수집
     2. 역할 내에서 콘텐츠 밀도로 정렬 (얕은 재-export 파일 뒤로)
-    3. Near-duplicate (숫자만 다른 경로) 중복 제거 — 최대 2개만
+    3. 보조 경로 (docs_src/, examples/, ...) 는 라이브러리 소스 뒤로 demote —
+       라이브러리 코어가 docs/예제 코드에 밀려서 선별에서 빠지는 것 방지
+    4. Near-duplicate (숫자만 다른 경로) 중복 제거 — 최대 2개만
     """
     preferred = _CATEGORY_ROLES.get(category, _DEFAULT_ROLES)
-    candidates: list[SourceFile] = []
+    ordered: list[SourceFile] = []
     seen: set[str] = set()
 
-    for role in preferred:
-        role_files = sorted(result.by_role.get(role, []), key=_content_rank_key)
-        for f in role_files:
-            key = f.path.as_posix()
-            if key not in seen:
-                seen.add(key)
-                candidates.append(f)
-
-    for f in result.files:
+    def _add(f: SourceFile) -> None:
         key = f.path.as_posix()
         if key not in seen:
             seen.add(key)
-            candidates.append(f)
+            ordered.append(f)
 
-    deduped = _dedupe_near_duplicates(candidates)
+    for role in preferred:
+        for f in sorted(result.by_role.get(role, []), key=_content_rank_key):
+            _add(f)
+
+    for f in result.files:
+        _add(f)
+
+    primary = [f for f in ordered if not _is_auxiliary(f.path)]
+    auxiliary = [f for f in ordered if _is_auxiliary(f.path)]
+
+    deduped = _dedupe_near_duplicates(primary + auxiliary)
     return deduped[:max_files]
 
 
 def _content_rank_key(f: SourceFile) -> tuple[bool, int]:
-    """콘텐츠가 적은 파일을 뒤로 보내는 정렬 키. (얕음 flag, -크기)."""
-    size = len(f.content)
+    """콘텐츠가 적은 파일을 뒤로 보내는 정렬 키.
+
+    truncate 된 파일도 raw 원본 크기 기준으로 점수를 매겨, 시그니처만 남아
+    짧아진 상태로 후순위 밀리는 문제 방지.
+    original_chars=0 (default, 테스트 fixture 등) 은 기존처럼 len(content) fallback.
+    """
+    size = f.original_chars or len(f.content)
     shallow = size < _MIN_MEANINGFUL_CHARS
     return (shallow, -size)
 

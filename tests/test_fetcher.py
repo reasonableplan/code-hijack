@@ -88,6 +88,51 @@ class TestDetectLayer:
         fp, root = self._make(tmp_path, "flask/app.py")
         assert detect_layer(fp, root, set(), set()) == "backend"
 
+    def test_client_dir_with_no_fe_context_is_not_frontend(self, tmp_path):
+        """httpx 같은 HTTP client 라이브러리: tests/client/test_x.py 는 frontend 아님."""
+        fp, root = self._make(tmp_path, "tests/client/test_x.py")
+        assert detect_layer(fp, root, set(), set()) == "shared"
+
+    def test_client_dir_with_fe_deps_is_frontend(self, tmp_path):
+        """진짜 web client 코드: client/ + react dep → frontend."""
+        fp, root = self._make(tmp_path, "client/index.ts")
+        assert detect_layer(fp, root, {"react"}, set()) == "frontend"
+
+    def test_client_dir_with_package_json_is_frontend(self, tmp_path):
+        """client/ + package.json 존재 → frontend."""
+        (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+        fp, root = self._make(tmp_path, "client/app.ts")
+        assert detect_layer(fp, root, set(), set()) == "frontend"
+
+    def test_models_dir_with_no_orm_context_is_not_db(self, tmp_path):
+        """httpx 같은 도메인 모델: models/ 만으로 db 분류 X."""
+        fp, root = self._make(tmp_path, "tests/models/test_url.py")
+        assert detect_layer(fp, root, set(), set()) == "shared"
+
+    def test_models_dir_with_sqlalchemy_dep_is_db(self, tmp_path):
+        """models/ + sqlalchemy dep → db."""
+        fp, root = self._make(tmp_path, "src/models/user.py")
+        assert detect_layer(fp, root, set(), {"sqlalchemy"}) == "db"
+
+    def test_models_dir_with_migrations_present_is_db(self, tmp_path):
+        """models/ + migrations/ 디렉토리 존재 → db (django 류)."""
+        (tmp_path / "migrations").mkdir()
+        fp, root = self._make(tmp_path, "app/models/user.py")
+        # migrations 존재 = ORM 컨텍스트, app/ 은 weak frontend dir 인데
+        # FE 컨텍스트 없으니 frontend X, models/ + ORM 컨텍스트 → db
+        assert detect_layer(fp, root, set(), set()) == "db"
+
+    def test_app_dir_no_fe_context_falls_through(self, tmp_path):
+        """Flask 류 app/: FE 컨텍스트 없으면 frontend 아님."""
+        fp, root = self._make(tmp_path, "app/views.py")
+        # FE 컨텍스트 없음, backend dep 없음 → shared
+        assert detect_layer(fp, root, set(), set()) == "shared"
+
+    def test_app_dir_with_flask_dep_is_backend(self, tmp_path):
+        """app/ + flask dep → backend (Flask 컨벤션)."""
+        fp, root = self._make(tmp_path, "app/views.py")
+        assert detect_layer(fp, root, set(), {"flask"}) == "backend"
+
 
 # ---------------------------------------------------------------------------
 # _read_file_content tests
@@ -98,21 +143,21 @@ class TestReadFileContent:
         f = tmp_path / "small.py"
         content = "print('hello')\n" * 10
         f.write_text(content, encoding="utf-8")
-        result = _read_file_content(f)
+        result, original_chars = _read_file_content(f)
         assert result == content
 
     def test_exactly_2000_lines_returns_full(self, tmp_path):
         f = tmp_path / "exact.py"
         content = "x = 1\n" * 2000
         f.write_text(content, encoding="utf-8")
-        result = _read_file_content(f)
+        result, original_chars = _read_file_content(f)
         assert result == content
 
     def test_over_2000_lines_returns_truncated(self, tmp_path):
         f = tmp_path / "large.py"
         lines = ["import os\n"] + ["x = 1\n"] * 2001
         f.write_text("".join(lines), encoding="utf-8")
-        result = _read_file_content(f)
+        result, original_chars = _read_file_content(f)
         assert "[TRUNCATED:" in result
         assert "import os" in result
 
@@ -121,13 +166,31 @@ class TestReadFileContent:
         body = "    pass\n" * 1999
         content = "def my_function():\n" + body + "x = 1\n"
         f.write_text(content, encoding="utf-8")
-        result = _read_file_content(f)
+        result, original_chars = _read_file_content(f)
         assert "def my_function" in result
 
     def test_missing_file_returns_empty(self, tmp_path):
         f = tmp_path / "nonexistent.py"
-        result = _read_file_content(f)
+        result, original_chars = _read_file_content(f)
         assert result == ""
+
+    def test_read_file_returns_original_chars_for_small_file(self, tmp_path):
+        f = tmp_path / "small.py"
+        text = "print('hello')\n" * 10
+        f.write_text(text, encoding="utf-8")
+        content, original = _read_file_content(f)
+        assert content == text
+        assert original == len(text)
+
+    def test_read_file_returns_original_chars_for_truncated_file(self, tmp_path):
+        f = tmp_path / "huge.py"
+        # import 1줄 + 일반 할당 2999줄: 시그니처 추출 후 content 는 훨씬 짧아짐
+        raw = "import sys\n" + "x = 1\n" * 2999  # > _MAX_LINES (2000) 줄
+        f.write_text(raw, encoding="utf-8")
+        content, original = _read_file_content(f)
+        assert "[TRUNCATED" in content
+        assert original == len(raw)  # truncate 와 무관하게 원본 크기
+        assert original > len(content)  # 본문은 잘렸어야 함
 
 
 # ---------------------------------------------------------------------------

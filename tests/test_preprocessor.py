@@ -205,3 +205,101 @@ class TestNearDuplicateDedup:
         assert "cli/main.py" in paths
         apps_count = sum(1 for p in paths if p.startswith("apps/"))
         assert apps_count == 2
+
+
+class TestAuxiliaryDemote:
+    def test_auxiliary_paths_demoted_below_library_source(self) -> None:
+        """docs_src/ 의 main.py 가 fastapi/applications.py 같은 코어 파일을 밀어내면 안 된다."""
+        files = [
+            # 보조 경로 entry_point 들 (실 fastapi 패턴 모방)
+            _make_file("docs_src/bigger_applications/app/main.py", role="entry_point"),
+            _make_file("docs_src/settings/app02/main.py", role="entry_point"),
+            _make_file("docs_src/security/app01/main.py", role="entry_point"),
+            # 라이브러리 코어 (role="other" 라서 원래 entry_point 뒤로 밀림)
+            _make_file("fastapi/applications.py", role="other"),
+            _make_file("fastapi/routing.py", role="api"),
+        ]
+        result = _make_result(files)
+        selected = select_files_for_category(result, "architecture", max_files=3)
+        paths = [f.path.as_posix() for f in selected]
+        # 라이브러리 코어 (fastapi/) 가 docs_src/ 보다 앞서야 함
+        assert "fastapi/applications.py" in paths
+        assert "fastapi/routing.py" in paths
+        # docs_src/ 가 budget 안에 있다면 코어 뒤에만
+        library_indices = [i for i, p in enumerate(paths) if p.startswith("fastapi/")]
+        aux_indices = [i for i, p in enumerate(paths) if p.startswith("docs_src/")]
+        if library_indices and aux_indices:
+            assert max(library_indices) < min(aux_indices), \
+                f"보조 경로가 코어보다 앞: {paths}"
+
+    def test_auxiliary_only_repo_still_returned(self) -> None:
+        """라이브러리 코어가 없고 docs_src/ 만 있으면 fallback 으로 그대로 반환."""
+        files = [
+            _make_file("docs_src/a/main.py", role="entry_point"),
+            _make_file("docs_src/b/main.py", role="entry_point"),
+        ]
+        result = _make_result(files)
+        selected = select_files_for_category(result, "architecture", max_files=10)
+        assert len(selected) == 2
+        assert all(f.path.as_posix().startswith("docs_src/") for f in selected)
+
+    def test_auxiliary_fills_remaining_budget(self) -> None:
+        """라이브러리 코어가 budget 보다 적으면 docs_src/ 가 나머지 채움."""
+        files = [
+            _make_file("fastapi/applications.py", role="other"),
+            _make_file("docs_src/a/main.py", role="entry_point"),
+            _make_file("docs_src/b/main.py", role="entry_point"),
+        ]
+        result = _make_result(files)
+        selected = select_files_for_category(result, "architecture", max_files=10)
+        paths = [f.path.as_posix() for f in selected]
+        assert paths[0] == "fastapi/applications.py"
+        # 나머지는 docs_src
+        assert all(p.startswith("docs_src/") for p in paths[1:])
+
+    def test_examples_dir_also_auxiliary(self) -> None:
+        """examples/ 도 보조 경로로 demote."""
+        files = [
+            _make_file("examples/quickstart/main.py", role="entry_point"),
+            _make_file("mylib/core.py", role="other"),
+        ]
+        result = _make_result(files)
+        selected = select_files_for_category(result, "architecture", max_files=10)
+        paths = [f.path.as_posix() for f in selected]
+        assert paths[0] == "mylib/core.py"
+        assert paths[1] == "examples/quickstart/main.py"
+
+
+class TestOriginalCharsRanking:
+    def test_truncated_large_file_ranked_above_full_small_file(self) -> None:
+        """truncate 된 큰 파일이 full 인 작은 파일보다 우선해야 한다."""
+        # truncate 된 큰 파일: content 는 짧지만 original_chars 는 큼
+        truncated_big = SourceFile(
+            path=Path("core.py"),
+            content="# [TRUNCATED: 4000 lines]\nimport x\n",  # ~30자
+            layer="backend",
+            role="api",
+            original_chars=150_000,  # 실제로는 거대
+        )
+        # full 작은 파일: content 자체가 그대로
+        full_small = SourceFile(
+            path=Path("compat.py"),
+            content="x" * 5000,
+            layer="backend",
+            role="api",
+            original_chars=5000,
+        )
+        result = _make_result([full_small, truncated_big])
+        selected = select_files_for_category(result, "architecture", max_files=10)
+        paths = [f.path.as_posix() for f in selected]
+        assert paths.index("core.py") < paths.index("compat.py"), \
+            f"truncate 된 큰 파일이 full 작은 파일보다 앞이어야 함: {paths}"
+
+    def test_legacy_zero_original_chars_falls_back_to_content_len(self) -> None:
+        """original_chars=0 (default) 인 fixture 는 기존처럼 len(content) 로 정렬."""
+        big = SourceFile(path=Path("a.py"), content="x" * 3000, layer="backend", role="api")
+        small = SourceFile(path=Path("b.py"), content="x" * 100, layer="backend", role="api")
+        result = _make_result([small, big])
+        selected = select_files_for_category(result, "architecture", max_files=10)
+        paths = [f.path.as_posix() for f in selected]
+        assert paths.index("a.py") < paths.index("b.py")

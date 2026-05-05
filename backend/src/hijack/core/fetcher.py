@@ -41,6 +41,48 @@ class SourceFile:
     layer: str      # "frontend"|"backend"|"db"|"devops"|"shared"
     role: str       # "entry_point"|"model"|"api"|"test"|"config"|"service"|"other"
     history: FileHistory | None = None  # git archaeology — None when unavailable
+    original_chars: int = 0  # truncate 전 원본 파일 문자 수 (0 = fallback to len(content))
+
+
+# ---------------------------------------------------------------------------
+# Layer detection helpers
+# ---------------------------------------------------------------------------
+
+_FE_FRAMEWORK_DEPS = frozenset({"react", "vue", "svelte", "next", "nuxt"})
+
+
+def _has_frontend_context(repo_root: Path, package_json_deps: set[str]) -> bool:
+    """레포가 프론트엔드 프로젝트인지 시그널 검사."""
+    if _FE_FRAMEWORK_DEPS & package_json_deps:
+        return True
+    return bool((repo_root / "package.json").exists())
+
+
+_PY_ORM_DEPS = frozenset({
+    "sqlalchemy", "django", "peewee", "tortoise-orm",
+    "sqlmodel", "pony", "mongoengine", "alembic",
+})
+_JS_ORM_DEPS = frozenset({
+    "prisma", "typeorm", "sequelize", "mongoose",
+    "drizzle-orm", "knex",
+})
+
+
+def _has_orm_context(
+    repo_root: Path,
+    pyproject_deps: set[str],
+    package_json_deps: set[str],
+) -> bool:
+    """레포가 ORM/DB 를 쓰는지 시그널 검사."""
+    if _PY_ORM_DEPS & pyproject_deps:
+        return True
+    if _JS_ORM_DEPS & package_json_deps:
+        return True
+    if (repo_root / "migrations").exists():
+        return True
+    if (repo_root / "prisma").exists():
+        return True
+    return bool((repo_root / "alembic").exists())
 
 
 # ---------------------------------------------------------------------------
@@ -63,33 +105,48 @@ def detect_layer(
     if suffix in {".tsx", ".jsx"}:
         return "frontend"
 
-    # 2. rel 경로에 프론트엔드 디렉토리 포함 → frontend
-    _frontend_dirs = {"frontend/", "client/", "web/", "app/", "ui/", "components/"}
-    if any(d in rel_posix for d in _frontend_dirs):
+    # 2. STRONG frontend dirs → frontend (컨텍스트 불문)
+    _frontend_strong = {"frontend/", "ui/", "components/"}
+    if any(d in rel_posix for d in _frontend_strong):
         return "frontend"
 
-    # 3. package_json_deps에 프론트엔드 프레임워크 AND suffix .ts → frontend
-    _fe_frameworks = {"react", "vue", "svelte", "next", "nuxt"}
-    if _fe_frameworks & package_json_deps and suffix == ".ts":
+    # 3. WEAK frontend dirs → FE 컨텍스트 있을 때만 frontend
+    _frontend_weak = {"client/", "web/", "app/"}
+    if any(d in rel_posix for d in _frontend_weak) and _has_frontend_context(
+        repo_root, package_json_deps
+    ):
         return "frontend"
 
-    # 4. .sql / .prisma → db
+    # 4. package_json_deps에 프론트엔드 프레임워크 AND suffix .ts → frontend
+    if _FE_FRAMEWORK_DEPS & package_json_deps and suffix == ".ts":
+        return "frontend"
+
+    # 5. .sql / .prisma → db
     if suffix in {".sql", ".prisma"}:
         return "db"
 
-    # 5. rel에 DB 관련 디렉토리 AND suffix .py/.ts → db
-    _db_dirs = {"migrations/", "schemas/", "prisma/", "models/"}
-    if any(d in rel_posix for d in _db_dirs) and suffix in {".py", ".ts"}:
+    # 6. STRONG db dirs → db (컨텍스트 불문)
+    _db_strong = {"migrations/", "prisma/"}
+    if any(d in rel_posix for d in _db_strong) and suffix in {".py", ".ts"}:
         return "db"
 
-    # 6. Dockerfile 또는 devops 디렉토리 → devops
+    # 7. WEAK db dirs → ORM 컨텍스트 있을 때만 db
+    _db_weak = {"schemas/", "models/"}
+    if (
+        any(d in rel_posix for d in _db_weak)
+        and suffix in {".py", ".ts"}
+        and _has_orm_context(repo_root, pyproject_deps, package_json_deps)
+    ):
+        return "db"
+
+    # 8. Dockerfile 또는 devops 디렉토리 → devops
     if name == "Dockerfile" or any(d in rel_posix for d in {".github/", "k8s/", "terraform/"}):
         return "devops"
 
-    # 7. .py AND backend signal → backend
-    #   7a: backend 디렉토리 (프로젝트가 fastapi 를 import)
-    #   7b: pyproject 가 fastapi/django/flask 를 dep 로 선언
-    #   7c: 첫 경로 세그먼트가 backend 프레임워크 이름 — 프레임워크 자기 소스 레포 대응
+    # 9. .py AND backend signal → backend
+    #   9a: backend 디렉토리
+    #   9b: pyproject 가 fastapi/django/flask 를 dep 로 선언
+    #   9c: 첫 경로 세그먼트가 backend 프레임워크 이름 — 프레임워크 자기 소스 레포 대응
     #       (예: fastapi 레포의 `fastapi/applications.py`, django 레포의 `django/core/...`)
     _backend_dirs = {"backend/", "server/", "api/", "routes/"}
     _backend_frameworks = {"fastapi", "django", "flask"}
@@ -101,7 +158,7 @@ def detect_layer(
     ):
         return "backend"
 
-    # 8. 나머지 → shared
+    # 10. 나머지 → shared
     return "shared"
 
 
@@ -109,16 +166,22 @@ def detect_layer(
 # File content reader
 # ---------------------------------------------------------------------------
 
-def _read_file_content(path: Path) -> str:
-    """2000줄 이하이면 전체, 초과이면 핵심 부분만 추출한다."""
+def _read_file_content(path: Path) -> tuple[str, int]:
+    """2000줄 이하이면 전체, 초과이면 핵심 부분만 추출한다.
+
+    Returns (processed_content, original_char_count). original_char_count 는
+    truncate 여부와 상관없이 raw 파일 크기로, 선별 알고리즘이 truncate 후
+    크기로 정렬하다 핵심 파일을 후순위로 밀어버리는 것을 방지하는 용.
+    """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return ""
+        return "", 0
 
+    original = len(text)
     lines = text.splitlines(keepends=True)
     if len(lines) <= _MAX_LINES:
-        return text
+        return text, original
 
     # 핵심 부분 추출: import 문, 클래스/함수 시그니처, 데코레이터, docstring 첫 줄
     _sig_pattern = re.compile(
@@ -155,7 +218,7 @@ def _read_file_content(path: Path) -> str:
                     in_docstring = True
 
     header = f"# [TRUNCATED: {len(lines)} lines → key signatures only]\n"
-    return header + "".join(extracted)
+    return header + "".join(extracted), original
 
 
 # ---------------------------------------------------------------------------
@@ -283,10 +346,13 @@ def fetch_source(
     files: list[SourceFile] = []
     for abs_path in collected:
         rel = abs_path.relative_to(repo_root)
-        content = _read_file_content(abs_path)
+        content, original_chars = _read_file_content(abs_path)
         layer = detect_layer(abs_path, repo_root, package_json_deps, pyproject_deps)
         role = _detect_role(rel)
-        files.append(SourceFile(path=rel, content=content, layer=layer, role=role))
+        files.append(SourceFile(
+            path=rel, content=content, layer=layer, role=role,
+            original_chars=original_chars,
+        ))
 
     # 6. Attach git history (best-effort; skipped when not in a git repo).
     if attach_history:
