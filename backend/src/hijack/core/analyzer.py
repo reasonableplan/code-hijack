@@ -351,6 +351,11 @@ async def run_full_analysis(
     from hijack.core.style_fingerprint import extract_style
     style_fingerprints = extract_style(files)
 
+    # Phase B — test-suite defensive signals: parametrize edge cases, test name
+    # themes, and pytest.raises groups. Pure AST pass over test files only.
+    from hijack.core.test_decisions import extract_test_decisions
+    test_decisions = extract_test_decisions(files)
+
     category_results: list[CategoryResult] = []
     for category in categories:
         result = await _analyze_category(
@@ -382,6 +387,7 @@ async def run_full_analysis(
         repo_doc_paths=sorted(valid_doc_paths),
         exemplars=exemplars,
         style_fingerprints=style_fingerprints,
+        test_decisions=test_decisions,
     )
 
     if critic and any(c.rules for c in category_results):

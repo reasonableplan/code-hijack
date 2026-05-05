@@ -412,6 +412,12 @@ def _write_integrated_files(result: SessionResult, integrated_dir: Path) -> None
         if md:
             (integrated_dir / "exemplars.md").write_text(md, encoding="utf-8")
 
+    if result.test_decisions is not None and result.test_decisions.has_signal:
+        from hijack.core.test_decisions import render_tests_distilled_md
+        md = render_tests_distilled_md(result.test_decisions, source_target=result.target)
+        if md:
+            (integrated_dir / "tests-distilled.md").write_text(md, encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers

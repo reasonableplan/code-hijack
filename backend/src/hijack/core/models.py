@@ -189,9 +189,14 @@ class SessionResult:
     # files to fingerprint catalog versions.
     # dict[str, StyleFingerprint] — typed as Any to avoid circular import.
     style_fingerprints: dict[str, Any] = field(default_factory=dict)
+    # Test-suite defensive signals (Phase B): parametrize edge cases, test name
+    # themes, and pytest.raises groups. Populated by extract_test_decisions()
+    # in run_full_analysis(). None for older sessions or repos with no test files.
+    # TestDecisions | None — typed as Any to avoid circular import.
+    test_decisions: Any | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "session_id": self.session_id,
             "target": self.target,
             "model": self.model,
@@ -205,10 +210,17 @@ class SessionResult:
             "repo_doc_paths": self.repo_doc_paths,
             "exemplars": [e.to_json() for e in self.exemplars],
         }
+        if self.test_decisions is not None:
+            result["test_decisions"] = self.test_decisions.to_json()
+        return result
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> SessionResult:
         from hijack.core.exemplars import Exemplar  # local import to avoid circular
+        test_decisions = None
+        if "test_decisions" in data and data["test_decisions"] is not None:
+            from hijack.core.test_decisions import TestDecisions
+            test_decisions = TestDecisions.from_json(data["test_decisions"])
         return cls(
             session_id=data["session_id"],
             target=data["target"],
@@ -222,4 +234,5 @@ class SessionResult:
             historic_shas=data.get("historic_shas", []),
             repo_doc_paths=data.get("repo_doc_paths", []),
             exemplars=[Exemplar.from_json(e) for e in data.get("exemplars", [])],
+            test_decisions=test_decisions,
         )

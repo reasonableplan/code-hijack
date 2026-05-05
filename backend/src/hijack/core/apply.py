@@ -16,6 +16,7 @@ from hijack.core.target_stack import TargetStack, detect_target_stack
 
 if TYPE_CHECKING:
     from hijack.core.exemplars import Exemplar
+    from hijack.core.test_decisions import TestDecisions
 
 # ---------------------------------------------------------------------------
 # Framework relationship maps
@@ -169,6 +170,9 @@ class ApplyResult:
     # Exemplars from the senior session, passed through for downstream rendering.
     # Empty when the source session had no exemplars (pre-G1 or non-Python repos).
     exemplars: list[Exemplar] = field(default_factory=list)
+    # Test-suite decisions (Phase B): edge cases, name themes, raises groups.
+    # None when the source session predates Phase B or had no test files.
+    test_decisions: TestDecisions | None = None
 
 
 def apply_session_to_target(
@@ -223,6 +227,7 @@ def apply_session_to_target(
         total_input_rules=total,
         summary=summary,
         exemplars=list(session.exemplars),
+        test_decisions=session.test_decisions,
     )
 
 
@@ -349,6 +354,31 @@ def render_applied_md(result: ApplyResult, *, source_target: str) -> str:
             # line after the blockquote preamble) so rendering nests cleanly.
             in_preamble = True
             for line in exemplar_lines:
+                if in_preamble:
+                    if line.startswith("#"):
+                        continue
+                    if line.startswith(">"):
+                        continue
+                    if line == "":
+                        in_preamble = False
+                        continue
+                lines.append(line)
+
+    if result.test_decisions is not None and result.test_decisions.has_signal:
+        from hijack.core.test_decisions import render_tests_distilled_md
+        td_md = render_tests_distilled_md(
+            result.test_decisions, source_target=source_target
+        )
+        if td_md:
+            lines += [
+                "",
+                "## Tests Distilled (defensive patterns from the senior test suite)",
+                "",
+            ]
+            # Same preamble-stripping pattern as exemplars: drop the H1 +
+            # blockquote so the rendered block nests under the H2 above.
+            in_preamble = True
+            for line in td_md.splitlines():
                 if in_preamble:
                     if line.startswith("#"):
                         continue

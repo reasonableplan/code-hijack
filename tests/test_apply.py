@@ -533,3 +533,85 @@ class TestExemplarsInApply:
         md = render_applied_md(result, source_target="senior-repo")
         assert "```python" in md
         assert "my_handler" in md
+
+    def test_apply_session_carries_test_decisions_to_result(self, tmp_path: Path) -> None:
+        # Phase B: TestDecisions on the source session must surface on the
+        # ApplyResult so render_applied_md can inline the tests-distilled section.
+        from hijack.core.test_decisions import NameTheme, TestDecisions
+        td = TestDecisions(
+            edge_cases=[],
+            name_themes=[
+                NameTheme(
+                    verb="handles",
+                    subject="empty",
+                    count=3,
+                    examples=["test_handles_empty"],
+                ),
+            ],
+            raises_groups=[],
+            test_file_count=5,
+        )
+        session = _session([])
+        session.test_decisions = td
+        result = apply_session_to_target(session, tmp_path)
+        assert result.test_decisions is td
+
+    def test_render_applied_md_includes_tests_distilled_section(self, tmp_path: Path) -> None:
+        from hijack.core.test_decisions import NameTheme, TestDecisions
+        td = TestDecisions(
+            edge_cases=[],
+            name_themes=[
+                NameTheme(
+                    verb="handles",
+                    subject="empty",
+                    count=3,
+                    examples=["test_handles_empty"],
+                ),
+            ],
+            raises_groups=[],
+            test_file_count=5,
+        )
+        stack = TargetStack(repo_root=tmp_path)
+        result = ApplyResult(
+            target_stack=stack,
+            by_verdict={"as_is": [], "adapted": [], "domain_adapt": [], "reference_only": []},
+            total_input_rules=0,
+            summary="Applied 0 rules.",
+            exemplars=[],
+            test_decisions=td,
+        )
+        md = render_applied_md(result, source_target="senior-repo")
+        assert "Tests Distilled" in md
+        assert "handles" in md
+        assert "test_handles_empty" in md
+
+    def test_render_applied_md_no_tests_section_when_no_signal(self, tmp_path: Path) -> None:
+        # has_signal=False: empty TestDecisions → section omitted entirely
+        # (caller doesn't render an empty header).
+        from hijack.core.test_decisions import TestDecisions
+        td = TestDecisions(edge_cases=[], name_themes=[], raises_groups=[], test_file_count=5)
+        stack = TargetStack(repo_root=tmp_path)
+        result = ApplyResult(
+            target_stack=stack,
+            by_verdict={"as_is": [], "adapted": [], "domain_adapt": [], "reference_only": []},
+            total_input_rules=0,
+            summary="Applied 0 rules.",
+            exemplars=[],
+            test_decisions=td,
+        )
+        md = render_applied_md(result, source_target="senior-repo")
+        assert "Tests Distilled" not in md
+
+    def test_render_applied_md_no_tests_section_when_none(self, tmp_path: Path) -> None:
+        # Pre-Phase-B sessions have test_decisions=None → no section rendered.
+        stack = TargetStack(repo_root=tmp_path)
+        result = ApplyResult(
+            target_stack=stack,
+            by_verdict={"as_is": [], "adapted": [], "domain_adapt": [], "reference_only": []},
+            total_input_rules=0,
+            summary="Applied 0 rules.",
+            exemplars=[],
+            test_decisions=None,
+        )
+        md = render_applied_md(result, source_target="senior-repo")
+        assert "Tests Distilled" not in md
