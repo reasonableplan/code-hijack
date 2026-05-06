@@ -5,6 +5,7 @@ from __future__ import annotations
 from hijack.core.evidence import (
     classify_rule,
     compute_evidence_metrics,
+    downgrade_speculative_rules,
     render_metrics_md,
 )
 from hijack.core.models import (
@@ -418,3 +419,86 @@ class TestRenderMetricsMd:
         )
         # Should not raise.
         json.dumps(m.to_json())
+
+
+# ---------------------------------------------------------------------------
+# downgrade_speculative_rules — auto MUST→SHOULD when not cited
+# ---------------------------------------------------------------------------
+
+class TestDowngradeSpeculativeRules:
+    def _must_rule(self, reason: str = "", evidence: list[Evidence] | None = None) -> AnalysisRule:
+        return AnalysisRule(
+            rule="x", priority="MUST", confidence="high",
+            ref_files=["a.py:1"], good_example="g", bad_example="b",
+            reason=reason, evidence=evidence or [],
+        )
+
+    def _should_rule(self, reason: str = "") -> AnalysisRule:
+        r = self._must_rule(reason=reason)
+        r.priority = "SHOULD"
+        return r
+
+    def test_cited_must_kept_via_evidence_field(self) -> None:
+        # Rule with verified Evidence entry stays MUST.
+        ev = [Evidence(kind="commit", ref="a1b2c3d", headline="h", quote="q")]
+        sess = _session({"arch": [self._must_rule(evidence=ev)]})
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 0
+        assert sess.categories[0].rules[0].priority == "MUST"
+
+    def test_cited_must_kept_via_reason_text(self) -> None:
+        # Pre-D1 path: reason mentions a commit SHA → cited → MUST kept.
+        sess = _session({"arch": [self._must_rule(reason="see commit a1b2c3d")]})
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 0
+        assert sess.categories[0].rules[0].priority == "MUST"
+
+    def test_no_evidence_must_downgraded(self) -> None:
+        sess = _session({"arch": [self._must_rule(reason="[no-evidence] generic stuff")]})
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 1
+        assert sess.categories[0].rules[0].priority == "SHOULD"
+
+    def test_generic_must_downgraded(self) -> None:
+        sess = _session({"arch": [self._must_rule(reason="this is best practice")]})
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 1
+        assert sess.categories[0].rules[0].priority == "SHOULD"
+
+    def test_other_must_downgraded(self) -> None:
+        # Reason has neither citation nor generic phrase → 'other' → downgrade.
+        sess = _session({"arch": [self._must_rule(reason="just because")]})
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 1
+        assert sess.categories[0].rules[0].priority == "SHOULD"
+
+    def test_should_untouched(self) -> None:
+        # Pre-existing SHOULD with no evidence — stays SHOULD, not counted.
+        sess = _session({"arch": [self._should_rule(reason="[no-evidence] foo")]})
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 0
+        assert sess.categories[0].rules[0].priority == "SHOULD"
+
+    def test_mixed_session_counts_only_downgraded(self) -> None:
+        # Two cats: one cited MUST + one no-evidence MUST + one SHOULD.
+        ev = [Evidence(kind="commit", ref="a1b2c3d", headline="h", quote="q")]
+        sess = _session({
+            "arch": [self._must_rule(evidence=ev), self._must_rule(reason="[no-evidence] x")],
+            "style": [self._should_rule(reason="[no-evidence] y")],
+        })
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 1
+        # Cited MUST kept, no-evidence MUST downgraded, original SHOULD untouched.
+        assert sess.categories[0].rules[0].priority == "MUST"
+        assert sess.categories[0].rules[1].priority == "SHOULD"
+        assert sess.categories[1].rules[0].priority == "SHOULD"
+
+    def test_fake_citation_must_downgraded(self) -> None:
+        # Evidence entry exists but the SHA isn't in the truth pool → fake_citation.
+        ev = [Evidence(kind="commit", ref="deadbeef", headline="h", quote="q")]
+        sess = _session({"arch": [self._must_rule(evidence=ev)]})
+        # Inject a non-matching truth pool so the SHA fails verification.
+        sess.historic_shas = ["a1b2c3d4e5f6789012345678901234567890abcd"]
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 1
+        assert sess.categories[0].rules[0].priority == "SHOULD"

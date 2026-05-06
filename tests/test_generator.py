@@ -608,13 +608,23 @@ class TestMustCalibrationLint:
         self,
         category_priorities: list[tuple[str, list[str]]],
     ) -> SessionResult:
-        """각 카테고리의 priority 리스트로부터 session 생성."""
+        """각 카테고리의 priority 리스트로부터 session 생성.
+
+        Each rule carries a cited reason ("commit a1b2c3d") so write_output's
+        speculative-downgrade pass leaves the priority intact — this isolates
+        the MUST-ratio lint behaviour from the auto-downgrade behaviour.
+        """
         cats = []
         for name, prios in category_priorities:
+            rules = []
+            for p in prios:
+                r = _rule(priority=p)
+                r.reason = "commit a1b2c3d (cited)"
+                rules.append(r)
             cats.append(CategoryResult(
                 category=name,
                 design_intent="x",
-                rules=[_rule(priority=p) for p in prios],
+                rules=rules,
                 anti_patterns=[],
                 file_type_guides={},
                 checklist=[],

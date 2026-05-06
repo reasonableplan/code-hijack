@@ -193,6 +193,43 @@ def _classify_via_evidence(
     return "other"
 
 
+def downgrade_speculative_rules(session: SessionResult) -> int:
+    """MUST rules whose evidence isn't verified-cited get downgraded to SHOULD.
+
+    A rule is "speculative" when `classify_rule` returns anything except 'cited' —
+    no_evidence (rule.evidence empty + [no-evidence] reason), fake_citation
+    (Evidence entries with invalid SHAs / doc paths), generic ("best practice"-
+    style filler), or other (no citation pattern detected at all).
+
+    Mutates `session` in place. Returns the count of rules downgraded so the
+    caller can log a stderr notice. Cited MUSTs are untouched; existing SHOULDs
+    are also untouched (only MUST → SHOULD transitions happen here).
+
+    Why: the tool's whole differentiator is verbatim evidence chains. A MUST
+    without evidence is indistinguishable from generic LLM-generated rules and
+    erodes the priority signal. The downgrade preserves the rule (sometimes
+    speculative rules are correct intuition) but stops it from claiming
+    PR-blocker authority it can't back.
+    """
+    valid_shas = {sha.lower() for sha in session.historic_shas} or None
+    valid_doc_paths = set(session.repo_doc_paths) or None
+
+    count = 0
+    for cat in session.categories:
+        for rule in cat.rules:
+            if rule.priority != "MUST":
+                continue
+            kind = classify_rule(
+                rule,
+                valid_shas=valid_shas,
+                valid_doc_paths=valid_doc_paths,
+            )
+            if kind != "cited":
+                rule.priority = "SHOULD"
+                count += 1
+    return count
+
+
 def compute_evidence_metrics(session: SessionResult) -> EvidenceMetrics:
     """Walk all rules in `session` and tally citation classifications.
 

@@ -5,7 +5,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from hijack.core.evidence import compute_evidence_metrics, render_metrics_md
+from hijack.core.evidence import (
+    compute_evidence_metrics,
+    downgrade_speculative_rules,
+    render_metrics_md,
+)
 from hijack.core.models import AnalysisRule, CategoryResult, Evidence, SessionResult
 from hijack.core.preprocessor import build_layer_stats
 
@@ -415,7 +419,19 @@ def _check_must_calibration(result: SessionResult) -> None:
 
 
 def write_output(result: SessionResult, output_base: Path) -> None:
-    """세션별 raw 파일 + integrated 통합 파일을 모두 작성한다."""
+    """세션별 raw 파일 + integrated 통합 파일을 모두 작성한다.
+
+    Auto-downgrades speculative MUST rules (evidence not verified-cited) to
+    SHOULD before any rendering, so raw session.json and integrated docs agree.
+    """
+    downgraded = downgrade_speculative_rules(result)
+    if downgraded:
+        print(
+            f"[INFO] {downgraded} non-cited MUST rule(s) auto-downgraded to SHOULD "
+            "(evidence chain not verified)",
+            file=sys.stderr,
+        )
+
     session_dir = output_base / result.session_id
     session_dir.mkdir(parents=True, exist_ok=True)
 
