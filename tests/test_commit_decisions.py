@@ -180,6 +180,30 @@ class TestPatternMatching:
         result = self._extract_single("Add unit tests for the user model.")
         assert result.commits == []
 
+    def test_body_listing_4_plus_patterns_filtered_as_feature_doc(self) -> None:
+        # G8 (2026-05-06): a commit body that lists many distinct decision
+        # patterns is almost always feature-documentation enumerating them
+        # (e.g. "decision pattern 6개 확장 — to avoid/to prevent/due to/
+        # motivated by/as opposed to/regression"), not narrative. Verified
+        # across starlette/httpx/fastapi: narrative bodies use 1-3 patterns.
+        body = (
+            "decision pattern 6개 확장 — to avoid / to prevent / due to / "
+            "motivated by / as opposed to / regression"
+        )
+        result = self._extract_single(body)
+        assert result.commits == [], (
+            "feature-doc body with 4+ patterns must be filtered"
+        )
+
+    def test_body_with_3_patterns_still_kept_as_narrative(self) -> None:
+        # The threshold is 4: 3 patterns are still treated as narrative.
+        # "instead of/rather than/decided to" can co-occur in a single decision
+        # (e.g., "decided to use X instead of Y rather than Z").
+        body = "We decided to use anyio instead of asyncio rather than trio."
+        result = self._extract_single(body)
+        assert len(result.commits) == 1
+        assert len(result.commits[0].matched_patterns) == 3
+
 
 # ---------------------------------------------------------------------------
 # TestSanitization — excerpt sanitization helpers

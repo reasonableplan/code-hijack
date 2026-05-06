@@ -171,6 +171,14 @@ _COMMITS_TOP_N = 50            # output cap on the per-commit list
 # signals are inherently a noisier sample than PR vocab — single-occurrence
 # patterns are likely typos or anomalies, but 2+ recurrences are meaningful.
 _PATTERN_MIN_COUNT = 2         # patterns with fewer hits are dropped
+# Self-analysis noise filter (G8, 2026-05-06): a commit body that hits 4+
+# distinct decision patterns is almost always feature-documentation listing
+# the patterns themselves (e.g. "decision pattern 6개 확장 — to avoid/to prevent/
+# due to/motivated by/as opposed to/regression"), not a narrative decision.
+# Genuine narrative commits use 1-3 patterns; verified across starlette / httpx /
+# fastapi (2026-05-06: max observed in narrative bodies = 2). The threshold is
+# conservative enough that legitimate multi-pattern decisions still pass.
+_FEATURE_DOC_PATTERN_THRESHOLD = 4
 # 240→800 (E1, 2026-05-06): senior rationale often runs past the first 240 chars;
 # 800 captures full PR-style commit bodies without blowing prompt context.
 _BODY_EXCERPT_CHARS = 800
@@ -433,6 +441,11 @@ def extract_commit_decisions(files: list[Any]) -> CommitDecisions:
                 matched.append(pattern_name)
 
         if not matched:
+            continue
+
+        # Self-analysis noise filter: a body that hits many distinct patterns
+        # is feature documentation listing them, not narrative.
+        if len(matched) >= _FEATURE_DOC_PATTERN_THRESHOLD:
             continue
 
         # Build CommitDecision (short SHA = first 12 chars)
