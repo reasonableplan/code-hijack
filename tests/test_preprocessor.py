@@ -269,6 +269,27 @@ class TestAuxiliaryDemote:
         assert paths[0] == "mylib/core.py"
         assert paths[1] == "examples/quickstart/main.py"
 
+    def test_top_level_dotted_py_demoted_as_bootstrap(self) -> None:
+        """G8 (2026-05-06): 루트의 `.skill_analysis.py` 같은 dotted bootstrap
+        스크립트가 라이브러리 코어를 selection 에서 밀어내는 회귀 차단."""
+        files = [
+            _make_file(".skill_analysis.py", role="api"),
+            _make_file(".skill_analysis_v2.py", role="api"),
+            _make_file(".skill_analysis_fastapi.py", role="api"),
+            _make_file("mylib/core.py", role="other"),
+            _make_file("mylib/router.py", role="api"),
+        ]
+        result = _make_result(files)
+        selected = select_files_for_category(result, "architecture", max_files=3)
+        paths = [f.path.as_posix() for f in selected]
+        # 라이브러리 코어가 dotted bootstrap 보다 앞서야 함
+        assert "mylib/router.py" in paths
+        assert "mylib/core.py" in paths
+        bootstrap_indices = [i for i, p in enumerate(paths) if p.startswith(".")]
+        core_indices = [i for i, p in enumerate(paths) if p.startswith("mylib/")]
+        if bootstrap_indices and core_indices:
+            assert max(core_indices) < min(bootstrap_indices)
+
 
 class TestOriginalCharsRanking:
     def test_truncated_large_file_ranked_above_full_small_file(self) -> None:

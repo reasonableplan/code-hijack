@@ -33,9 +33,19 @@ def _is_auxiliary(rel: Path) -> bool:
 
     선별 시 같은 점수의 파일이 있을 때 후순위로 demote 해서 라이브러리 코어가
     예제 코드에 밀려 빠지는 것을 방지한다.
+
+    보조 path:
+    - 명시적 prefix (docs_src/, examples/, scripts/ 등 — _AUXILIARY_PATH_PREFIXES)
+    - repo 루트의 dotted `.py` 파일 (e.g. `.skill_analysis.py`, `.bootstrap.py`) —
+      관례적으로 일회성 dev/bootstrap 스크립트. 본 라이브러리 코드보다 후순위.
     """
     p = rel.as_posix()
-    return any(p.startswith(prefix) for prefix in _AUXILIARY_PATH_PREFIXES)
+    if any(p.startswith(prefix) for prefix in _AUXILIARY_PATH_PREFIXES):
+        return True
+    # Top-level dotted .py = bootstrap/dev script convention.
+    if "/" not in p and p.startswith(".") and p.endswith(".py"):
+        return True
+    return False
 
 # ---------------------------------------------------------------------------
 # Category → preferred roles mapping
