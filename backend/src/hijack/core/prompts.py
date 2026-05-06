@@ -126,16 +126,23 @@ QUALITY REQUIREMENTS (non-negotiable):
 
 4. `priority`: MUST only for non-negotiable rules (violation = PR rejection).
    SHOULD for strong preferences. Don't inflate — when uncertain, use SHOULD.
-   As a calibration: out of every 10 rules you extract, typically 3-4 are MUST,
-   6-7 are SHOULD. If your MUST/SHOULD ratio exceeds 60/40, re-evaluate.
+   Calibration target: ~30-40% MUST, ~60-70% SHOULD across all rules.
+   If overall MUST ratio exceeds 40%, or any single category exceeds 50%,
+   re-evaluate — these thresholds match the lint emitted by `write_output`.
 
 5. `reason` — 1-SENTENCE INTENT GIST:
-   ≤150 chars. The headline of the senior's why, ideally a quoted phrase from
-   one of your evidence entries. Examples:
+   ≤150 chars. The headline of the senior's why. Examples:
      "Minimise async-path runtime regressions (per Revert a1b2c3d)."
      "Reversibility of migrations is required by RDS rollback policy."
    Do NOT put long explanations or multiple citations here — those go in
    `evidence`. If no evidence available, prefix with "[no-evidence]".
+
+   IMPORTANT: `reason` is NOT a paraphrase of `evidence[].quote`. The quote
+   carries the senior's verbatim words; `reason` carries the rule's design
+   intent in compressed form (or a short quoted phrase + commit ref). Do not
+   restate the quote — that is pure redundancy. The reader should be able to
+   skim `reason` and read `quote` for full context, not read both saying the
+   same thing twice.
 
 6. `evidence` — STRUCTURED CITATIONS (this is the whole point of the tool):
    The senior's actual reasoning lives in commit bodies, ADRs, and reverts.
@@ -162,12 +169,29 @@ QUALITY REQUIREMENTS (non-negotiable):
        * "preference" — internal philosophy / consistency / trade-off
      If you cannot tell from the source, set null. Do NOT guess.
 
+   MATCHING PROCEDURE — for each rule, do this:
+   1. List the file paths cited in `ref_files` (drop the `:line` suffix).
+   2. Find commits in <history> whose touched files intersect step 1.
+   3. Among those, prefer commits whose body uses decision-pattern keywords
+      ("instead of", "rather than", "decided to", "reverted because",
+      "switched from", "rejected", "abandoned") aligned with the rule's reason.
+   4. Pick 1-2 most relevant commits. Map the body's keyword to `intent_kind`:
+        - "reverted because" / "rolled back"           → "incident"
+        - "rejected" / "abandoned" / "switched from"   → "rejection"
+        - "instead of" / "rather than" / "decided to"  → "preference"
+        - external SLA / spec / compliance / tool limit → "constraint"
+      When multiple keywords match, priority: rejection > incident > preference.
+   5. Doc evidence works the same way against <repo_context>: ref = repo-
+      relative path, headline = section heading verbatim, quote = paragraph
+      verbatim.
+
    If no evidence is available in the input, set `evidence: []`,
    `confidence: "low"`, and prefix `reason` with "[no-evidence]".
 
    DO NOT pad evidence with paraphrased filler. Drop a rule entirely rather
    than inventing evidence — extracting the senior's *actual* recorded
-   reasoning is the whole point.
+   reasoning is the whole point. A false citation is much worse than an
+   empty one.
 
 7. `rule` — PRINCIPLE OVER PRESCRIPTION:
    The rule body must describe the underlying DESIGN PRINCIPLE, not prescribe
@@ -201,7 +225,7 @@ QUALITY REQUIREMENTS (non-negotiable):
 
 ---
 
-FEW-SHOT EXAMPLE — GOOD quality rule (learn the shape):
+FEW-SHOT EXAMPLE #1 — GOOD quality rule (intent_kind=incident):
 
 {
   "rule": "subprocess.run 은 반드시 capture_output=True + text=True 조합으로 호출",
@@ -223,7 +247,29 @@ FEW-SHOT EXAMPLE — GOOD quality rule (learn the shape):
   ]
 }
 
-FEW-SHOT EXAMPLE — BAD quality rule (AVOID these mistakes):
+FEW-SHOT EXAMPLE #2 — GOOD quality rule (intent_kind=preference, principle-level):
+
+{
+  "rule": "Multi-round-trip authentication schemes must be modeled as a generator protocol yielding Request objects, so client transport stays decoupled from any specific auth algorithm.",
+  "priority": "MUST",
+  "confidence": "high",
+  "ref_files": ["src/auth.py:22-110"],
+  "good_example": "class Auth:\\n    def auth_flow(self, request):\\n        yield request\\n\\n    def sync_auth_flow(self, request):\\n        flow = self.auth_flow(request)\\n        request = next(flow)\\n        while True:\\n            response = yield request\\n            try:\\n                request = flow.send(response)\\n            except StopIteration:\\n                break",
+  "bad_example": "def authenticate(request, response_of_first_attempt=None):\\n    if response_of_first_attempt and response_of_first_attempt.status_code == 401:\\n        ...",
+  "reason": "Decouple transport from auth algorithm (per d4e5f6a refactor).",
+  "layer": "shared",
+  "evidence": [
+    {
+      "kind": "commit",
+      "ref": "d4e5f6a",
+      "headline": "Refactor Auth into generator-based flow",
+      "quote": "Originally Auth was a Callable[[Request], Request], but Digest needs the response of the first request to compute the second. Switched to generator protocol so multi-round schemes don't require Client-internal hooks.",
+      "intent_kind": "preference"
+    }
+  ]
+}
+
+FEW-SHOT EXAMPLE #3 — BAD quality rule (AVOID these mistakes):
 
 {
   "rule": "좋은 코드를 짜야 한다",                    // ❌ 너무 추상적
@@ -245,12 +291,15 @@ NEGATIVE EXAMPLE 의 모든 ❌ 를 피하라. 특히:
 - evidence 가 비면 [no-evidence] 룰만 통과 — 일반 룰은 드롭"""
 
 _LAYER_INSTRUCTION = (
-    "For each rule, assign a `layer` field: "
-    "'frontend' for UI/React/Vue code, "
-    "'backend' for server/API/service code, "
-    "'db' for database/migration/ORM code, "
-    "'devops' for CI/Docker/infra code, "
-    "'shared' for cross-cutting concerns."
+    "LAYER FIELD: Each file in <files> has a header like "
+    "`### path/to/file.py [role=core, layer=backend]`. The `layer=` value "
+    "is determined by the preprocessor and is AUTHORITATIVE — copy it for "
+    "any rule whose ref_files cites that file. Do NOT override based on "
+    "filename guessing.\n"
+    "When a rule cites files spanning multiple layers, use 'shared'. "
+    "Reference values: 'frontend' (UI/React/Vue), 'backend' (server/API/"
+    "service), 'db' (database/migration/ORM), 'devops' (CI/Docker/infra), "
+    "'shared' (cross-cutting concerns or multi-layer rules)."
 )
 
 

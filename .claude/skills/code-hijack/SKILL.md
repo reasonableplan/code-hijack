@@ -45,7 +45,7 @@ from hijack.core.archaeology import extract_commit_decisions
 TARGET = '<TARGET>'
 CATEGORIES = ['architecture', 'coding_style', 'api_design']  # 또는 사용자 지정
 
-files, root = fetch_source(TARGET, history_depth=10)  # depth=10 (default 3) — decision-pattern hit rate 가 낮은 commit history 에서 evidence 후보 surface
+files, root = fetch_source(TARGET, history_depth=30)  # depth=30 (default 3) — depth=10 대비 매칭 가능 commits ~7배 ↑ 확인됨 (httpx v4, 2026-05-06). depth=50 부터는 ROI 떨어짐.
 pp = build_preprocess_result(files, root)
 selected = {cat: [f.path.as_posix() for f in select_files_for_category(pp, cat, max_files=12)] for cat in CATEGORIES}
 cd = extract_commit_decisions(files)
