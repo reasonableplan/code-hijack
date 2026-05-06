@@ -8,19 +8,37 @@ AI agents produce generic, inconsistent code. code-hijack analyzes a senior open
 
 ## Highlights
 
-- **10 analysis categories** — architecture, coding_style, api_design, testing, dependencies, security, performance, devops, state_management, data_model
-- **5-layer deterministic classification** — frontend / backend / db / devops / shared (path + extension + dep-file heuristics, no LLM guessing)
-- **Evidence-based rules** — every rule includes `ref_files:line`, verbatim ✅/❌ examples from the actual repo, confidence + priority
-- **Scope-tagged rules** — every rule is classified `cross_project` (transfers directly), `framework_internal` (only meaningful inside the source codebase), or `domain_specific` (re-evaluate per domain). Lets a downstream tool auto-apply the safe ones and quarantine the rest.
-- **Critic layer** — second LLM pass that drops duplicates, downgrades inflated MUST, tags scope, calibrates priority ratio + MUST ratio auto-lint (`write_output` stderr warn if >40%)
-- **Two execution modes**:
+Tags: ✅ validated with measurable data, ⚠️ partial / has known limits, ❓ implemented but not yet measured. See [Validation status](#validation-status) below for cycle data.
+
+- ✅ **10 analysis categories** — architecture, coding_style, api_design, testing, dependencies, security, performance, devops, state_management, data_model. (3+1 categories matched-validated on starlette; remaining 6 implemented, dogfooding pending.)
+- ✅ **5-layer deterministic classification** — frontend / backend / db / devops / shared (path + extension + dep-file heuristics, no LLM guessing). Calibration regression caught and fixed (e117c4c).
+- ⚠️ **Evidence-based rules** — every rule includes `ref_files:line`, verbatim ✅/❌ examples from the actual repo, confidence + priority. **Evidence-chain (verbatim commit quotes) ceiling: ~38% matched on senior OSS (starlette), ~0% on individual repos with terse commit messages (HarnessAI)**. Quality-gap with no-evidence rules measured ~2x by external reviewer.
+- ❓ **Scope-tagged rules** — every rule is classified `cross_project`, `framework_internal`, or `domain_specific`. Lets a downstream tool auto-apply the safe ones and quarantine the rest. (Code present, end-to-end downstream usage not yet measured.)
+- ✅ **Critic layer** — second LLM pass that drops duplicates, downgrades inflated MUST, tags scope. Plus mechanical safeguards: MUST ratio auto-lint (`write_output` stderr warn if >40%), and **R6 auto-downgrade** of speculative MUSTs (no verified citation → SHOULD).
+- ✅ **Two execution modes**:
   - **CLI mode** (`code-hijack analyze`) — direct Anthropic API, fully automatable
   - **Skill mode** (`/code-hijack`) — uses the current Claude Code session, no API key needed
-- **HarnessAI integration** — `harness-export` subcommand converts a session into [HarnessAI](https://github.com/reasonableplan/harnessai)-shaped docs (`conventions.md` + per-area `guidelines/` + `shared-lessons-candidates.md`). Only `cross_project` rules auto-apply; the rest become reviewable candidates.
-- **Session management** — `--resume` to skip completed categories, `diff` subcommand to compare rule changes across sessions
-- **Decision mining from Git** — extracts senior reasoning from PR descriptions, review comments, commit bodies, and reverts; rule `evidence` field carries verbatim quotes with intent classification (rejection/constraint/incident/preference)
-- **Style exemplars + statistical fingerprint** — beyond rules, surfaces concrete code samples and statistical style stats (test framework, naming, line lengths, ...) for higher-fidelity agent grounding
-- **Persistent repo cache** — git clones land in `~/.cache/code-hijack/repos/<hash>/` and reuse across runs; no double-clone overhead in skill mode
+- ❓ **HarnessAI integration** — `harness-export` subcommand converts a session into [HarnessAI](https://github.com/reasonableplan/harnessai)-shaped docs. Only `cross_project` rules auto-apply; the rest become reviewable candidates. (Implemented; downstream HarnessAI consumption not yet dogfooded.)
+- ❓ **Session management** — `--resume` to skip completed categories, `diff` subcommand to compare rule changes across sessions. (Implemented; usage data thin.)
+- ⚠️ **Decision mining from Git** — extracts senior reasoning from PR descriptions, review comments, commit bodies, and reverts; rule `evidence` field carries verbatim quotes with intent classification (rejection/constraint/incident/preference). **Effective when target repo has decision-pattern keywords ("instead of", "rather than", etc.); a typical busy-developer repo may yield close to zero.**
+- ❓ **Style exemplars + statistical fingerprint** — beyond rules, surfaces concrete code samples and statistical style stats (test framework, naming, line lengths, ...) for higher-fidelity agent grounding. (Code present in `core/exemplars.py` + `core/style_fingerprint.py`; ROI not yet measured against rule-only output.)
+- ✅ **Persistent repo cache** — git clones land in `~/.cache/code-hijack/repos/<hash>/` and reuse across runs; no double-clone overhead in skill mode (327fb1a).
+
+## Validation status
+
+Numbers from the 2026-05-06 measurement cycle on `encode/httpx`, `encode/starlette`, and a private-app dogfooding target. See `memory/project_validation_findings.md` for the full chain.
+
+| What | Measured | Source |
+|---|---|---|
+| Evidence-chain matching rate (senior OSS, best case) | **38%** (starlette, 4 categories, depth=30) | v10 session |
+| Same on a typical individual-developer repo | **~0%** (HarnessAI: 1 decision-signal commit / 61 scanned) | dogfood-harnessai session |
+| External reviewer score (clean LLM session, no codebase context) | **6/10 user-learning, 5/10 AI-coding-guide** | C external eval |
+| Evidence vs no-evidence rule quality gap | **~2x** (external reviewer judgement, intent-kind preserved verbatim helps) | C external eval |
+| MUST calibration target | 30–40% MUST overall, ≤50% per category | `_check_must_calibration` |
+| Auto-downgrade impact (R6) | starlette MUST 58%→25%, all surviving MUSTs are cited | v8 vs v7 |
+| Decision-pattern keywords currently mined | 18 patterns (incl. `instead of`, `rather than`, `to avoid`, `to prevent`, `due to`, `motivated by`, `as opposed to`, `regression`, …) | `archaeology._DECISION_PATTERNS` |
+
+**Honest read**: the tool's differentiator (verbatim-citation evidence chains) works as advertised on **well-curated senior repos** with PR-style commit bodies. For everyday repos with terse commits, it degrades to a "rule + ✅/❌ example" extractor — still useful, but no different from a generic LLM rule miner. The **R7** (commit-corpus-first rule derivation) and **G** (more analysis categories) directions are the candidates explored to lift the ceiling; dogfooding (D) is what tells us whether the current quality is already "good enough" for actual users.
 
 ## Example outputs
 

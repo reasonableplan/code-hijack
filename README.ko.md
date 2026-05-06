@@ -8,19 +8,37 @@ AI 에이전트가 짜는 코드는 일반적이고 일관성 없다. code-hijac
 
 ## 주요 특징
 
-- **10 카테고리 분석** — architecture, coding_style, api_design, testing, dependencies, security, performance, devops, state_management, data_model
-- **5 레이어 결정론적 분류** — frontend / backend / db / devops / shared (파일 경로/확장자/의존성 기반, LLM 추측 없음)
-- **실증적 규칙** — 각 규칙에 `ref_files:라인번호` + ✅/❌ 실제 코드 예시 + 신뢰도 + 우선순위
-- **Scope 태깅** — 모든 규칙이 `cross_project` (그대로 적용 가능) / `framework_internal` (소스 코드베이스 내부 결정 — 외부 무관) / `domain_specific` (도메인별 재평가 필요) 중 하나로 분류. 다운스트림 도구가 안전한 것만 자동 적용 가능.
-- **Critic 레이어** — 2차 LLM 패스로 중복 제거 + MUST 인플레 강등 + scope 태깅 + 우선순위 보정 + MUST 비율 자동 lint (`write_output` 시점 stderr 경고)
-- **2가지 실행 모드**:
+태그: ✅ 정량 검증됨, ⚠️ 부분 작동/한계 있음, ❓ 구현 됨 — 측정 데이터 아직 없음. [검증 현황](#검증-현황) 섹션에 cycle data.
+
+- ✅ **10 카테고리 분석** — architecture, coding_style, api_design, testing, dependencies, security, performance, devops, state_management, data_model. (3+1 카테고리 starlette 에서 매칭 검증, 나머지 6 구현되어 있고 dogfooding 대기.)
+- ✅ **5 레이어 결정론적 분류** — frontend / backend / db / devops / shared (경로/확장자/의존성, LLM 추측 없음). 분류 회귀 발견 후 fix (e117c4c).
+- ⚠️ **실증적 규칙** — 각 규칙에 `ref_files:라인번호` + ✅/❌ 실제 코드 + 신뢰도/우선순위. **Evidence chain (verbatim commit 인용) 천장: 시니어 OSS (starlette) 38%, 일반 사용자 repo (HarnessAI 같은 짧은 commit) ~0%**. evidence 있는 rule 과 없는 rule 의 quality 격차 ~2x (외부 reviewer 측정).
+- ❓ **Scope 태깅** — 모든 규칙이 `cross_project` / `framework_internal` / `domain_specific` 으로 분류. 다운스트림 도구가 안전한 것만 자동 적용. (코드 있음 — 다운스트림 실사용 데이터 아직 없음.)
+- ✅ **Critic 레이어** — 2차 LLM 패스로 중복 제거 + MUST 인플레 강등 + scope 태깅. 추가 mechanical 가드: MUST 비율 자동 lint (`write_output` 시점 stderr 경고, >40%), **R6 자동 강등** (verified citation 없는 MUST → SHOULD).
+- ✅ **2가지 실행 모드**:
   - **CLI 모드** (`code-hijack analyze`) — Anthropic API 직접 호출, 자동화 가능
   - **Skill 모드** (`/code-hijack`) — Claude Code 세션이 LLM 역할, API key 불필요
-- **HarnessAI 통합** — `harness-export` 서브커맨드로 세션을 [HarnessAI](https://github.com/reasonableplan/harnessai) 형식 (`conventions.md` + 영역별 `guidelines/` + `shared-lessons-candidates.md`) 으로 변환. `cross_project` 규칙만 자동 적용, 나머지는 검토 후보.
-- **세션 관리** — `--resume` 으로 재시작, `diff` 서브커맨드로 세션 간 규칙 변경사항 비교
-- **Git 결정 마이닝** — PR description, 리뷰 코멘트, commit body, revert 에서 시니어의 판단 흔적 추출. rule 의 `evidence` 필드에 verbatim 인용 + intent 분류 (rejection/constraint/incident/preference)
-- **스타일 exemplar + 통계 fingerprint** — 규칙 외에 구체 코드 sample 과 통계 (테스트 프레임워크/네이밍/라인 길이/...) 추출, 에이전트의 fidelity 향상
-- **Persistent 레포 캐시** — `~/.cache/code-hijack/repos/<hash>/` 에 자동 캐시. skill 모드 다중 process 도 같은 슬롯 공유, 중복 clone 없음
+- ❓ **HarnessAI 통합** — `harness-export` 서브커맨드로 세션을 [HarnessAI](https://github.com/reasonableplan/harnessai) 형식 으로 변환. `cross_project` 규칙만 자동 적용. (구현됨; 다운스트림 HarnessAI 소비 dogfooding 미완.)
+- ❓ **세션 관리** — `--resume` 재시작, `diff` 세션 간 비교. (구현됨; 사용 데이터 부족.)
+- ⚠️ **Git 결정 마이닝** — PR description, 리뷰 코멘트, commit body, revert 에서 시니어 판단 흔적 추출. rule `evidence` 필드 verbatim 인용 + intent 분류 (rejection/constraint/incident/preference). **decision-pattern 키워드 ("instead of", "rather than" 등) 가 commit 에 있을 때만 작동; 일반 바쁜 개발자 repo 에선 거의 0.**
+- ❓ **스타일 exemplar + 통계 fingerprint** — 규칙 외 구체 코드 sample + 통계 (테스트 프레임워크/네이밍/라인 길이/...). (`core/exemplars.py` + `core/style_fingerprint.py` 코드 있음 — rule-only 출력 대비 ROI 측정 안 됨.)
+- ✅ **Persistent 레포 캐시** — `~/.cache/code-hijack/repos/<hash>/` 자동 캐시 (327fb1a).
+
+## 검증 현황
+
+2026-05-06 측정 사이클 — `encode/httpx`, `encode/starlette`, 사용자 본인 활성 repo dogfooding. 자세한 chain 은 `memory/project_validation_findings.md` 참조.
+
+| 측정 항목 | 데이터 | Source |
+|---|---|---|
+| Evidence-chain 매칭율 (시니어 OSS, best case) | **38%** (starlette, 4 카테고리, depth=30) | v10 session |
+| 일반 개발자 repo 매칭율 | **~0%** (HarnessAI: 1 decision-signal commit / 61 scanned) | dogfood-harnessai session |
+| 외부 reviewer score (clean LLM session) | **6/10 사용자 학습, 5/10 AI 코드 가이드** | C external eval |
+| Evidence vs no-evidence 규칙 quality 격차 | **~2x** (외부 reviewer 정성 평가) | C external eval |
+| MUST 캘리브레이션 target | overall 30–40%, 카테고리당 ≤50% | `_check_must_calibration` |
+| R6 자동 강등 효과 | starlette MUST 58%→25%, 살아남은 MUST 모두 cited | v8 vs v7 |
+| Decision pattern 키워드 (현재) | 18개 (`instead of`, `rather than`, `to avoid`, `to prevent`, `due to`, `motivated by`, `as opposed to`, `regression` 등) | `archaeology._DECISION_PATTERNS` |
+
+**정직한 평가**: 도구 차별점 (verbatim 인용 evidence chain) 은 **잘 정돈된 시니어 OSS** (PR-style commit body 풍부) 에서 광고대로 작동. 일반 짧은-commit repo 에선 "rule + ✅/❌ example" extractor 로 degrade — 여전히 유용하지만 일반 LLM rule miner 와 차이 없음. 천장 올리기 후보로 **R7** (commit corpus → rule 역도출) 과 **G** (카테고리 확장) 탐색 중. **D dogfooding** 이 현재 quality 가 진짜 사용자에게 "충분" 한지 답할 다음 데이터.
 
 ## Quickstart
 
