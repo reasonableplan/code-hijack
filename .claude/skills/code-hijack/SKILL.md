@@ -310,6 +310,8 @@ print(f'[DONE] {Path(OUTPUT) / session.session_id}')
 - 위반해도 실제 PR 거부 수준 아닌 규칙 (강한 선호에 불과)
 - 팀 관례 성격 (설계 correctness / security 아님)
 - **목표 MUST 비율: 30-40%**. 초과하면 재평가.
+- **카테고리당 MUST > 50% 면 강제 강등**: 가장 PR-rejection 가능성 낮은 1개를 SHOULD 로. 후보 우선순위: (a) perf 최적화 — 큰 입력에서만 의미 (작은 입력은 정상 동작), (b) readability/일관성 규칙, (c) 대안이 여전히 작동하는 layering 선호. 반대로 "이거 어기면 server 가 5xx 누출 / OOM / 보안 boundary 침범" 같은 correctness/safety 는 MUST 유지.
+- **`evidence` 가 cited 인 MUST 도 자동 강등 안 됨** — `evidence.downgrade_speculative_rules` 는 no-evidence MUST 만 강등. cited MUST 의 priority 검증은 이 단계가 유일한 방어선. 시니어가 "to avoid O(n²)" 라 한 perf rule 을 cited 라고 무비판적으로 MUST 로 두지 말 것 — commit 의 동기 (perf 최적화 vs 안전) 와 priority 의 의미 (PR 거부 vs 강한 선호) 는 별개.
 
 **KEEP as-is**: 고품질 규칙은 그대로.
 

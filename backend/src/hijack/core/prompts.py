@@ -130,6 +130,22 @@ QUALITY REQUIREMENTS (non-negotiable):
    If overall MUST ratio exceeds 40%, or any single category exceeds 50%,
    re-evaluate — these thresholds match the lint emitted by `write_output`.
 
+   PRIORITY SELF-CHECK (mandatory before emitting JSON):
+   After drafting all rules in this category, count MUST/total. If > 50%,
+   pick the rule whose violation is LEAST likely to trigger PR rejection
+   (typical candidates: perf optimization that affects only large inputs,
+   readability/consistency rule, layering preference where the alternative
+   still works) and downgrade it to SHOULD before returning.
+
+   Note: the post-write `evidence.downgrade_speculative_rules` pass only
+   demotes rules with NO cited evidence. Cited MUSTs are NEVER auto-
+   demoted — over-tagging cited rules as MUST is a writer-side mistake
+   that this self-check is your only defence against. Heuristic: a cited
+   commit body that says "to avoid O(n²) on large inputs" is a perf
+   optimization → SHOULD, not MUST. A cited commit body that says
+   "without this, server leaks 500 to client / loads 1GB into memory"
+   is a correctness/safety guarantee → MUST.
+
 5. `reason` — 1-SENTENCE INTENT GIST:
    ≤150 chars. The headline of the senior's why. Examples:
      "Minimise async-path runtime regressions (per Revert a1b2c3d)."
