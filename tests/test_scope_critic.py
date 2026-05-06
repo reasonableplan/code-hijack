@@ -63,28 +63,37 @@ def _session(*categories: CategoryResult) -> SessionResult:
 # ---------------------------------------------------------------------------
 
 class TestMechanicalScope:
-    def test_fastapi_import_is_framework_internal(self) -> None:
+    """R4 (2026-05-06): framework-package 매칭 비활성화. import 만으로는
+    'framework 자체 코드' vs 'framework 사용자 코드' 구분 불가 — 4 세션 실측에서
+    framework 사용자의 transferable rule 을 framework_internal 로 잘못 강제하는
+    false-positive 발견. LLM 의 의미 분류 신뢰. cross_project (stdlib only) 와
+    domain_specific (no framework + domain identifier) 만 mechanical override.
+    """
+
+    def test_fastapi_import_no_longer_overrides_returns_none(self) -> None:
+        # R4 이전: framework_internal 로 강제. R4 이후: None — LLM 판단 유지.
         rule = _rule(
             "use APIRouter",
             good_example="from fastapi.routing import APIRouter\n\nrouter = APIRouter()",
         )
-        assert mechanical_scope(rule) == "framework_internal"
+        assert mechanical_scope(rule) is None
 
-    def test_django_import_is_framework_internal(self) -> None:
+    def test_django_import_no_longer_overrides_returns_none(self) -> None:
         rule = _rule(
             "use django models",
             good_example="from django.db import models\n\nclass User(models.Model):\n    pass",
         )
-        assert mechanical_scope(rule) == "framework_internal"
+        assert mechanical_scope(rule) is None
 
-    def test_sqlalchemy_import_is_framework_internal(self) -> None:
+    def test_sqlalchemy_import_no_longer_overrides_returns_none(self) -> None:
         rule = _rule(
             "use sqlalchemy session",
             good_example="import sqlalchemy\nfrom sqlalchemy.orm import Session",
         )
-        assert mechanical_scope(rule) == "framework_internal"
+        assert mechanical_scope(rule) is None
 
     def test_stdlib_only_is_cross_project(self) -> None:
+        # 변경 없음 — stdlib only 는 안전한 cross_project 신호.
         rule = _rule(
             "use dataclasses",
             good_example=(
@@ -103,7 +112,9 @@ class TestMechanicalScope:
         )
         assert mechanical_scope(rule) is None
 
-    def test_mixed_framework_and_stdlib_framework_wins(self) -> None:
+    def test_mixed_framework_and_stdlib_returns_none(self) -> None:
+        # R4 이전: framework_internal (framework wins). R4 이후: None — packages
+        # 가 stdlib 만 아니므로 cross_project 도 아님. LLM 판단 유지.
         rule = _rule(
             "type-safe fastapi",
             good_example=(
@@ -112,9 +123,10 @@ class TestMechanicalScope:
                 "app = FastAPI()\n"
             ),
         )
-        assert mechanical_scope(rule) == "framework_internal"
+        assert mechanical_scope(rule) is None
 
     def test_domain_identifier_no_framework_is_domain_specific(self) -> None:
+        # 변경 없음 — import 없고 도메인 식별자만 있으면 domain_specific.
         rule = _rule(
             "issue priority",
             good_example=(
@@ -125,8 +137,10 @@ class TestMechanicalScope:
         )
         assert mechanical_scope(rule) == "domain_specific"
 
-    def test_domain_identifier_with_framework_is_framework_internal(self) -> None:
-        # 프레임워크 import 가 있으면 domain_specific 이 아닌 framework_internal
+    def test_domain_identifier_with_framework_returns_none(self) -> None:
+        # R4 이전: framework_internal (framework wins). R4 이후: None — fastapi
+        # import 때문에 domain_specific 도 아니고 (not packages 조건 False),
+        # cross_project 도 아니고 (stdlib only 아님). LLM 판단 유지.
         rule = _rule(
             "fastapi order endpoint",
             good_example=(
@@ -137,7 +151,7 @@ class TestMechanicalScope:
                 "    return {'id': order.id}\n"
             ),
         )
-        assert mechanical_scope(rule) == "framework_internal"
+        assert mechanical_scope(rule) is None
 
     def test_empty_good_example_is_none(self) -> None:
         rule = _rule("some rule", good_example="")
@@ -183,7 +197,9 @@ class TestMechanicalScope:
 # ---------------------------------------------------------------------------
 
 class TestReclassifySessionScopes:
-    def test_overrides_cross_project_to_framework_internal(self) -> None:
+    def test_framework_import_no_longer_overrides_cross_project(self) -> None:
+        # R4 (2026-05-06): framework import 만으로 framework_internal override
+        # 안 함. cross_project 그대로 유지 (LLM 판단 신뢰).
         rule = _rule(
             "use fastapi router",
             good_example="from fastapi import APIRouter\nrouter = APIRouter()",
@@ -191,10 +207,9 @@ class TestReclassifySessionScopes:
         )
         session = _session(_category("api", [rule]))
         new_session, counts = reclassify_session_scopes(session)
-        assert new_session.categories[0].rules[0].scope == "framework_internal"
-        assert counts["cross_project_to_framework_internal"] == 1
-        assert counts["cross_project_to_domain_specific"] == 0
-        assert counts["unchanged"] == 0
+        assert new_session.categories[0].rules[0].scope == "cross_project"
+        assert counts["cross_project_to_framework_internal"] == 0
+        assert counts["unchanged"] == 1
 
     def test_overrides_cross_project_to_domain_specific(self) -> None:
         rule = _rule(
@@ -244,6 +259,8 @@ class TestReclassifySessionScopes:
         assert counts["unchanged"] == 1
 
     def test_change_counts_across_multiple_rules(self) -> None:
+        # R4: framework import 는 더 이상 override 안 함 — fw1/fw2 unchanged.
+        # domain identifier (no framework) 만 domain_specific 으로 override.
         rules = [
             _rule(
                 "fw1",
@@ -273,10 +290,11 @@ class TestReclassifySessionScopes:
         ]
         session = _session(_category("mixed", rules))
         _, counts = reclassify_session_scopes(session)
-        assert counts["cross_project_to_framework_internal"] == 2
+        # fw1/fw2 더 이상 override X — unchanged
+        assert counts["cross_project_to_framework_internal"] == 0
         assert counts["cross_project_to_domain_specific"] == 1
-        # stdlib1 (cross_project → cross_project signal) + already_fw (not overridden)
-        assert counts["unchanged"] == 2
+        # fw1 + fw2 + stdlib1 + already_fw = 4 unchanged
+        assert counts["unchanged"] == 4
 
     def test_original_session_not_mutated(self) -> None:
         rule = _rule(
