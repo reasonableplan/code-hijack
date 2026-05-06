@@ -42,13 +42,17 @@ Numbers from the 2026-05-06 measurement cycle on `encode/httpx`, `encode/starlet
 
 ## Example outputs
 
-[`examples/fastapi/`](examples/fastapi/) — real analysis of [tiangolo/fastapi](https://github.com/tiangolo/fastapi) (1119 files, 17 rules, 35% MUST ratio, 100% line-number coverage).
+**Latest** — [`examples/starlette/`](examples/starlette/) (2026-05-06): [encode/starlette](https://github.com/encode/starlette), 67 files, 16 rules, **38% evidence-chain coverage** (6 verbatim citations including incident-grade evidence on a memory-regression PR), 31% MUST ratio after R6 auto-downgrade.
 
 Representative patterns captured:
-- `DefaultPlaceholder` sentinel for "user passed None" vs "user didn't pass"
-- `Annotated[T, Doc('''...''')]` for parameter docs that survive refactors
-- Starlette subclassing strategy (reuse ASGI, add OpenAPI layer only)
-- `auto_error=False` for composable authentication layers
+- Locked middleware positions (ServerError outermost / Exception innermost framework-enforced)
+- `anyio` runtime abstraction (`run_in_threadpool` hides sync/async)
+- CORS preflight + wildcard/credentials guard (browser-spec compliance enforced at one location)
+- `_CachedRequest` body cache vs stream split (memory-regression incident encoded as evidence)
+- TestClient backend as constructor arg, not ClassVar
+- `tests/types.py` for shared fixture Protocols
+
+Older — [`examples/fastapi/`](examples/fastapi/) (2026-04-17, **stale** — predates 5 tool improvements): tiangolo/fastapi, 17 rules, 35% MUST. Re-run with current tool to refresh.
 
 ## Quickstart
 
