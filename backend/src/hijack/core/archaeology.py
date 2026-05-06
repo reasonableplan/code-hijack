@@ -478,6 +478,95 @@ def extract_commit_decisions(files: list[Any]) -> CommitDecisions:
 
 
 # ---------------------------------------------------------------------------
+# Semantic matching — Jaccard-based fallback for evidence chain
+# ---------------------------------------------------------------------------
+
+# English stopwords (~30 common words that carry no discriminative signal)
+_STOPWORDS_EN: frozenset[str] = frozenset({
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "as", "is", "are", "was", "were", "be",
+    "been", "being", "have", "has", "had", "do", "does", "did", "will",
+    "would", "could", "should", "may", "might", "this", "that", "these",
+    "those", "it", "its",
+})
+
+# Korean stopwords (~20 common particles/endings that attach to content words)
+_STOPWORDS_KO: frozenset[str] = frozenset({
+    "을", "를", "이", "가", "은", "는", "에", "의", "로", "으로",
+    "와", "과", "도", "만", "에서", "부터", "까지", "하다", "이다", "있다",
+})
+
+# Tokenisation: English words + Korean syllable sequences
+_TOKEN_RE = re.compile(r"[a-zA-Z가-힣]+")
+
+
+def _tokenize(text: str) -> set[str]:
+    """Tokenise *text* into a set of normalised, stop-word-free tokens.
+
+    - English tokens are lowercased.
+    - Korean tokens are kept as-is (조사 분리는 stopword 로 단순 처리).
+    - Both EN and KO stopwords are removed.
+    - Returns a set (no duplicates, order irrelevant for Jaccard).
+    """
+    tokens: set[str] = set()
+    for match in _TOKEN_RE.finditer(text):
+        raw = match.group()
+        # Normalise English to lowercase; Korean stays untouched.
+        tok = raw.lower() if raw.isascii() else raw
+        if tok not in _STOPWORDS_EN and tok not in _STOPWORDS_KO and len(tok) > 1:
+            tokens.add(tok)
+    return tokens
+
+
+def find_semantic_candidates(
+    rule_text: str,
+    commit_decisions: CommitDecisions,
+    *,
+    threshold: float = 0.15,
+    top_k: int = 3,
+) -> list[tuple[CommitDecision, float]]:
+    """Rule text 와 의미적으로 유사한 commits 를 Jaccard score 로 surface.
+
+    file-level intersection 매칭이 실패했을 때 fallback 으로 사용.
+    score 는 rule_text 의 토큰 set 과 (commit.subject + " " + commit.body_excerpt)
+    의 토큰 set 사이 Jaccard.
+
+    Args:
+        rule_text: rule.rule + " " + rule.reason (LLM 이 만든 rule 텍스트)
+        commit_decisions: extract_commit_decisions() 결과
+        threshold: Jaccard score 최소값 (기본 0.15)
+        top_k: 반환할 후보 commit 최대 개수
+
+    Returns:
+        [(commit, score)] descending by score, threshold 미만 제외.
+        commit_decisions 가 has_signal=False 또는 commits 없으면 [].
+    """
+    if not commit_decisions.has_signal or not commit_decisions.commits:
+        return []
+
+    rule_tokens = _tokenize(rule_text)
+    if not rule_tokens:
+        return []
+
+    scored: list[tuple[CommitDecision, float]] = []
+    for cd in commit_decisions.commits:
+        commit_text = cd.subject + " " + cd.body_excerpt
+        commit_tokens = _tokenize(commit_text)
+        if not commit_tokens:
+            continue
+        intersection = len(rule_tokens & commit_tokens)
+        if intersection == 0:
+            continue
+        union = len(rule_tokens | commit_tokens)
+        score = intersection / union
+        if score >= threshold:
+            scored.append((cd, score))
+
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return scored[:top_k]
+
+
+# ---------------------------------------------------------------------------
 # Renderer
 # ---------------------------------------------------------------------------
 

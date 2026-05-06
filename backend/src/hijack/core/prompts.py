@@ -172,6 +172,29 @@ QUALITY REQUIREMENTS (non-negotiable):
    MATCHING PROCEDURE — for each rule, do this:
    1. List the file paths cited in `ref_files` (drop the `:line` suffix).
    2. Find commits in <history> whose touched files intersect step 1.
+   2b. If step 2 yields no file intersect, fall back to SEMANTIC INTENT
+       matching: read every commit in <history> (subject + body) and identify
+       any whose RECORDED DECISION aligns with this rule's reason — same
+       design intent, even if the touched files don't overlap with ref_files.
+       Examples of alignment:
+         rule: "deprecate implicit shortcuts via warning + explicit alternative"
+         commit: "Deprecate `app=...` in favour of explicit `WSGITransport`"
+         → aligned (both express the same deprecation discipline).
+
+         rule: "model multi-round-trip auth as generator protocol"
+         commit: "Switched Auth to generator-based flow because Digest needs
+                  the response of the first request"
+         → aligned (commit body states the exact reason the rule encodes).
+       Pick at most ONE commit, only when alignment is unambiguous. The
+       senior must have written something that you could quote as the WHY of
+       this rule. If you would have to paraphrase or stretch, do NOT match —
+       leave evidence: [] with [no-evidence] prefix. A false citation is much
+       worse than an empty one.
+
+       (A keyword-overlap helper `find_semantic_candidates` exists in
+       `core.archaeology` for non-LLM call-sites; for LLM-driven analysis,
+       prefer reading the commit bodies and judging intent directly — Jaccard
+       is too coarse for principle-level rules in mixed-language codebases.)
    3. Among those, prefer commits whose body uses decision-pattern keywords
       ("instead of", "rather than", "decided to", "reverted because",
       "switched from", "rejected", "abandoned") aligned with the rule's reason.

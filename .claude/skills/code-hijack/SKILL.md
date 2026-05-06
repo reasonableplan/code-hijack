@@ -182,6 +182,27 @@ step 1 의 `commit_decisions` 가 `null` 이 아니면, 각 규칙의 `evidence`
 }
 ```
 
+4.5. (file 매칭 실패 시 fallback — **SEMANTIC INTENT 매칭**) step 2 의 file_paths 교집합이 비었으면:
+     `commit_decisions.commits` 의 모든 entry 의 `subject + body_excerpt` 를 직접 읽고,
+     **시니어가 기록한 결정의 WHY 가 이 rule 의 reason 과 같은 의도** 인 commit 을
+     1개 고른다. 같은 파일을 안 건드렸어도 OK — 같은 설계 원리/문제/해결 의도를
+     명시적으로 표현한 commit 이면 매칭.
+
+     예시 (의도 일치):
+       rule reason: "한 번에 끊으면 사용자 마이그레이션 비용 폭발. warning + 명시적
+                     대안 안내로 옮길 시간을 줘야 한다."
+       commit body: "Deprecate `app=...` in favour of explicit `WSGITransport`/
+                     `ASGITransport`... rather than rem[oving]"
+       → 매칭 OK (둘 다 같은 deprecation discipline 표현).
+
+     ❌ 약한 매칭 / paraphrase 필요 / file 도 의도도 안 맞음 → **[no-evidence]** 로.
+     **거짓 evidence > 빈 evidence** — 1초라도 망설여지면 skip. verbatim 으로 인용
+     가능한 commit 만 매칭하라.
+
+     (참고: `from hijack.core.archaeology import find_semantic_candidates` 함수가 있어
+     keyword Jaccard 후보 surface 가능. 단 한/영 mix + principle-level rule 환경에서는
+     약한 신호 — LLM 인 너가 직접 commit body 읽고 의도 판단하는 게 더 정확.)
+
 5. 매칭 commit 없으면 `evidence: []` 유지 + `reason` 앞에 `[no-evidence]` prefix
 
 **`intent_kind` 매핑** (matched_patterns → intent_kind):
