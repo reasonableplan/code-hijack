@@ -171,7 +171,9 @@ _COMMITS_TOP_N = 50            # output cap on the per-commit list
 # signals are inherently a noisier sample than PR vocab — single-occurrence
 # patterns are likely typos or anomalies, but 2+ recurrences are meaningful.
 _PATTERN_MIN_COUNT = 2         # patterns with fewer hits are dropped
-_BODY_EXCERPT_CHARS = 240      # chars of body to store in CommitDecision
+# 240→800 (E1, 2026-05-06): senior rationale often runs past the first 240 chars;
+# 800 captures full PR-style commit bodies without blowing prompt context.
+_BODY_EXCERPT_CHARS = 800
 _PATTERN_EXAMPLE_CHARS = 120   # chars per example in DecisionPattern
 
 # Pattern set: (display_name, regex). Pre-compiled below with re.IGNORECASE.

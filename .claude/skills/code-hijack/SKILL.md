@@ -163,7 +163,7 @@ rule: "Multi-round-trip auth schemes (Digest, OAuth challenge) must be modeled a
 step 1 의 `commit_decisions` 가 `null` 이 아니면, 각 규칙의 `evidence` 필드를 시니어의 실제 commit 인용으로 채워라. **이게 이 도구의 핵심 차별점** — rule 의 reason 을 LLM 이 paraphrase 하는 게 아니라 시니어가 직접 쓴 commit body 를 verbatim 으로 surface 한다.
 
 **`commit_decisions.commits` 구조** (각 entry):
-- `sha` (12자), `subject`, `date` (ISO), `body_excerpt` (≤240자), `matched_patterns` (예: `["instead of", "decided to"]`), `file_paths` (이 commit 이 touch 한 파일들)
+- `sha` (12자), `subject`, `date` (ISO), `body_excerpt` (≤800자), `matched_patterns` (예: `["instead of", "decided to"]`), `file_paths` (이 commit 이 touch 한 파일들)
 
 **규칙 별 evidence 채우는 절차**:
 
