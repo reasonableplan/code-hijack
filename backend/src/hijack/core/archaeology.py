@@ -191,6 +191,16 @@ _DECISION_PATTERNS: tuple[tuple[str, str], ...] = (
     ("reverted because",  r"\breverted?\b[^\n.]{0,40}?\bbecause\b"),
     ("abandoned",         r"\babandoned\b"),
     ("originally...now",  r"\boriginally\b[^\n.]{0,80}?\bnow\b"),
+    # Goal/avoidance patterns — surface "why this exists" rationales.
+    ("to avoid",          r"\bto\s+avoid\b"),
+    ("to prevent",        r"\bto\s+prevent\b"),
+    # Causal patterns — external constraint or motivation.
+    ("due to",            r"\bdue\s+to\b"),
+    ("motivated by",      r"\bmotivated\s+by\b"),
+    # Alternative comparison — supplements "instead of"/"rather than".
+    ("as opposed to",     r"\bas\s+opposed\s+to\b"),
+    # Incident signal — past failure/rollback rationale.
+    ("regression",        r"\bregression\b"),
 )
 
 # Pre-compile at module import time for cheap test inspection and fast matching.

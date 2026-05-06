@@ -132,6 +132,36 @@ class TestPatternMatching:
         matched = result.commits[0].matched_patterns if result.commits else []
         assert "originally...now" in matched
 
+    def test_to_avoid_matches(self) -> None:
+        result = self._extract_single("Wrap in try/except to avoid leaking the underlying error.")
+        matched = result.commits[0].matched_patterns if result.commits else []
+        assert "to avoid" in matched
+
+    def test_to_prevent_matches(self) -> None:
+        result = self._extract_single("Add input validation to prevent path traversal.")
+        matched = result.commits[0].matched_patterns if result.commits else []
+        assert "to prevent" in matched
+
+    def test_due_to_matches(self) -> None:
+        result = self._extract_single("Drop python 3.7 support due to upstream EOL.")
+        matched = result.commits[0].matched_patterns if result.commits else []
+        assert "due to" in matched
+
+    def test_motivated_by_matches(self) -> None:
+        result = self._extract_single("Refactor motivated by the recent perf incident.")
+        matched = result.commits[0].matched_patterns if result.commits else []
+        assert "motivated by" in matched
+
+    def test_as_opposed_to_matches(self) -> None:
+        result = self._extract_single("Use a single mutex as opposed to per-row locks.")
+        matched = result.commits[0].matched_patterns if result.commits else []
+        assert "as opposed to" in matched
+
+    def test_regression_matches(self) -> None:
+        result = self._extract_single("Fix encoding regression introduced in 0.24.")
+        matched = result.commits[0].matched_patterns if result.commits else []
+        assert "regression" in matched
+
     def test_multiple_patterns_in_one_body_both_recorded(self) -> None:
         # A body matching two patterns should produce BOTH in matched_patterns,
         # sorted ascending. This protects against short-circuit logic.

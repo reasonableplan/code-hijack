@@ -199,10 +199,12 @@ QUALITY REQUIREMENTS (non-negotiable):
       ("instead of", "rather than", "decided to", "reverted because",
       "switched from", "rejected", "abandoned") aligned with the rule's reason.
    4. Pick 1-2 most relevant commits. Map the body's keyword to `intent_kind`:
-        - "reverted because" / "rolled back"           → "incident"
-        - "rejected" / "abandoned" / "switched from"   → "rejection"
-        - "instead of" / "rather than" / "decided to"  → "preference"
-        - external SLA / spec / compliance / tool limit → "constraint"
+        - "reverted because" / "rolled back" / "regression"  → "incident"
+        - "rejected" / "abandoned" / "switched from"          → "rejection"
+        - "instead of" / "rather than" / "decided to" /
+          "as opposed to" / "to avoid" / "to prevent"         → "preference"
+        - "due to" / "motivated by" / external SLA / spec /
+          compliance / tool limit                              → "constraint"
       When multiple keywords match, priority: rejection > incident > preference.
    5. Doc evidence works the same way against <repo_context>: ref = repo-
       relative path, headline = section heading verbatim, quote = paragraph

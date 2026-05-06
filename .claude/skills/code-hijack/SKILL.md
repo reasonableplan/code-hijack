@@ -210,8 +210,9 @@ step 1 의 `commit_decisions` 가 `null` 이 아니면, 각 규칙의 `evidence`
 | matched_patterns 에 포함 | intent_kind |
 |---|---|
 | `rejected`, `abandoned`, `switched from` | `rejection` (시니어가 거절한 패턴) |
-| `reverted because` | `incident` (revert = 실제 실패 발생) |
-| `instead of`, `rather than`, `decided to`, `tried`, `considered`, `decided not to`, `originally...now`, `switched to` | `preference` (의식적 선택) |
+| `reverted because`, `regression` | `incident` (revert/사고 = 실제 실패 발생) |
+| `instead of`, `rather than`, `decided to`, `tried`, `considered`, `decided not to`, `originally...now`, `switched to`, `as opposed to`, `to avoid`, `to prevent` | `preference` (의식적 선택) |
+| `due to`, `motivated by` | `constraint` (외부 사유/스펙/제약) |
 
 여러 패턴이 매치되면 가장 강한 것 우선: rejection > incident > preference. 모르면 `null`.
 
