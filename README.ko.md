@@ -10,9 +10,9 @@ AI 에이전트가 짜는 코드는 일반적이고 일관성 없다. code-hijac
 
 태그: ✅ 정량 검증됨, ⚠️ 부분 작동/한계 있음, ❓ 구현 됨 — 측정 데이터 아직 없음. [검증 현황](#검증-현황) 섹션에 cycle data.
 
-- ✅ **10 카테고리 분석** — architecture, coding_style, api_design, testing, dependencies, security, performance, devops, state_management, data_model. (3+1 카테고리 starlette 에서 매칭 검증, 나머지 6 구현되어 있고 dogfooding 대기.)
+- ✅ **10 카테고리 분석** — architecture, coding_style, api_design, testing, dependencies, security, performance, devops, state_management, data_model. (5 카테고리 starlette v12 까지 매칭 검증, 나머지 5 구현되어 있고 dogfooding 대기.)
 - ✅ **5 레이어 결정론적 분류** — frontend / backend / db / devops / shared (경로/확장자/의존성, LLM 추측 없음). 분류 회귀 발견 후 fix (e117c4c).
-- ⚠️ **실증적 규칙** — 각 규칙에 `ref_files:라인번호` + ✅/❌ 실제 코드 + 신뢰도/우선순위. **Evidence chain (verbatim commit 인용) 천장: 시니어 OSS (starlette) 38%, 일반 사용자 repo (HarnessAI 같은 짧은 commit) ~0%**. evidence 있는 rule 과 없는 rule 의 quality 격차 ~2x (외부 reviewer 측정).
+- ⚠️ **실증적 규칙** — 각 규칙에 `ref_files:라인번호` + ✅/❌ 실제 코드 + 신뢰도/우선순위. **Evidence chain (verbatim commit 인용) 천장: 시니어 OSS (starlette v12, 5 카테고리) 50%, 일반 사용자 repo (HarnessAI: 1 decision-signal commit / 61 scanned) ~0%**. evidence 있는 rule 과 없는 rule 의 quality 격차 ~2x (외부 reviewer 측정).
 - ❓ **Scope 태깅** — 모든 규칙이 `cross_project` / `framework_internal` / `domain_specific` 으로 분류. 다운스트림 도구가 안전한 것만 자동 적용. (코드 있음 — 다운스트림 실사용 데이터 아직 없음.)
 - ✅ **Critic 레이어** — 2차 LLM 패스로 중복 제거 + MUST 인플레 강등 + scope 태깅. 추가 mechanical 가드: MUST 비율 자동 lint (`write_output` 시점 stderr 경고, >40%), **R6 자동 강등** (verified citation 없는 MUST → SHOULD).
 - ✅ **2가지 실행 모드**:
@@ -30,15 +30,22 @@ AI 에이전트가 짜는 코드는 일반적이고 일관성 없다. code-hijac
 
 | 측정 항목 | 데이터 | Source |
 |---|---|---|
-| Evidence-chain 매칭율 (시니어 OSS, best case) | **38%** (starlette, 4 카테고리, depth=30) | v10 session |
+| Evidence-chain 매칭율 (시니어 OSS, best case) | **50%** (starlette v12, 5 카테고리: architecture+coding_style+api_design+testing+security+performance, depth=30) | v12 session |
 | 일반 개발자 repo 매칭율 | **~0%** (HarnessAI: 1 decision-signal commit / 61 scanned) | dogfood-harnessai session |
-| 외부 reviewer score (clean LLM session) | **6/10 사용자 학습, 5/10 AI 코드 가이드** | C external eval |
+| 외부 reviewer score (clean LLM session) | **6/10 사용자 학습, 5/10 AI 코드 가이드** | C external eval (v8) |
 | Evidence vs no-evidence 규칙 quality 격차 | **~2x** (외부 reviewer 정성 평가) | C external eval |
 | MUST 캘리브레이션 target | overall 30–40%, 카테고리당 ≤50% | `_check_must_calibration` |
 | R6 자동 강등 효과 | starlette MUST 58%→25%, 살아남은 MUST 모두 cited | v8 vs v7 |
 | Decision pattern 키워드 (현재) | 18개 (`instead of`, `rather than`, `to avoid`, `to prevent`, `due to`, `motivated by`, `as opposed to`, `regression` 등) | `archaeology._DECISION_PATTERNS` |
+| G 카테고리 확장 ROI (검증) | **+5%p evidence per 카테고리** (testing→38%, security→45%, performance→50%) | v10/v11/v12 chain |
+| intent_kind 다양성 (4 측정 누적) | **incident: 0** — 시니어 OSS 가 perf/security 결정을 `to avoid`/`as opposed to` (preference) 로 표현, `regression`/`reverted because` (incident) 아님 | v10/v11/v12 + R7 phase 1 |
 
-**정직한 평가**: 도구 차별점 (verbatim 인용 evidence chain) 은 **잘 정돈된 시니어 OSS** (PR-style commit body 풍부) 에서 광고대로 작동. 일반 짧은-commit repo 에선 "rule + ✅/❌ example" extractor 로 degrade — 여전히 유용하지만 일반 LLM rule miner 와 차이 없음. 천장 올리기 후보로 **R7** (commit corpus → rule 역도출) 과 **G** (카테고리 확장) 탐색 중. **D dogfooding** 이 현재 quality 가 진짜 사용자에게 "충분" 한지 답할 다음 데이터.
+**정직한 평가**: 도구 차별점 (verbatim 인용 evidence chain) 은 **잘 정돈된 시니어 OSS** (PR-style commit body 풍부) 에서 광고대로 작동. 일반 짧은-commit repo 에선 "rule + ✅/❌ example" extractor 로 degrade — 여전히 유용하지만 일반 LLM rule miner 와 차이 없음.
+
+방향성 현황 (2026-05-06 end-of-day):
+- **G (카테고리 확장)** — 검증 완료: +5%p evidence per 카테고리, starlette 천장 50% 도달. 5 카테고리 이상은 diminishing returns; commit-pool 풍부함이 진짜 lever 임 (카테고리 수 아님).
+- **R7 (commit corpus → rule 역도출)** — Phase 1 완료 (`backend/docs/r7_pipeline_reversal.md`). multi-commit cluster (CORS preflight: 3 commits → 1 cluster) 에서 가설 viable, 그러나 **starlette cluster 의 21% 만 multi-commit** — 단일-commit cluster 는 forward pipeline 대비 advantage 없음. Phase 2-4 (LLM derivation + verify + 외부 평가) ungated; hybrid forward+inversion 모드로 갈 가능성.
+- **D dogfooding** — ceiling vs good-enough 질문. HarnessAI 에서 2026-05-06 시작 (1주일 horizon); "에이전트가 `.code-hijack/CLAUDE.md` 적용 시 측정 가능한 코드 품질 향상이 있나" 가 결론.
 
 ## Quickstart
 
@@ -204,7 +211,7 @@ backend/
     llm/
       base.py                          # BaseLLM ABC
       api.py                           # ClaudeAPIClient (anthropic SDK)
-tests/                                 # pytest — 783 tests, ruff clean
+tests/                                 # pytest — 839 tests, ruff clean
   fixtures/senior_wisdom/              # 레이어 감지 검증용 미니 레포
 examples/                              # 실제 분석 출력
   fastapi/                             # 최신 fastapi 분석 결과
@@ -221,7 +228,9 @@ examples/                              # 실제 분석 출력
 
 완화된 갭 (2026-04-17 이후): Git 히스토리 + PR 토론 마이닝이 구현됨 (exemplars, style fingerprint, 테스트 방어 카탈로그, PR 신호, commit 결정 흔적). 규칙에 verbatim evidence + intent 분류 포함.
 
-잔존 갭: skill 모드에서 evidence chain 이 비어 있음 (기계적 신호 레이어는 CLI 모드에서만 실행). 해결을 위해 사전 계산된 신호를 skill 모드 프롬프트에 주입하는 "A2 LLM distillation" 작업 중.
+Skill 모드 evidence 채워짐 (2026-05-06 close): A2.1 가 `commit_decisions` 를 skill 모드 프롬프트에 주입 → skill 모드 실행도 CLI 모드와 같은 evidence chain 생성. starlette v3→v12 cycle 에서 매칭율 17%→50% 검증됨.
+
+잔존 갭: **incident-kind evidence** (외부 reviewer 가 hallucination 방지에 가장 가치 있다 평가한 종류) 가 카테고리 확장만으로 안 늘어남. 시니어 OSS 가 perf/security 결정을 preference (`to avoid`, `as opposed to`) 로 표현하지 incident (`regression`, `reverted because`) 로 안 씀. 해결: (a) cross-repo CVE-DB 식 reference 마이닝, 또는 (b) post-mortem 풍부한 다른 부류 repo (인프라 프로젝트 등).
 
 ## Roadmap
 
@@ -231,7 +240,9 @@ examples/                              # 실제 분석 출력
 - ✅ **Phase 3b (HarnessAI 통합)** — `scope` 필드 (cross_project / framework_internal / domain_specific), `harness-export` 서브커맨드, system-prompt 에 ✅/❌/ref 인라인
 - ✅ **Phase 4a (결정 마이닝)** — Git 히스토리 + PR 토론 + commit body 마이닝. 모듈: `archaeology`, `exemplars` (G1), `style_fingerprint` (G2), `test_decisions` (B), `pr_decisions` (A1), commit 결정 패턴 마이닝 (C).
 - ✅ **Phase 4b (검증 강화, 2026-05-05)** — 레이어 감지 false-positive 가드, 파일 selector docs_src 강등 + truncate-aware 정렬, 규칙 추출 cargo-cult 가드, MUST 자동 캘리브레이션 lint, persistent fetch 캐시.
-- **Phase 4c (계획)** — A2 LLM distillation (기계적 신호를 skill 모드 프롬프트에 주입해 evidence chain 채우기), ORM-aware 레이어 감지, 언어 확장 (Go/Rust).
+- ✅ **Phase 4c (skill-mode parity + calibration, 2026-05-06)** — A2.1 commit_decisions 주입 (skill 모드 evidence chain 이 CLI 모드와 동등), R6 speculative MUST 자동 강등, E1 body excerpt 800 chars, D pattern set 6→18, G7 cited-MUST self-check 가이드, G8 feature-doc noise 필터, G9 top-level dotted-py demote.
+- **Phase 5a (계획)** — R7 phase 2-4 (commit-corpus-first rule 역도출, hybrid forward+inversion 모드).
+- **Phase 5b (계획)** — ORM-aware 레이어 감지, 언어 확장 (Go/Rust), incident-kind cross-repo reference 마이닝.
 
 ## 개발
 
@@ -243,4 +254,4 @@ MIT — [LICENSE](LICENSE) 참조.
 
 ## 배경
 
-harnessai + gstack 워크플로우 (계획 → 구현 → 검증 → 리뷰 루프) 로 개발. 점진적 커밋, 783 passing tests, 4 레포에 도그푸딩 + 품질 진화 기록. Phase 4b 에서 selector 강화, cargo-cult 가드, MUST 자동 캘리브레이션 lint, persistent fetch 캐시 추가. 상세 설계 문서: [`backend/docs/skeleton.md`](backend/docs/skeleton.md).
+harnessai + gstack 워크플로우 (계획 → 구현 → 검증 → 리뷰 루프) 로 개발. 점진적 커밋, 839 passing tests, 5 레포에 도그푸딩 + 품질 진화 기록 (httpx, fastapi, starlette OSS + HarnessAI + code-hijack self). Phase 4b 에서 selector 강화, cargo-cult 가드, MUST 자동 캘리브레이션 lint, persistent fetch 캐시 추가. Phase 4c (2026-05-06) 가 카테고리 확장 + skill-mode parity 로 starlette evidence-chain 매칭율을 17% → 50% 로 끌어올림. 상세 설계 문서: [`backend/docs/skeleton.md`](backend/docs/skeleton.md), [`backend/docs/r7_pipeline_reversal.md`](backend/docs/r7_pipeline_reversal.md).

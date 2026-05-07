@@ -1,6 +1,6 @@
 [project]
 name = "code-hijack"
-version = "0.1.0"
+version = "0.2.0"
 description = "시니어 개발자 코드베이스를 LLM으로 분석해 AI 에이전트용 코딩 규칙을 자동 추출하는 도구"
 requires-python = ">=3.12"
 dependencies = [

@@ -54,7 +54,9 @@ class TestCliGroupHelp:
         runner = CliRunner()
         result = runner.invoke(cli, ["--version"])
         assert result.exit_code == 0
-        assert "0.1.0" in result.output
+        # Pinned to current __version__ — bump test in lockstep with version bump.
+        from hijack import __version__
+        assert __version__ in result.output
 
     def test_analyze_help_shows_target(self) -> None:
         runner = CliRunner()
