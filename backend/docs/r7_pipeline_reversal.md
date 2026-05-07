@@ -110,3 +110,35 @@
 - starlette 18 commits 직접 read 해서 손으로 클러스터링 1회 — 알고리즘 휴리스틱 영감 얻기
 
 이 design doc 는 alive — phase 1 시작 전에 사용자 ↔ Claude 합의 한 번 필요.
+
+## Phase 1 결과 (2026-05-06)
+
+`backend/src/hijack/core/intent_clusterer.py` + `tests/test_intent_clusterer.py` 작성 완료. 알고리즘: `(intent_kind, primary_path)` 버킷, primary_path = 첫 non-test file_path. 정렬: 클러스터 size DESC → intent priority → path ASC.
+
+**starlette smoke 결과** (artifact: `r7_phase1_starlette_clusters.md`):
+
+| 지표 | 값 |
+|---|---|
+| Commits w/ signal | 18 |
+| Clusters | 14 |
+| Multi-commit clusters | 3 (3 + 2 + 2 commits) |
+| Single-commit clusters | 11 |
+| by_kind | preference 12, rejection 1, constraint 1, **incident 0** |
+
+**가설 viable 입증** ✅ — Cluster #1 (CORS preflight, 3 commits 모두 `middleware/cors.py` 터치) 이 하나로 묶임. Phase 2 LLM 이 이 클러스터로 1 rule + 3 evidence entries 도출 → forward pipeline 의 v11 security rule (현재 simple+preflight 두 commit 직접 인용) 와 동등 또는 우위.
+
+**클러스터 false positive 발견** ⚠️ — Cluster #2 `starlette/config.py` (2 commits): 48dea4d (typing overloads) + b95acea (CI scripts update) 가 같은 클러스터로 묶임. b95acea 가 multi-file commit 인데 sorted 첫 non-test 가 우연히 config.py. 의도 mismatch. **Phase 2 LLM 가이드 필요**: 클러스터 내 commits 의 의도가 align 안 되면 rule emit skip + cluster 분해 또는 폐기.
+
+**Cluster #4 의 rejection 패턴 false positive** ⚠️ — 93e74a4d "WebSocket Denial Response" 의 'rejected' 매칭은 feature 이름이지 narrative rejection 아님. archaeology 의 패턴 매칭이 narrative vs subject 구분 안 함.
+
+**Single-commit-cluster ratio 11/14**: forward pipeline 의 1-rule-per-commit 매칭과 동등. R7 의 진짜 leverage 는 multi-commit 클러스터 (3개 — 14개 중 21%). 천장: 21% rule 들에 대해서만 R7 가 forward 대비 evidence richness ↑ 효과.
+
+**incident 0 (4th datapoint)**: 누적 4 측정 (testing v10, security v11, perf v12, 그리고 R7 phase 1) 모두 incident 0. starlette 시니어 commit 자체가 incident framing 안 씀이 강하게 입증. 외부 reviewer 가 incident 가장 가치 있다 한 평가와 ROI 격차 — R7 도 이 격차 못 메움.
+
+**Phase 2 가이드라인 (이 결과 기반)**:
+- 클러스터 size ≥ 2 인 multi-commit cluster 만 우선 inversion 적용 (R7 leverage 핵심)
+- size = 1 클러스터는 forward pipeline 으로 fallback
+- LLM 프롬프트에 "이 cluster commits 의 의도가 align 안 되면 'no rule' 응답해라" 명시
+- 클러스터 false positive (config.py 같은) 는 LLM 의 의도 검증 단계가 잡음
+
+**Open question 1 (클러스터링 알고리즘) partial answer**: file_path overlap 단독으로는 multi-file commit 의 anchor 노이즈 발생. 향후 개선: commit 의 subject 키워드도 클러스터링에 반영 (e.g. "CORS" subject 가 같은 cluster, "CI" subject 가 별도 cluster).

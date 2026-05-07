@@ -43,9 +43,7 @@ def _is_auxiliary(rel: Path) -> bool:
     if any(p.startswith(prefix) for prefix in _AUXILIARY_PATH_PREFIXES):
         return True
     # Top-level dotted .py = bootstrap/dev script convention.
-    if "/" not in p and p.startswith(".") and p.endswith(".py"):
-        return True
-    return False
+    return "/" not in p and p.startswith(".") and p.endswith(".py")
 
 # ---------------------------------------------------------------------------
 # Category → preferred roles mapping
