@@ -139,6 +139,56 @@ class TestDetectLayer:
         fp, root = self._make(tmp_path, "app/views.py")
         assert detect_layer(fp, root, set(), {"flask"}) == "backend"
 
+    # ----------------------------------------------------------------------
+    # Android Kotlin/Java — fired only when android_context=True
+    # ----------------------------------------------------------------------
+
+    def test_kt_activity_in_android_context_is_frontend(self, tmp_path):
+        fp, root = self._make(tmp_path, "app/src/main/java/com/x/MainActivity.kt")
+        assert detect_layer(fp, root, set(), set(), android_context=True) == "frontend"
+
+    def test_kt_composable_screen_in_android_context_is_frontend(self, tmp_path):
+        fp, root = self._make(tmp_path, "feature/foryou/ForYouScreen.kt")
+        assert detect_layer(fp, root, set(), set(), android_context=True) == "frontend"
+
+    def test_kt_in_ui_dir_is_frontend(self, tmp_path):
+        fp, root = self._make(tmp_path, "core/ui/component/Button.kt")
+        assert detect_layer(fp, root, set(), set(), android_context=True) == "frontend"
+
+    def test_kt_viewmodel_in_android_context_is_backend(self, tmp_path):
+        fp, root = self._make(tmp_path, "feature/foryou/ForYouViewModel.kt")
+        assert detect_layer(fp, root, set(), set(), android_context=True) == "backend"
+
+    def test_kt_repository_in_android_context_is_backend(self, tmp_path):
+        fp, root = self._make(tmp_path, "core/data/UserRepository.kt")
+        assert detect_layer(fp, root, set(), set(), android_context=True) == "backend"
+
+    def test_kt_in_data_dir_is_backend(self, tmp_path):
+        fp, root = self._make(tmp_path, "core/data/network/Helper.kt")
+        assert detect_layer(fp, root, set(), set(), android_context=True) == "backend"
+
+    def test_kt_dao_in_android_context_is_db(self, tmp_path):
+        fp, root = self._make(tmp_path, "core/database/UserDao.kt")
+        assert detect_layer(fp, root, set(), set(), android_context=True) == "db"
+
+    def test_kt_database_in_android_context_is_db(self, tmp_path):
+        fp, root = self._make(tmp_path, "core/database/AppDatabase.kt")
+        assert detect_layer(fp, root, set(), set(), android_context=True) == "db"
+
+    def test_kt_without_android_context_is_shared(self, tmp_path):
+        """KMP / JVM 라이브러리 같은 non-Android Kotlin 은 패턴 매칭 안 함."""
+        fp, root = self._make(tmp_path, "src/UserRepository.kt")
+        assert detect_layer(fp, root, set(), set(), android_context=False) == "shared"
+
+    def test_kt_viewmodel_without_android_context_is_shared(self, tmp_path):
+        """non-Android Kotlin (KMP / JVM lib) 에서 ViewModel 패턴은 layer 분류 안 함.
+
+        주의: `ui/` substring 은 rule #2 (STRONG frontend dirs) 에 걸려 frontend
+        반환 — 의도된 동작. 따라서 negative case 는 ui/ 없는 path 로 검증.
+        """
+        fp, root = self._make(tmp_path, "shared/MyViewModel.kt")
+        assert detect_layer(fp, root, set(), set(), android_context=False) == "shared"
+
 
 # ---------------------------------------------------------------------------
 # _read_file_content tests
@@ -250,6 +300,49 @@ class TestFetchSourceLocal:
         (tmp_path / "test_foo.py").write_text("def test_bar(): pass\n", encoding="utf-8")
         files, _ = fetch_source(str(tmp_path))
         assert files[0].role == "test"
+
+    def test_kt_role_viewmodel_is_service_not_model(self, tmp_path):
+        """ViewModel 이 substring 'model' 에 걸려 model 로 잘못 분류되는 회귀 차단."""
+        (tmp_path / "FeatureViewModel.kt").write_text("class FeatureViewModel\n", encoding="utf-8")
+        # Need an AndroidManifest to enter android_context (kotlin file pass-through)
+        (tmp_path / "AndroidManifest.xml").write_text("<manifest/>", encoding="utf-8")
+        files, _ = fetch_source(str(tmp_path))
+        kt_files = [f for f in files if f.path.suffix == ".kt"]
+        assert len(kt_files) == 1
+        assert kt_files[0].role == "service"
+
+    def test_kt_role_activity_is_entry_point(self, tmp_path):
+        (tmp_path / "MainActivity.kt").write_text("class MainActivity\n", encoding="utf-8")
+        (tmp_path / "AndroidManifest.xml").write_text("<manifest/>", encoding="utf-8")
+        files, _ = fetch_source(str(tmp_path))
+        kt_files = [f for f in files if f.path.suffix == ".kt"]
+        assert kt_files[0].role == "entry_point"
+
+    def test_kt_role_dao_is_model(self, tmp_path):
+        (tmp_path / "UserDao.kt").write_text("interface UserDao\n", encoding="utf-8")
+        (tmp_path / "AndroidManifest.xml").write_text("<manifest/>", encoding="utf-8")
+        files, _ = fetch_source(str(tmp_path))
+        kt_files = [f for f in files if f.path.suffix == ".kt"]
+        assert kt_files[0].role == "model"
+
+    def test_kt_role_repository_is_service(self, tmp_path):
+        (tmp_path / "UserRepository.kt").write_text("class UserRepository\n", encoding="utf-8")
+        (tmp_path / "AndroidManifest.xml").write_text("<manifest/>", encoding="utf-8")
+        files, _ = fetch_source(str(tmp_path))
+        kt_files = [f for f in files if f.path.suffix == ".kt"]
+        assert kt_files[0].role == "service"
+
+    def test_kt_files_collected_with_android_layer(self, tmp_path):
+        """Phase 1 e2e 검증: AndroidManifest 있으면 .kt 가 Android-aware 레이어로 분류."""
+        (tmp_path / "AndroidManifest.xml").write_text("<manifest/>", encoding="utf-8")
+        (tmp_path / "MainActivity.kt").write_text("class MainActivity\n", encoding="utf-8")
+        (tmp_path / "FooViewModel.kt").write_text("class FooViewModel\n", encoding="utf-8")
+        (tmp_path / "BarDao.kt").write_text("interface BarDao\n", encoding="utf-8")
+        files, _ = fetch_source(str(tmp_path))
+        layers = {f.path.name: f.layer for f in files}
+        assert layers["MainActivity.kt"] == "frontend"
+        assert layers["FooViewModel.kt"] == "backend"
+        assert layers["BarDao.kt"] == "db"
 
     def test_subpath_option(self, tmp_path):
         sub = tmp_path / "backend"

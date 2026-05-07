@@ -28,7 +28,7 @@ _SKIP_DIRS = frozenset({
     ".ruff_cache", "coverage", ".coverage",
 })
 
-_SUPPORTED_SUFFIXES = frozenset({".py", ".ts", ".tsx"})
+_SUPPORTED_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".kt", ".java"})
 
 _MAX_LINES = 2000
 
@@ -71,6 +71,21 @@ _JS_ORM_DEPS = frozenset({
 })
 
 
+def _has_android_context(repo_root: Path) -> bool:
+    """Android 프로젝트 검출 — `.kt` / `.java` 파일에 Android-aware 레이어 규칙 적용 시그널.
+
+    AndroidManifest.xml 가 한 번이라도 존재하면 Android. multi-module 레포
+    (NowInAndroid 식 — `app/`, `core-*/`, `feature-*/` 분할) 도 최소 1개 모듈이
+    manifest 를 들고 있으므로 rglob 1회로 충분히 잡힌다.
+
+    KMP/JVM 라이브러리 (안드로이드 무관 Kotlin) 는 manifest 없으므로 False —
+    그 경우 .kt 파일은 fallback "shared" 로 떨어진다.
+    """
+    for _ in repo_root.rglob("AndroidManifest.xml"):
+        return True
+    return False
+
+
 def _has_orm_context(
     repo_root: Path,
     pyproject_deps: set[str],
@@ -97,8 +112,15 @@ def detect_layer(
     repo_root: Path,
     package_json_deps: set[str],
     pyproject_deps: set[str],
+    *,
+    android_context: bool = False,
 ) -> str:
-    """결정론적 규칙으로 레이어를 반환한다."""
+    """결정론적 규칙으로 레이어를 반환한다.
+
+    `android_context=True` 일 때 .kt/.java 파일에 Android-aware 매핑이 켜진다.
+    fetch_source 가 `_has_android_context` 로 한 번 계산해서 모든 detect_layer
+    호출에 같은 값을 패스한다 (per-file rglob 회피).
+    """
     rel = file_path.relative_to(repo_root)
     rel_posix = rel.as_posix()
     suffix = file_path.suffix.lower()
@@ -161,7 +183,43 @@ def detect_layer(
     ):
         return "backend"
 
-    # 10. 나머지 → shared
+    # 10. Android (.kt / .java) — manifest 발견된 레포 한정.
+    #     Android 는 client-only 앱이라 web 의 frontend/backend 분리와 다름.
+    #     매핑: UI 표면 (Activity/Fragment/Compose Screen) → frontend,
+    #           ViewModel/UseCase/Repository/DataSource → backend (logic 분리),
+    #           Room (Dao/Database) → db.
+    if suffix in {".kt", ".java"} and android_context:
+        name_lower = name.lower()
+        # 10a. UI 표면 → frontend
+        _ui_suffixes = (
+            "activity.kt", "activity.java",
+            "fragment.kt", "fragment.java",
+            "screen.kt", "composable.kt",
+        )
+        if name_lower.endswith(_ui_suffixes):
+            return "frontend"
+        if any(d in rel_posix for d in {"/ui/", "/presentation/", "/screens/", "/compose/"}):
+            return "frontend"
+        # 10b. Room / DB → db
+        _db_suffixes = (
+            "dao.kt", "dao.java",
+            "database.kt", "database.java",
+        )
+        if name_lower.endswith(_db_suffixes):
+            return "db"
+        # 10c. ViewModel / Repository / UseCase / DataSource → backend
+        _logic_suffixes = (
+            "viewmodel.kt", "viewmodel.java",
+            "repository.kt", "repository.java",
+            "usecase.kt", "interactor.kt",
+            "datasource.kt", "datasource.java",
+        )
+        if name_lower.endswith(_logic_suffixes):
+            return "backend"
+        if any(d in rel_posix for d in {"/data/", "/domain/", "/repository/", "/network/"}):
+            return "backend"
+
+    # 11. 나머지 → shared
     return "shared"
 
 
@@ -270,6 +328,28 @@ def _detect_role(rel: Path) -> str:
 
     if "test" in rel_posix or "spec" in rel_posix:
         return "test"
+
+    # Android Kotlin/Java patterns — name suffix 매칭이 generic substring 보다
+    # 먼저. "viewmodel.kt" 가 "model" substring 에 걸려 model 로 분류되는 회귀 차단
+    # (ViewModel 은 service 의도, model 아님). 패턴이 Android-only 가 아니라
+    # 일반 Kotlin/MVVM 컨벤션이므로 KMP/JVM 라이브러리에도 동일 적용.
+    if name.endswith(("activity.kt", "activity.java",
+                      "fragment.kt", "fragment.java")):
+        return "entry_point"
+    if name in {"mainapplication.kt", "application.kt", "main.kt"}:
+        return "entry_point"
+    if name.endswith(("composable.kt", "screen.kt")):
+        return "api"
+    if name.endswith(("viewmodel.kt", "viewmodel.java", "presenter.kt",
+                      "repository.kt", "repository.java",
+                      "usecase.kt", "interactor.kt",
+                      "datasource.kt", "datasource.java")):
+        return "service"
+    if name.endswith(("entity.kt", "entity.java",
+                      "dao.kt", "dao.java",
+                      "dto.kt", "dto.java")):
+        return "model"
+
     if name in {"main.py", "app.py", "index.ts", "server.ts", "__main__.py"}:
         return "entry_point"
     if "model" in rel_posix or "schema" in rel_posix or "types" in rel_posix:
@@ -398,19 +478,23 @@ def fetch_source(
 
     # 3. 지원 파일 0개이면 InputError
     if not collected:
-        msg = f"지원 파일(.py/.ts/.tsx) 없음: {repo_root.as_posix()!r}"
+        msg = f"지원 파일(.py/.ts/.tsx/.kt/.java) 없음: {repo_root.as_posix()!r}"
         raise InputError(INPUT_002, msg)
 
     # 4. 의존성 추출
     package_json_deps = _read_package_json_deps(repo_root)
     pyproject_deps = _read_pyproject_deps(repo_root)
+    android_context = _has_android_context(repo_root)
 
     # 5. SourceFile 목록 생성
     files: list[SourceFile] = []
     for abs_path in collected:
         rel = abs_path.relative_to(repo_root)
         content, original_chars = _read_file_content(abs_path)
-        layer = detect_layer(abs_path, repo_root, package_json_deps, pyproject_deps)
+        layer = detect_layer(
+            abs_path, repo_root, package_json_deps, pyproject_deps,
+            android_context=android_context,
+        )
         role = _detect_role(rel)
         files.append(SourceFile(
             path=rel, content=content, layer=layer, role=role,
