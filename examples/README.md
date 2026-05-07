@@ -2,7 +2,9 @@
 
 실제 시니어 오픈소스 레포를 code-hijack 으로 분석한 결과물. Skill 모드 (few-shot + critic) 적용.
 
-## [`starlette/`](starlette/) — Starlette (encode) — **신규 (2026-05-06)**
+## [`starlette/`](starlette/) — Starlette (encode) — **2026-05-06 v10 snapshot (4 categories)**
+
+> 📊 이 디렉토리는 v10 4-category baseline. 같은 날 v11 (+security) → v12 (+performance) 까지 진행되어 매칭율 38% → 45% → **50%** 으로 상승했으나, 그 두 사이클은 `hijack-output/validation-starlette-v{11,12}/` (gitignored) 에만 보관. v10 으로 도구 출력 형태를 보고, 매칭율 추이는 메인 README 의 Validation status 표 참조.
 
 - **Analyzed**: https://github.com/encode/starlette (history depth 30)
 - **Total files scanned**: 67

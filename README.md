@@ -10,9 +10,9 @@ AI agents produce generic, inconsistent code. code-hijack analyzes a senior open
 
 Tags: ✅ validated with measurable data, ⚠️ partial / has known limits, ❓ implemented but not yet measured. See [Validation status](#validation-status) below for cycle data.
 
-- ✅ **10 analysis categories** — architecture, coding_style, api_design, testing, dependencies, security, performance, devops, state_management, data_model. (3+1 categories matched-validated on starlette; remaining 6 implemented, dogfooding pending.)
+- ✅ **10 analysis categories** — architecture, coding_style, api_design, testing, dependencies, security, performance, devops, state_management, data_model. (5 categories matched-validated on starlette through v12; remaining 5 implemented, dogfooding pending.)
 - ✅ **5-layer deterministic classification** — frontend / backend / db / devops / shared (path + extension + dep-file heuristics, no LLM guessing). Calibration regression caught and fixed (e117c4c).
-- ⚠️ **Evidence-based rules** — every rule includes `ref_files:line`, verbatim ✅/❌ examples from the actual repo, confidence + priority. **Evidence-chain (verbatim commit quotes) ceiling: ~38% matched on senior OSS (starlette), ~0% on individual repos with terse commit messages (HarnessAI)**. Quality-gap with no-evidence rules measured ~2x by external reviewer.
+- ⚠️ **Evidence-based rules** — every rule includes `ref_files:line`, verbatim ✅/❌ examples from the actual repo, confidence + priority. **Evidence-chain (verbatim commit quotes) ceiling: ~50% matched on senior OSS (starlette v12, 5 categories), ~0% on individual repos with terse commit messages (HarnessAI: 1 decision-signal commit / 61 scanned)**. Quality-gap with no-evidence rules measured ~2x by external reviewer.
 - ❓ **Scope-tagged rules** — every rule is classified `cross_project`, `framework_internal`, or `domain_specific`. Lets a downstream tool auto-apply the safe ones and quarantine the rest. (Code present, end-to-end downstream usage not yet measured.)
 - ✅ **Critic layer** — second LLM pass that drops duplicates, downgrades inflated MUST, tags scope. Plus mechanical safeguards: MUST ratio auto-lint (`write_output` stderr warn if >40%), and **R6 auto-downgrade** of speculative MUSTs (no verified citation → SHOULD).
 - ✅ **Two execution modes**:
@@ -30,19 +30,26 @@ Numbers from the 2026-05-06 measurement cycle on `encode/httpx`, `encode/starlet
 
 | What | Measured | Source |
 |---|---|---|
-| Evidence-chain matching rate (senior OSS, best case) | **38%** (starlette, 4 categories, depth=30) | v10 session |
+| Evidence-chain matching rate (senior OSS, best case) | **50%** (starlette v12, 5 categories: architecture+coding_style+api_design+testing+security+performance, depth=30) | v12 session |
 | Same on a typical individual-developer repo | **~0%** (HarnessAI: 1 decision-signal commit / 61 scanned) | dogfood-harnessai session |
-| External reviewer score (clean LLM session, no codebase context) | **6/10 user-learning, 5/10 AI-coding-guide** | C external eval |
+| External reviewer score (clean LLM session, no codebase context) | **6/10 user-learning, 5/10 AI-coding-guide** | C external eval (v8) |
 | Evidence vs no-evidence rule quality gap | **~2x** (external reviewer judgement, intent-kind preserved verbatim helps) | C external eval |
 | MUST calibration target | 30–40% MUST overall, ≤50% per category | `_check_must_calibration` |
 | Auto-downgrade impact (R6) | starlette MUST 58%→25%, all surviving MUSTs are cited | v8 vs v7 |
 | Decision-pattern keywords currently mined | 18 patterns (incl. `instead of`, `rather than`, `to avoid`, `to prevent`, `due to`, `motivated by`, `as opposed to`, `regression`, …) | `archaeology._DECISION_PATTERNS` |
+| G category-expansion ROI (verified) | **+5%p evidence per added category** (testing→38%, security→45%, performance→50%) | v10/v11/v12 chain |
+| intent_kind diversity (cumulative across 4 measurements) | **incident: 0** in expanded categories — senior OSS frames perf/security decisions as `to avoid`/`as opposed to` (preference), not `regression`/`reverted because` (incident) | v10/v11/v12 + R7 phase 1 |
 
-**Honest read**: the tool's differentiator (verbatim-citation evidence chains) works as advertised on **well-curated senior repos** with PR-style commit bodies. For everyday repos with terse commits, it degrades to a "rule + ✅/❌ example" extractor — still useful, but no different from a generic LLM rule miner. The **R7** (commit-corpus-first rule derivation) and **G** (more analysis categories) directions are the candidates explored to lift the ceiling; dogfooding (D) is what tells us whether the current quality is already "good enough" for actual users.
+**Honest read**: the tool's differentiator (verbatim-citation evidence chains) works as advertised on **well-curated senior repos** with PR-style commit bodies. For everyday repos with terse commits, it degrades to a "rule + ✅/❌ example" extractor — still useful, but no different from a generic LLM rule miner.
+
+Direction status (2026-05-06 end-of-day):
+- **G (more categories)** — verified: +5%p evidence per added category, ceiling now 50% on starlette. Diminishing returns past 5 categories; commit-pool richness, not category count, is the real lever.
+- **R7 (commit-corpus-first rule derivation)** — phase 1 complete (`backend/docs/r7_pipeline_reversal.md`). Hypothesis viable on multi-commit clusters (CORS preflight: 3 commits → 1 cluster) but **only 21% of starlette clusters are multi-commit** — single-commit clusters get no advantage over forward pipeline. Phase 2-4 (LLM derivation + verify + external eval) still ungated; will likely become a hybrid forward+inversion mode.
+- **D (dogfooding)** — the ceiling-vs-good-enough question. Started on HarnessAI 2026-05-06 (1-week horizon); resolution comes from "did the agent code measurably better with `.code-hijack/CLAUDE.md` than without".
 
 ## Example outputs
 
-**Latest** — [`examples/starlette/`](examples/starlette/) (2026-05-06): [encode/starlette](https://github.com/encode/starlette), 67 files, 16 rules, **38% evidence-chain coverage** (6 verbatim citations including incident-grade evidence on a memory-regression PR), 31% MUST ratio after R6 auto-downgrade.
+**Latest** — [`examples/starlette/`](examples/starlette/) (2026-05-06, v10 snapshot): [encode/starlette](https://github.com/encode/starlette), 67 files, 16 rules, **38% evidence-chain coverage** (6 verbatim citations including incident-grade evidence on a memory-regression PR), 31% MUST ratio after R6 auto-downgrade. The v11 (+security) and v12 (+performance) cycles ran 2026-05-06 in `hijack-output/validation-starlette-v{11,12}/` (gitignored); the published example reflects the 4-category v10 baseline.
 
 Representative patterns captured:
 - Locked middleware positions (ServerError outermost / Exception innermost framework-enforced)
@@ -224,7 +231,7 @@ backend/
     llm/
       base.py                          # BaseLLM ABC
       api.py                           # ClaudeAPIClient (anthropic SDK)
-tests/                                 # pytest — 783 tests, ruff clean
+tests/                                 # pytest — 839 tests, ruff clean
   fixtures/senior_wisdom/              # mini repo for layer-detection tests
 examples/                              # real analysis outputs
   fastapi/                             # latest fastapi analysis (17 rules)
@@ -242,7 +249,9 @@ In short:
 
 What's now mitigated (since 2026-04-17): Git history + PR discussion mining is implemented (exemplars, style fingerprint, test-defense catalog, PR signals, commit decision trails). Rules now carry verbatim evidence with intent classification.
 
-Remaining gap: in skill mode, evidence chains are empty (the mechanical signal layers run only in CLI mode). Closing this requires injecting pre-computed signals into the skill-mode prompt — work in progress as "A2 LLM distillation".
+Skill-mode evidence chains (closed 2026-05-06): A2.1 ships `commit_decisions` injection into the skill-mode prompt, so skill-mode runs now populate the same evidence chain as CLI mode. Verified on starlette v3→v12 cycle: matching rate 17%→50%.
+
+Remaining gap: **incident-kind evidence** (the most valuable for hallucination prevention per external review) is missing from category expansion alone. Senior OSS frames perf/security decisions as preferences (`to avoid`, `as opposed to`), not incidents (`regression`, `reverted because`). Closing this gap requires either (a) cross-repo CVE-DB style reference mining, or (b) a different repo class (post-mortem-heavy infra projects).
 
 ## Roadmap
 
@@ -252,7 +261,9 @@ Remaining gap: in skill mode, evidence chains are empty (the mechanical signal l
 - ✅ **Phase 3b (HarnessAI integration)** — `scope` field (cross_project / framework_internal / domain_specific), `harness-export` subcommand, system-prompt with inline ✅/❌/ref
 - ✅ **Phase 4a (decision mining)** — Git history + PR discussion + commit body mining. Modules: `archaeology`, `exemplars` (G1), `style_fingerprint` (G2), `test_decisions` (B), `pr_decisions` (A1), commit-decision pattern mining (C).
 - ✅ **Phase 4b (validation hardening, 2026-05-05)** — Layer detection false-positive guards, file selector docs_src demote + truncate-aware ranking, cargo-cult guard in rule extraction, MUST calibration auto-lint, persistent fetch cache.
-- **Phase 4c (planned)** — A2 LLM distillation (inject mechanical signals into skill-mode prompt to populate evidence chains), ORM-aware layer detection, additional language support (Go/Rust).
+- ✅ **Phase 4c (skill-mode parity + calibration, 2026-05-06)** — A2.1 commit_decisions injection (skill-mode evidence chains now match CLI mode), R6 auto-downgrade of speculative MUSTs, E1 body-excerpt 800 chars, D pattern set 6→18, G7 cited-MUST self-check guidance, G8 feature-doc noise filter, G9 top-level dotted-py demote.
+- **Phase 5a (planned)** — R7 phase 2-4 (commit-corpus-first rule derivation, hybrid forward+inversion mode).
+- **Phase 5b (planned)** — ORM-aware layer detection, additional language support (Go/Rust), incident-kind cross-repo reference mining.
 
 ## Development
 
@@ -264,4 +275,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Background
 
-Built using the harnessai + gstack workflow (plan → build → verify → review loop). Incremental commits, 783 passing tests, dogfooded on 4 repos with documented quality progression. Phase 4b added selector hardening, cargo-cult guards, MUST calibration auto-lint, and persistent fetch cache. Full design document: [`backend/docs/skeleton.md`](backend/docs/skeleton.md).
+Built using the harnessai + gstack workflow (plan → build → verify → review loop). Incremental commits, 839 passing tests, dogfooded on 5 repos with documented quality progression (httpx, fastapi, starlette OSS + HarnessAI + code-hijack self). Phase 4b added selector hardening, cargo-cult guards, MUST calibration auto-lint, and persistent fetch cache. Phase 4c (2026-05-06) lifted starlette evidence-chain matching from 17% to 50% via category expansion + skill-mode parity. Full design documents: [`backend/docs/skeleton.md`](backend/docs/skeleton.md), [`backend/docs/r7_pipeline_reversal.md`](backend/docs/r7_pipeline_reversal.md).
