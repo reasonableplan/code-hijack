@@ -219,6 +219,103 @@ class TestSHAVerification:
 
 
 # ---------------------------------------------------------------------------
+# classify_rule via ref_files line-anchor (skill-mode grounding)
+# ---------------------------------------------------------------------------
+
+def _rule_with_refs(ref_files: list[str], reason: str = "") -> AnalysisRule:
+    return AnalysisRule(
+        rule="r", priority="MUST", confidence="high",
+        ref_files=ref_files, good_example="g", bad_example="b",
+        reason=reason,
+    )
+
+
+class TestRefFilesGrounding:
+    """When valid_file_paths is provided, ref_files entries with line anchors
+    act as grounding evidence for prose reasons that don't carry SHA/PR/ADR
+    patterns — the skill-mode common case."""
+
+    _VALID_FILES = {"src/app.py", "src/api/notebook.py"}
+
+    def test_ref_files_with_line_is_cited(self) -> None:
+        rule = _rule_with_refs(["src/app.py:42"], reason="구조적 분리가 필요")
+        assert classify_rule(rule, valid_file_paths=self._VALID_FILES) == "cited"
+
+    def test_ref_files_with_line_range_is_cited(self) -> None:
+        rule = _rule_with_refs(["src/api/notebook.py:20-35"], reason="래핑 강제")
+        assert classify_rule(rule, valid_file_paths=self._VALID_FILES) == "cited"
+
+    def test_ref_files_without_valid_pool_is_not_cited(self) -> None:
+        # valid_file_paths omitted (None) → ref_files check disabled, falls through.
+        rule = _rule_with_refs(["src/app.py:42"], reason="just because")
+        assert classify_rule(rule) == "other"
+
+    def test_ref_files_with_empty_pool_is_not_cited(self) -> None:
+        # Empty set = no truth pool = disable, NOT best-effort accept.
+        rule = _rule_with_refs(["src/app.py:42"], reason="just because")
+        assert classify_rule(rule, valid_file_paths=set()) == "other"
+
+    def test_ref_files_without_line_anchor_rejected(self) -> None:
+        # Bare path without ":N" — too vague to count as grounding.
+        rule = _rule_with_refs(["src/app.py"], reason="just because")
+        assert classify_rule(rule, valid_file_paths=self._VALID_FILES) == "other"
+
+    def test_ref_files_unknown_path_falls_through(self) -> None:
+        # Line anchor present but path not in valid pool — hallucinated ref.
+        rule = _rule_with_refs(["src/fake.py:99"], reason="just because")
+        assert classify_rule(rule, valid_file_paths=self._VALID_FILES) == "other"
+
+    def test_any_valid_ref_among_many_is_cited(self) -> None:
+        rule = _rule_with_refs(
+            ["src/fake.py:1", "src/app.py:42", "src/other-fake.py:7"],
+            reason="여러 위치에서 일관 패턴",
+        )
+        assert classify_rule(rule, valid_file_paths=self._VALID_FILES) == "cited"
+
+    def test_ref_files_beats_generic_phrase(self) -> None:
+        # Concrete file:line grounding overrides a "best practice" filler phrase.
+        rule = _rule_with_refs(["src/app.py:42"], reason="best practice for this codebase")
+        assert classify_rule(rule, valid_file_paths=self._VALID_FILES) == "cited"
+
+    def test_fake_sha_beats_valid_ref_files(self) -> None:
+        # fake_citation signal is stronger — hallucinated SHA surfaces even when
+        # ref_files is valid. The LLM lied about commit history; that's the
+        # signal we want to keep.
+        rule = _rule_with_refs(["src/app.py:42"], reason="commit deadbeef showed it")
+        valid_shas = {"a1b2c3d4e5f6789012345678901234567890abcd"}
+        assert (
+            classify_rule(rule, valid_shas=valid_shas, valid_file_paths=self._VALID_FILES)
+            == "fake_citation"
+        )
+
+    def test_no_evidence_marker_beats_ref_files(self) -> None:
+        # Explicit opt-out wins over ref_files grounding.
+        rule = _rule_with_refs(["src/app.py:42"], reason="[no-evidence] inferred")
+        assert classify_rule(rule, valid_file_paths=self._VALID_FILES) == "no_evidence"
+
+    def test_downgrade_keeps_must_when_ref_files_valid(self) -> None:
+        # End-to-end: a MUST rule with valid ref_files survives downgrade
+        # even though the reason has no SHA/PR/ADR patterns. This is the
+        # whole point of the change.
+        rule = _rule_with_refs(["src/app.py:42"], reason="구조적 일관성 강제")
+        sess = _session({"arch": [rule]})
+        sess.selected_files = list(self._VALID_FILES)
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 0
+        assert sess.categories[0].rules[0].priority == "MUST"
+
+    def test_downgrade_drops_must_without_selected_files(self) -> None:
+        # Backward compat: session with empty selected_files leaves ref_files
+        # check disabled — uncited MUST still drops to SHOULD.
+        rule = _rule_with_refs(["src/app.py:42"], reason="구조적 일관성 강제")
+        sess = _session({"arch": [rule]})
+        # selected_files left empty by _session helper
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 1
+        assert sess.categories[0].rules[0].priority == "SHOULD"
+
+
+# ---------------------------------------------------------------------------
 # classify_rule via structured Evidence list (Phase D1, Path A)
 # ---------------------------------------------------------------------------
 

@@ -45,6 +45,62 @@ def _is_auxiliary(rel: Path) -> bool:
     # Top-level dotted .py = bootstrap/dev script convention.
     return "/" not in p and p.startswith(".") and p.endswith(".py")
 
+
+# `export * from '<path>'` / `export { Name } from '<path>'` 식의 re-export 라인.
+# barrel 검출 휴리스틱에서 사용 — line 단위로 매칭하므로 anchor 필요.
+_REEXPORT_LINE_PATTERN = re.compile(r"^\s*export\b.*\bfrom\s+['\"]")
+
+# barrel 검출은 JS/TS suffix 한정. Python `from X import Y` 는 barrel 의미가
+# 약하고 (`__all__` / 부수효과 가능), Kotlin / Java 는 re-export 패턴이 다름.
+_BARREL_SUFFIXES = frozenset({".ts", ".tsx", ".js", ".jsx"})
+
+
+def _is_reexport_barrel(content: str, suffix: str) -> bool:
+    """JS/TS 파일이 순수 re-export barrel (`index.ts` 식) 인지 판정.
+
+    `export * from '...'` / `export { Name } from '...'` 만 있고 실제 구현이
+    없는 파일을 가려낸다. barrel 은 정보 가치가 거의 0 (재선언일 뿐) 이지만
+    역할 분류상 `other` 로 들어가 선별 자리를 차지하는 경우가 잦다 — 우리
+    벤치마크에서 frontend `index.ts` 4-5개가 architecture/coding_style 선별
+    12개 중 절반을 잡아먹었음. demote 해서 실제 구현 파일에 자리를 양보.
+
+    공백 / 라인 주석 (`//`) / 블록 주석 (`/* */`) 은 무시. re-export 가 1개
+    이상 있고, 그 외 코드 라인이 0 이면 barrel.
+    """
+    if suffix.lower() not in _BARREL_SUFFIXES:
+        return False
+    if not content:
+        return False
+    saw_reexport = False
+    in_block_comment = False
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if in_block_comment:
+            if "*/" in line:
+                in_block_comment = False
+            continue
+        if line.startswith("/*"):
+            if "*/" not in line[2:]:
+                in_block_comment = True
+            continue
+        if line.startswith("//"):
+            continue
+        if _REEXPORT_LINE_PATTERN.match(line):
+            saw_reexport = True
+            continue
+        # re-export 도 코멘트도 아닌 실제 코드 → barrel 아님
+        return False
+    return saw_reexport
+
+
+def _should_demote(f: SourceFile) -> bool:
+    """선별 시 auxiliary 로 demote 할 파일인지. path 휴리스틱과 barrel 휴리스틱 통합."""
+    if _is_auxiliary(f.path):
+        return True
+    return _is_reexport_barrel(f.content, f.path.suffix)
+
 # ---------------------------------------------------------------------------
 # Category → preferred roles mapping
 # ---------------------------------------------------------------------------
@@ -144,8 +200,8 @@ def select_files_for_category(
     for f in result.files:
         _add(f)
 
-    primary = [f for f in ordered if not _is_auxiliary(f.path)]
-    auxiliary = [f for f in ordered if _is_auxiliary(f.path)]
+    primary = [f for f in ordered if not _should_demote(f)]
+    auxiliary = [f for f in ordered if _should_demote(f)]
 
     deduped = _dedupe_near_duplicates(primary + auxiliary)
     return deduped[:max_files]

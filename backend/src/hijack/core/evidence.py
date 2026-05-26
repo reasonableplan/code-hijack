@@ -36,6 +36,12 @@ _DOC_KEYWORD_PATTERN = re.compile(
 )
 _DOC_PATH_PATTERN = re.compile(r"`[^`]*\.(?:md|markdown|mdx|rst)`", re.IGNORECASE)
 
+# ref_files entry shape: "<repo-relative-path>:<N>" or "<path>:<N>-<M>".
+# Used to distinguish ref_files entries that actually point at a line
+# (concrete grounding) from bare path-only strings (too vague to count).
+_REF_FILE_LINE_PATTERN = re.compile(r":(\d+)(?:-\d+)?$")
+
+
 # Phrases that almost always signal LLM-generated rationale rather than
 # real evidence. If a reason matches no citation pattern AND contains one of
 # these, classify it as `generic`. Kept short on purpose — adding too many
@@ -103,6 +109,7 @@ def classify_rule(
     *,
     valid_shas: set[str] | None = None,
     valid_doc_paths: set[str] | None = None,
+    valid_file_paths: set[str] | None = None,
 ) -> str:
     """Return one of: 'cited' | 'no_evidence' | 'fake_citation' | 'generic' | 'other'.
 
@@ -116,10 +123,13 @@ def classify_rule(
       structured field but every citation was hallucinated.
 
     Path B — `rule.evidence` is empty (Phase A/B / pre-D1 sessions):
-      Fall back to scanning `rule.reason` for citation patterns. Same priority
-      as before: [no-evidence] marker > non-commit citation > commit SHA
-      (validated) > generic phrase > other. This keeps older session.json
-      files classifiable without re-analysis.
+      Fall back to scanning `rule.reason` for citation patterns. Priority:
+      [no-evidence] marker > non-commit citation > commit SHA (validated) >
+      ref_files line-anchor (when `valid_file_paths` is provided) >
+      generic phrase > other. The ref_files step grounds skill-mode sessions
+      where the LLM writes prose reasons but populates `ref_files` with real
+      `path:line` anchors — without it, every such rule lands in 'other' and
+      gets downgraded.
     """
     if rule.evidence:
         return _classify_via_evidence(
@@ -147,6 +157,9 @@ def classify_rule(
         if valid_shas is None or _any_sha_valid(cited_shas, valid_shas):
             return "cited"
         return "fake_citation"
+
+    if _has_valid_ref_files(rule.ref_files, valid_file_paths):
+        return "cited"
 
     lowered = reason.lower()
     if any(phrase in lowered for phrase in _GENERIC_PHRASES):
@@ -213,6 +226,7 @@ def downgrade_speculative_rules(session: SessionResult) -> int:
     """
     valid_shas = {sha.lower() for sha in session.historic_shas} or None
     valid_doc_paths = set(session.repo_doc_paths) or None
+    valid_file_paths = set(session.selected_files) or None
 
     count = 0
     for cat in session.categories:
@@ -223,6 +237,7 @@ def downgrade_speculative_rules(session: SessionResult) -> int:
                 rule,
                 valid_shas=valid_shas,
                 valid_doc_paths=valid_doc_paths,
+                valid_file_paths=valid_file_paths,
             )
             if kind != "cited":
                 rule.priority = "SHOULD"
@@ -240,6 +255,7 @@ def compute_evidence_metrics(session: SessionResult) -> EvidenceMetrics:
     metrics = EvidenceMetrics()
     valid_shas = {sha.lower() for sha in session.historic_shas} or None
     valid_doc_paths = set(session.repo_doc_paths) or None
+    valid_file_paths = set(session.selected_files) or None
 
     for cat in session.categories:
         bucket = metrics.by_category.setdefault(cat.category, RuleClassification())
@@ -248,6 +264,7 @@ def compute_evidence_metrics(session: SessionResult) -> EvidenceMetrics:
                 rule,
                 valid_shas=valid_shas,
                 valid_doc_paths=valid_doc_paths,
+                valid_file_paths=valid_file_paths,
             )
             setattr(bucket, kind, getattr(bucket, kind) + 1)
             setattr(metrics.overall, kind, getattr(metrics.overall, kind) + 1)
@@ -265,6 +282,32 @@ def _any_sha_valid(cited_shas: list[str], valid_shas: set[str]) -> bool:
         for valid in valid_shas:
             if valid.startswith(cited):
                 return True
+    return False
+
+
+def _has_valid_ref_files(
+    ref_files: list[str],
+    valid_file_paths: set[str] | None,
+) -> bool:
+    """Whether ref_files contains at least one entry that:
+    - has a line-number suffix (`path:N` or `path:N-M`), AND
+    - whose file part is in valid_file_paths.
+
+    Returns False when ref_files is empty OR valid_file_paths is None/empty.
+    The latter makes this check opt-in: existing callers that don't pass
+    `valid_file_paths` (tests, older code) keep their previous behaviour.
+    A bare path entry without a line number is also rejected — the whole
+    point is concrete grounding, not "the file exists somewhere".
+    """
+    if not ref_files or not valid_file_paths:
+        return False
+    for ref in ref_files:
+        m = _REF_FILE_LINE_PATTERN.search(ref)
+        if m is None:
+            continue
+        path = ref[:m.start()]
+        if path in valid_file_paths:
+            return True
     return False
 
 

@@ -306,8 +306,7 @@ def _render_rule_compact(rule: AnalysisRule) -> list[str]:
     can't follow it; they just need the why.
     """
     out = [f"- [{rule.layer}]{_scope_tag(rule)} {rule.rule}"]
-    good = _signature_preview(rule.good_example)
-    bad = _signature_preview(rule.bad_example)
+    good, bad = _distinguishing_preview(rule.good_example, rule.bad_example)
     if good:
         out.append(f"  ✅ {good}")
     if bad:
@@ -355,6 +354,65 @@ def _signature_preview(code: str, max_len: int = 100) -> str:
             line = line[: max_len - 1] + "…"
         return line
     return ""
+
+
+def _meaningful_lines(code: str) -> list[str]:
+    """blank / `#` / `//` / docstring opener 를 제외한 코드 라인 목록."""
+    if not code:
+        return []
+    out: list[str] = []
+    for raw in code.split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#") or line.startswith("//"):
+            continue
+        if line.startswith('"""') or line.startswith("'''"):
+            continue
+        out.append(line)
+    return out
+
+
+def _truncate_line(line: str, max_len: int) -> str:
+    if len(line) > max_len:
+        return line[: max_len - 1] + "…"
+    return line
+
+
+def _distinguishing_preview(good: str, bad: str, max_len: int = 100) -> tuple[str, str]:
+    """system-prompt 의 ✅/❌ 비교가 의미를 가지도록 차이나는 첫 줄을 선택.
+
+    기존 `_signature_preview` 는 양쪽 모두 첫 의미 있는 라인만 추출 — 둘 다
+    같은 시그니처 (`class XxxService:`, `class XxxRequest(BaseModel):`) 로 시작하면
+    ✅/❌ 비교가 무의미해짐 (벤치마크에서 4-5 규칙이 같은 라인 출력). 이 함수는
+    두 코드를 동시에 보고 처음으로 달라지는 라인을 선택해 비교 가치를 살린다.
+
+    Returns: (good_preview, bad_preview). 둘 다 같은 시점의 차이나는 라인.
+    공백/주석/docstring 은 양쪽 동기로 skip.
+    """
+    good_lines = _meaningful_lines(good)
+    bad_lines = _meaningful_lines(bad)
+    if not good_lines and not bad_lines:
+        return "", ""
+    if not good_lines:
+        return "", _truncate_line(bad_lines[0], max_len)
+    if not bad_lines:
+        return _truncate_line(good_lines[0], max_len), ""
+    # 첫 줄부터 다르면 그대로 사용 — 기존 동작과 동일
+    if good_lines[0] != bad_lines[0]:
+        return _truncate_line(good_lines[0], max_len), _truncate_line(bad_lines[0], max_len)
+    # 같은 prefix — 처음 달라지는 줄까지 진행
+    i = 0
+    while (
+        i < len(good_lines)
+        and i < len(bad_lines)
+        and good_lines[i] == bad_lines[i]
+    ):
+        i += 1
+    # i 가 한쪽 끝에 닿았을 수도 있음 — 가능한 라인 선택
+    good_line = good_lines[i] if i < len(good_lines) else good_lines[-1]
+    bad_line = bad_lines[i] if i < len(bad_lines) else bad_lines[-1]
+    return _truncate_line(good_line, max_len), _truncate_line(bad_line, max_len)
 
 
 def _scope_tag(rule: AnalysisRule) -> str:

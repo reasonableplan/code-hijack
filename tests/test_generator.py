@@ -484,6 +484,83 @@ class TestSignaturePreview:
         assert _signature_preview("\n\n#only comment\n") == ""
 
 
+from hijack.core.generator import _distinguishing_preview  # noqa: E402
+
+
+class TestDistinguishingPreview:
+    """양쪽 첫 라인이 같을 때 차이나는 라인까지 자동 확장.
+
+    벤치마크에서 service singleton / Pydantic ConfigDict 등 4-5 규칙이 같은
+    클래스 헤더로 시작해 ✅/❌ 비교가 무의미했던 회귀 방지.
+    """
+
+    def test_different_first_lines_return_first_lines(self) -> None:
+        # 첫 라인이 이미 다르면 기존 동작과 동일
+        good = "def foo(*, x: int) -> str: ..."
+        bad = "def foo(x): ..."
+        assert _distinguishing_preview(good, bad) == (good, bad)
+
+    def test_same_first_line_advances_to_diff(self) -> None:
+        # 클래스 헤더가 같은 case (서비스 singleton 규칙의 실제 패턴)
+        good = "class DirectoryService:\n    directory_service = DirectoryService()"
+        bad = "class DirectoryService:\n    pass"
+        g, b = _distinguishing_preview(good, bad)
+        assert g == "directory_service = DirectoryService()"
+        assert b == "pass"
+
+    def test_multiple_same_lines_then_diff(self) -> None:
+        good = "class A:\n    def __init__(self):\n        self.x = 1"
+        bad = "class A:\n    def __init__(self):\n        self.x = 2"
+        g, b = _distinguishing_preview(good, bad)
+        assert g == "self.x = 1"
+        assert b == "self.x = 2"
+
+    def test_blank_and_comments_skipped_synchronously(self) -> None:
+        # 양쪽 모두 같은 prefix 의 공백/주석은 skip — 의미 라인 비교만
+        good = "class X:\n    # comment\n\n    pass_good = 1"
+        bad = "class X:\n    # comment\n\n    pass_bad = 2"
+        g, b = _distinguishing_preview(good, bad)
+        assert g == "pass_good = 1"
+        assert b == "pass_bad = 2"
+
+    def test_one_side_shorter_falls_back_to_last(self) -> None:
+        # bad 가 첫 줄 이후 의미 라인 없음 — good 의 다음 줄 vs bad 의 마지막 줄
+        good = "class A:\n    method_a = 1"
+        bad = "class A:"
+        g, b = _distinguishing_preview(good, bad)
+        assert g == "method_a = 1"
+        # bad 는 한 줄밖에 없으므로 그 줄 반환
+        assert b == "class A:"
+
+    def test_empty_good_returns_only_bad(self) -> None:
+        g, b = _distinguishing_preview("", "raise Foo")
+        assert g == ""
+        assert b == "raise Foo"
+
+    def test_empty_bad_returns_only_good(self) -> None:
+        g, b = _distinguishing_preview("def f(): pass", "")
+        assert g == "def f(): pass"
+        assert b == ""
+
+    def test_both_empty(self) -> None:
+        assert _distinguishing_preview("", "") == ("", "")
+
+    def test_truncates_long_diff_line(self) -> None:
+        good = "class X:\n    " + "a" * 200
+        bad = "class X:\n    " + "b" * 200
+        g, b = _distinguishing_preview(good, bad, max_len=50)
+        assert len(g) == 50 and g.endswith("…")
+        assert len(b) == 50 and b.endswith("…")
+
+    def test_js_line_comment_skipped(self) -> None:
+        # `//` 주석은 양쪽에서 동기로 skip — TS/JS 예제 지원
+        good = "function f() {\n  // setup\n  return 1\n}"
+        bad = "function f() {\n  // setup\n  return 2\n}"
+        g, b = _distinguishing_preview(good, bad)
+        assert g == "return 1"
+        assert b == "return 2"
+
+
 def _rule_with_examples(
     good: str = "def foo(*, x: int) -> str: ...",
     bad: str = "def foo(x): ...",

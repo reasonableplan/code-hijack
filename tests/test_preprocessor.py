@@ -324,3 +324,131 @@ class TestOriginalCharsRanking:
         selected = select_files_for_category(result, "architecture", max_files=10)
         paths = [f.path.as_posix() for f in selected]
         assert paths.index("a.py") < paths.index("b.py")
+
+
+# ---------------------------------------------------------------------------
+# barrel demotion — TS/JS index.ts 파일이 실제 구현 파일을 밀어내지 않도록
+# ---------------------------------------------------------------------------
+
+class TestReexportBarrelDemotion:
+    """`export * from '...'` 만 있는 barrel 파일은 auxiliary 로 demote.
+
+    실제 케이스: frontend 프로젝트의 `src/shared/components/index.ts` 식 1-7줄짜리
+    re-export 파일이 architecture/coding_style 선별 12개 중 4개를 잡아먹어
+    informative 파일이 밀려나는 회귀를 방지.
+    """
+
+    def _impl(self, name: str) -> SourceFile:
+        """non-barrel TS 파일 — 충분히 큰 실제 구현."""
+        return SourceFile(
+            path=Path(name),
+            content="export const x = 1\n" * 200,  # ~3800자
+            layer="frontend",
+            role="other",
+            original_chars=3800,
+        )
+
+    def _barrel(self, name: str, body: str) -> SourceFile:
+        return SourceFile(
+            path=Path(name),
+            content=body,
+            layer="frontend",
+            role="other",
+            original_chars=len(body),
+        )
+
+    def test_pure_export_star_barrel_demoted(self) -> None:
+        barrel = self._barrel("index.ts", "export * from './button'\nexport * from './card'\n")
+        impl = self._impl("button.ts")
+        result = _make_result([barrel, impl])
+        selected = select_files_for_category(result, "architecture", max_files=2)
+        paths = [f.path.as_posix() for f in selected]
+        # impl 이 먼저, barrel 은 뒤
+        assert paths.index("button.ts") < paths.index("index.ts")
+
+    def test_named_reexport_barrel_demoted(self) -> None:
+        barrel = self._barrel(
+            "index.ts",
+            "export { Button } from './button'\nexport { default as Card } from './card'\n",
+        )
+        impl = self._impl("button.ts")
+        result = _make_result([barrel, impl])
+        selected = select_files_for_category(result, "architecture", max_files=2)
+        paths = [f.path.as_posix() for f in selected]
+        assert paths.index("button.ts") < paths.index("index.ts")
+
+    def test_barrel_with_line_comments_demoted(self) -> None:
+        barrel = self._barrel(
+            "index.ts",
+            "// ui exports\nexport * from './button'\n// custom\nexport * from './card'\n",
+        )
+        impl = self._impl("button.ts")
+        result = _make_result([barrel, impl])
+        selected = select_files_for_category(result, "architecture", max_files=2)
+        paths = [f.path.as_posix() for f in selected]
+        assert paths.index("button.ts") < paths.index("index.ts")
+
+    def test_barrel_with_block_comment_demoted(self) -> None:
+        barrel = self._barrel(
+            "index.ts",
+            "/* ui barrel\n   multi-line */\nexport * from './button'\n",
+        )
+        impl = self._impl("button.ts")
+        result = _make_result([barrel, impl])
+        selected = select_files_for_category(result, "architecture", max_files=2)
+        paths = [f.path.as_posix() for f in selected]
+        assert paths.index("button.ts") < paths.index("index.ts")
+
+    def test_index_with_real_implementation_not_demoted(self) -> None:
+        # index.ts 이름이지만 실제 코드가 있으면 demote 하면 안 됨.
+        real_index = self._barrel(
+            "index.ts",
+            "export * from './button'\nexport const VERSION = '1.0'\n",
+        )
+        impl = self._impl("button.ts")
+        result = _make_result([real_index, impl])
+        selected = select_files_for_category(result, "architecture", max_files=2)
+        paths = [f.path.as_posix() for f in selected]
+        # 두 파일 모두 primary — 정렬은 content size 기준이지만 demote 차이는 없음
+        assert "index.ts" in paths and "button.ts" in paths
+
+    def test_python_init_with_from_imports_not_demoted(self) -> None:
+        # Python `from X import Y` 는 barrel 휴리스틱 대상 아님 (.py 제외).
+        py_barrel = self._barrel(
+            "__init__.py",
+            "from .foo import Foo\nfrom .bar import Bar\n",
+        )
+        impl = SourceFile(
+            path=Path("foo.py"),
+            content="class Foo:\n    pass\n" * 100,
+            layer="backend", role="other",
+            original_chars=2000,
+        )
+        result = _make_result([py_barrel, impl])
+        selected = select_files_for_category(result, "architecture", max_files=10)
+        paths = [f.path.as_posix() for f in selected]
+        # __init__.py 가 demote 되지 않고 둘 다 primary 에 들어가야 함
+        # (실제 demote 발생 시 from-import 패턴까지 barrel 로 잡아 영향 받음)
+        assert "__init__.py" in paths
+
+    def test_empty_file_not_treated_as_barrel(self) -> None:
+        # 빈 파일은 barrel 아님 — re-export 가 1개도 없으면 False
+        empty = self._barrel("index.ts", "")
+        impl = self._impl("button.ts")
+        result = _make_result([empty, impl])
+        selected = select_files_for_category(result, "architecture", max_files=2)
+        # 빈 파일은 demote 대상 아니지만 content_rank_key 에서 shallow 로 후순위
+        paths = [f.path.as_posix() for f in selected]
+        assert "button.ts" in paths
+
+    def test_barrel_demotion_keeps_impl_when_max_files_tight(self) -> None:
+        # max_files=1 일 때 — barrel 4개 + impl 1개 중 impl 선택.
+        # 회귀 방지: 우리 frontend 케이스의 정확한 시나리오.
+        barrels = [
+            self._barrel(f"src/{n}/index.ts", "export * from './x'\n")
+            for n in ("a", "b", "c", "d")
+        ]
+        impl = self._impl("src/real.ts")
+        result = _make_result(barrels + [impl])
+        selected = select_files_for_category(result, "architecture", max_files=1)
+        assert [f.path.as_posix() for f in selected] == ["src/real.ts"]

@@ -9,6 +9,48 @@ Until 1.0.0, the surface contract is the **rule schema** (`AnalysisRule` /
 analyze` / `diff` / `harness-export`). Adding a field to the schema or a flag
 to a subcommand is a minor bump; breaking either is a major bump.
 
+## [Unreleased]
+
+Skill-mode 결과물 품질 회복. 실측 케이스(skn21-final-1team frontend+backend
+combined, 263 files / 23 rules) 에서 세 회귀를 차단:
+
+### Changed
+
+- **`evidence.classify_rule`**: 새 `valid_file_paths` kwarg 추가 — ref_files
+  엔트리가 `path:N` / `path:N-M` 라인 anchor 를 갖고 그 경로가 분석 대상의
+  실제 파일에 매치하면 'cited' 로 분류. skill-mode 가 commit SHA / PR# 패턴
+  없이 한국어 산문 reason 만 적을 때 모든 MUST 가 'other' 로 떨어져 자동
+  downgrade 되던 회귀 차단. `downgrade_speculative_rules` /
+  `compute_evidence_metrics` 가 `session.selected_files` 를 truth pool 로
+  자동 전달. **결과: 우리 벤치마크에서 0/23 MUST → 9/23 MUST (39%, 캘리브레이션
+  목표 30-40% 안), CLAUDE.md "Top MUST Rules" 가 0개 → 9개로 채워짐.**
+  `valid_file_paths` 는 opt-in (default None — 기존 호출 영향 없음).
+
+- **`preprocessor.select_files_for_category`**: TS/JS 의 re-export only barrel
+  파일 (`export * from '...'`, `export { Name } from '...'` 만 있는 `index.ts`)
+  을 auxiliary 로 demote. 실제 구현 파일이 선별 자리에 우선 진입. Python
+  `__init__.py` (`from X import Y`) 는 barrel 의미가 약하므로 영향 없음 — JS/TS
+  suffix 한정. **결과: architecture/coding_style 각 12개 선별 중 4자리씩 (총 8)
+  을 차지하던 1-7줄짜리 barrel 이 모두 informative 파일로 대체.**
+
+- **`generator._render_rule_compact`**: system-prompt 의 ✅/❌ 인라인 미리보기가
+  같은 첫 줄로 시작할 때 (`class XxxService:`, `class XxxRequest(BaseModel):`
+  등) 처음 달라지는 줄까지 자동 확장. 양쪽이 같은 prefix 의 공백/주석/docstring
+  은 동기로 skip. **결과: ✅/❌ 비교가 무의미했던 4개 규칙 (Service singleton,
+  Pydantic ConfigDict, `_method` 표기, Pydantic Field 한국어) 모두 실제 차이
+  라인을 노출.**
+
+### Internal
+
+- `evidence._has_valid_ref_files` (skill-mode ref_files truth pool 검증)
+- `preprocessor._is_reexport_barrel` (TS/JS barrel 검출, 블록 주석 / `//` 라인
+  주석 처리), `preprocessor._should_demote` (auxiliary path + barrel 통합)
+- `generator._distinguishing_preview` / `_meaningful_lines` / `_truncate_line`
+  (✅/❌ diff-line 추출)
+
+테스트 26개 추가 (evidence 12 + preprocessor 8 + generator 10), 884 통과.
+공개 API / CLI / 스키마 변경 없음 (backward compatible).
+
 ## [0.2.0] — 2026-05-06
 
 Phase 4b validation hardening (2026-05-05) + Phase 4c skill-mode parity and
