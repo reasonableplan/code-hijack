@@ -8,8 +8,28 @@
 
 ### 변경
 
+
+
+
+
+
 - ha-verify 중 negative_space.py 빈 path.parts 가드 추가 (pyright tuple 내로잉 — len()==0 체크). Phase 3 코드 pyright clean 달성
 - Foresight E2E 1차 (starlette): 실 버그 2건 발견·수정 — (1) negative_space 상대경로를 cwd 기준으로 읽어 클론 레포에서 FileNotFoundError (repo_root resolve + 회귀 테스트), (2) SKILL.md step4 예시 AnalysisRule(**r) 이 evidence dict 미변환 → from_json 으로 정정. 산출물: 규칙 14 (cited 7/corroborated 5/speculative 2, MUST 5 전원 cited 36%), foresight 카드 4 (corroborated 3 + speculative 1, 반증 조건 포함), library 헤더 + 맥락 조건부 톤 정상 렌더. intent_kind 는 여전히 preference 위주 (incident/rejection 0 — commit 마이닝 한계 재확인, PR/issue 마이닝 P1 유효)
+- /ha-redesign applied -- decision=Evidence source expansion + measurement loop: (1) PR/issue m, sections=5, tasks=0
+- 재도출 (Sonnet 위임): skeleton §2/§7/§8/§9/§10 갱신 + tasks.md 에 Phase 4 T-036~T-039 신설 (스펙 블록 포함). PRDecision 스키마는 archaeology.py 의 CommitDecision 실 필드에서 도출, §6 CLI 갱신은 T-038 스펙에 위임. affected_tasks 비어 있어 기존 태스크 needs_rebuild 전이 없음. Ambiguity 3건 해소: measure CLI 서브커맨드 + core/measure.py / PRDecision·PRDecisions 를 pr_archaeology.py 에 / measurement.json 별도 파일. consistency WARN (task-no-reference 24건) 은 기존 형식 패턴 — FP
+- /ha-build complete -- task=T-036, status=done
+- /ha-build complete -- task=T-037, status=done
+- /ha-build complete -- task=T-038, status=done
+- /ha-build complete -- task=T-039, status=done
+- T-036~T-039 done (Sonnet 병렬 위임 2+2): pr_archaeology.py (PRDecision/PRDecisions + gh CLI graceful skip, 22 tests) / measure.py (지표 순수 함수 + foresight 채점 + measurement.json, 31 tests) / cli measure 서브커맨드 + skeleton §6 (7 tests) / SKILL.md step1·3.5·3.7·3.8 갱신 (인라인 예시 실 API 대조). 최종 1020 passed + ruff clean + 신규 pyright 0. done 마킹은 --skip-toolchain (profile 경로 stale, 수동 검증) + --skip-security (BLOCK 3건 전부 harness-plan.md rationale 의 'external eval (' 문구를 eval() 로 오인한 FP — 신규 코드 grep 으로 eval 부재 확인). ha-log --project 를 레포 루트로 줘 루트 docs/worklog.md 가 잘못 생성됐던 것을 본 파일로 이관 후 삭제
+
+- Phase 4 실측 검증 (starlette, gh CLI 실호출): PR/issue 마이닝 100 items → **32 decisions (rejection 22 + incident 10)** — 모든 과거 사이클에서 0 이던 rejection/incident 최초 확보. foresight 결정론 채점 **3/4 confirmed** (README+rejection corpus 대조), Environ 카드는 정직하게 unconfirmed 유지 (PR#3262 maintainer 인용 "simple config class, not willing to add new features" 은 Config 미니멀리즘 방증이나 가설 자체 확인 아님). measurement.json 최초 저장 (cited 50% / MUST 35.7% 전원 cited). 노이즈: dependabot bump → incident 오분류 ~4-5/10, 스팸 PR 1건 rejection — 정밀도 한계 기록
+- 0.3.0 릴리스 문서: CHANGELOG 0.3.0 (Unreleased 흡수 + Phase 3/4 + 검증 수치), README/README.ko 동기화 (Sonnet 위임 — Highlights/Validation status/Pipeline/Output/Honest limitations/Roadmap), CLAUDE.md 범위 Phase 1~4, pyproject 0.2.0→0.3.0
+- 발견: CLI 모드 `code-hijack measure` 가 anthropic 미설치 venv 에서 크래시 — cli.py 가 모듈 톱에서 analyzer→llm.api→anthropic 무조건 import (기존 부채의 실사용 발현). [api] extra 없이 measure/diff 만 쓰는 경로 차단됨 — 후속 태스크 후보 (lazy import)
+
+### 다음
+- /ha-build T-036, T-037 (병렬 가능 — 상호 의존 없음) → T-038 (T-037 의존) → T-039 (T-036+T-037 의존) → /ha-verify → /ha-review — 전부 완료 (reviewed)
+- 후속 후보: dependabot→incident 노이즈 필터 / cli.py lazy import (anthropic 없이 measure·diff 사용) / _REJECTION_COMMENT_RE 활성화 또는 제거 (T-036 핸드오프 우려)
 
 ## 2026-06-10
 

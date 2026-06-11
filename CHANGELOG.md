@@ -9,12 +9,71 @@ Until 1.0.0, the surface contract is the **rule schema** (`AnalysisRule` /
 analyze` / `diff` / `harness-export`). Adding a field to the schema or a flag
 to a subcommand is a minor bump; breaking either is a major bump.
 
-## [Unreleased]
+## [0.3.0] — 2026-06-11
 
-Skill-mode 결과물 품질 회복. 실측 케이스(skn21-final-1team frontend+backend
-combined, 263 files / 23 rules) 에서 세 회귀를 차단:
+Foresight inference layer (Phase 3) + evidence source expansion & measurement
+loop (Phase 4). User feedback driving the cycle: the tool captured *what*
+seniors wrote but not *why* (rationale), missed foresight (negative space),
+and over-coerced (every MUST treated as non-negotiable).
+
+Validation on `encode/starlette` (2026-06-11, skill mode):
+
+- **intent_kind diversity unlocked**: commit mining alone yielded
+  rejection/incident **0** across every prior measurement cycle. PR/issue
+  mining (gh CLI, 100 items scanned) yielded **32 decisions — rejection 22,
+  incident 10** on the same repo. First non-zero rejection/incident signal
+  in the project's measurement history. Citable maintainer evidence now
+  reachable (e.g. PR#3262: "I'm happy to maintain Config … as a simple
+  config class, but I'm not willing to add new features").
+- **Rule honesty grading**: 14 rules — cited 7 / corroborated 5 /
+  speculative 2. MUST 5/14 (35.7%), **all 5 cited** (cited-only MUST
+  enforced mechanically at parse time).
+- **Foresight accuracy now measurable**: 4 hypothesis cards, deterministic
+  scoring **3/4 confirmed** against repo docs + rejection corpus; 1 honest
+  unconfirmed (Environ read-after-write card — PR#3262 corroborates Config
+  minimalism but not the specific hypothesis).
+- **measurement.json codified** — cited_ratio 50%, must_ratio 35.7%,
+  tier/intent distributions persisted per session; future improvements are
+  scored numerically instead of manually.
+- Known noise (honest limit): dependabot bumps misclassified as incident
+  (~4-5 of 10), 1 spam PR as rejection — mining precision is imperfect.
+
+### Added
+
+- **3-tier rationale grading** (`rationale_tier` on `AnalysisRule`):
+  `cited` (senior verbatim evidence) / `corroborated` (2+ independent code
+  signals) / `speculative` (LLM inference). `normalize_rationale_tier` in
+  `analyzer.py` demotes corroborated/speculative MUST → SHOULD at parse
+  time — **only cited rules can be MUST**. Backward compatible
+  (`from_json` defaults old sessions to `speculative`).
+- **ForesightCard + foresight.md** — separate artifact for inferred design
+  intent: hypothesis + verified signals + falsification conditions + tier.
+  Never MUST-eligible; rendered per session and integrated. Hypotheses are
+  triangulated (2+ independent repo signals verified before grading above
+  speculative).
+- **`core/negative_space.py`** — deterministic negative-space extractor:
+  dep_count, stdlib-only direct-impl hints, public_ratio + `__all__`
+  discipline, deprecation patterns, layer import violations. Feeds
+  triangulation signals.
+- **`repo_nature` detection** (`preprocessor.py`) — `library` / `app` /
+  `app/cli` context header on outputs; system-prompt tone changed from
+  "non-negotiable constraints" to context-conditional ("apply when the
+  extraction context holds; deviate with stated reason").
+- **`core/pr_archaeology.py`** — PR/issue mining via gh CLI:
+  closed-unmerged PRs (rejection), wontfix/discussion issues, maintainer
+  comments, mined with the same decision patterns as `archaeology.py`.
+  Graceful skip without gh (classified warnings, empty result).
+- **`core/measure.py` + `code-hijack measure` subcommand** —
+  `calc_session_metrics` / `diff_sessions` / `score_foresight` /
+  `write_measurement`; measurement.json per session.
+- **SKILL.md steps 3.7/3.8** — foresight hypothesis generation +
+  triangulation, deterministic foresight scoring + LLM verdict pass;
+  steps 1/3.5 merge pr_decisions into the evidence chain.
 
 ### Changed
+
+Skill-mode 결과물 품질 회복 (2026-06 초). 실측 케이스(skn21-final-1team
+frontend+backend combined, 263 files / 23 rules) 에서 세 회귀를 차단:
 
 - **`evidence.classify_rule`**: 새 `valid_file_paths` kwarg 추가 — ref_files
   엔트리가 `path:N` / `path:N-M` 라인 anchor 를 갖고 그 경로가 분석 대상의
@@ -48,8 +107,12 @@ combined, 263 files / 23 rules) 에서 세 회귀를 차단:
 - `generator._distinguishing_preview` / `_meaningful_lines` / `_truncate_line`
   (✅/❌ diff-line 추출)
 
-테스트 26개 추가 (evidence 12 + preprocessor 8 + generator 10), 884 통과.
-공개 API / CLI / 스키마 변경 없음 (backward compatible).
+위 skill-mode 회귀 차단 분은 공개 API / CLI / 스키마 변경 없음 (backward
+compatible). 0.3.0 전체로는 스키마 추가 (`rationale_tier`, `ForesightCard`,
+`repo_nature`) + CLI 추가 (`measure`) — minor bump 사유.
+
+테스트: 884 → **1020 passed** (foresight 28 + pr_archaeology 22 + measure 31
++ cli 7 + 기타), ruff clean, 신규 코드 pyright 0 errors.
 
 ## [0.2.0] — 2026-05-06
 

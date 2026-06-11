@@ -36,6 +36,162 @@
 | T-034 | backend_coder | T-030,T-032 | core.logic (generator.py): foresight.md 렌더 + write_output 에 foresight.md 추가 + 성격 헤더 + system-prompt 맥락 조건부 톤 + 테스트 | done      |
 | T-035 | backend_coder | T-031,T-032,T-033,T-034 | .claude/skills/code-hijack/SKILL.md: negative_space 추출 단계 + foresight 가설 생성 + 삼각측량 절차 + 성격 헤더 단계 추가 | done      |
 
+<!-- ha-redesign 2026-06-11: Evidence source expansion + measurement loop — affected via /ha-redesign -->
+### Phase 4 — Evidence source expansion + measurement loop
+| ID | 에이전트 | 의존성 | 설명 | 상태 |
+|----|---------|--------|------|------|
+| T-036 | backend_coder | - | core.logic (pr_archaeology.py): 신규 모듈 (impure). PRDecision/PRDecisions dataclass + gh CLI subprocess 수집 + graceful skip + 테스트 (gh 호출 mock) | done      |
+| T-037 | backend_coder | - | core.logic (measure.py): 지표 산출 순수 함수 + 세션 비교 + foresight 채점 + measurement.json 저장 + 테스트 | done      |
+| T-038 | backend_coder | T-037 | interface.cli (cli.py): measure 서브커맨드 배선 + §6 갱신 + 테스트 | done      |
+| T-039 | backend_coder | T-036,T-037 | .claude/skills/code-hijack/SKILL.md: step 1 pr_decisions 추가 + step 3.5/3.7 소스 합류 + foresight 채점 절차 | done      |
+
+---
+
+#### T-036 스펙: pr_archaeology.py PR/issue 마이닝
+
+**담당**: backend_coder
+**생성·수정 파일**:
+- `backend/src/hijack/core/pr_archaeology.py` (신규)
+- `tests/test_pr_archaeology.py` (신규)
+
+**skeleton 참조**: §7 데이터 모델 (`PRDecision`/`PRDecisions` 스키마), §7 순수/impure 분리표, §8 외부 통합 gh CLI 항목
+
+**구현 세부**:
+1. **데이터 모델** (`PRDecision`/`PRDecisions` — CommitDecision/CommitDecisions 와 동형):
+   ```python
+   @dataclass
+   class PRDecision:
+       ref: str              # "PR#123" 또는 "issue#456"
+       title: str
+       date: str             # ISO ("2024-08-12 14:30:00 +0900" 형식)
+       body_excerpt: str     # 본문 첫 _BODY_EXCERPT_CHARS 자, 공백 정규화
+       matched_patterns: list[str]  # 매칭 패턴 display name; sorted asc
+       maintainer_comment: str      # 메인테이너 마지막 코멘트 (빈 문자열 허용)
+       intent_kind: str      # "rejection" | "incident" | "preference"
+       # to_json / from_json 구현
+
+   @dataclass
+   class PRDecisions:
+       __test__ = False
+       items_scanned: int
+       patterns: list[DecisionPattern]  # archaeology.py 의 DecisionPattern 재사용
+       decisions: list[PRDecision]      # date desc; cap 50
+       # to_json / from_json / has_signal 구현
+   ```
+2. **import**: `from hijack.core.archaeology import _DECISION_PATTERNS, _COMPILED_PATTERNS, DecisionPattern` — 중복 정의 금지. `_BODY_EXCERPT_CHARS`, `_sanitize_body_excerpt` 등 필요한 내부 헬퍼도 archaeology.py 에서 import.
+3. **gh 수집 함수** (impure — subprocess):
+   - `fetch_pr_decisions(repo_url: str, *, timeout: int = 30) -> PRDecisions`
+   - `gh api repos/{owner}/{repo}/pulls?state=closed&per_page=100` → closed-unmerged 필터 (merged_at is None)
+   - `gh api repos/{owner}/{repo}/issues?state=closed&labels=wontfix&per_page=100` → wontfix issue
+   - PR/issue 본문 + 메인테이너 마지막 코멘트에 `_COMPILED_PATTERNS` 적용
+   - intent_kind 매핑: closed-unmerged PR + 메인테이너 거절 코멘트 (reviewed/closed without merge) → `"rejection"`, revert/rollback 언급 issue → `"incident"`, 그 외 → `"preference"`
+4. **graceful skip**: gh 미설치 (`FileNotFoundError`) / 인증 실패 (returncode != 0) / rate-limit (JSON `message` 포함) / timeout (`subprocess.TimeoutExpired`) → `logger.warning(...)` + 빈 `PRDecisions(items_scanned=0, patterns=[], decisions=[])` 반환. 새 에러 코드 불필요.
+5. **테스트**: gh subprocess 를 `unittest.mock.patch("subprocess.run")` 으로 mock. (a) 정상 케이스 — PRDecision 목록 파싱, (b) gh 미설치 → 빈 PRDecisions, (c) 인증 실패 → 빈 PRDecisions, (d) intent_kind 매핑 정확성.
+
+**완료 기준**:
+- `pytest tests/test_pr_archaeology.py` 전량 통과.
+- `ruff check src ../tests` 경고 없음.
+- gh 미설치 환경에서 예외 없이 빈 결과 반환 확인.
+
+---
+
+#### T-037 스펙: measure.py 지표 산출 + measurement.json 저장
+
+**담당**: backend_coder
+**생성·수정 파일**:
+- `backend/src/hijack/core/measure.py` (신규)
+- `tests/test_measure.py` (신규)
+
+**skeleton 참조**: §7 데이터 모델 (`MeasurementResult` 스키마), §7 순수/impure 분리표, §2 측정 기능 요구사항
+
+**구현 세부**:
+1. **`MeasurementResult` dataclass**:
+   ```python
+   @dataclass
+   class MeasurementResult:
+       session_id: str
+       cited_ratio: float
+       must_ratio: float
+       tier_distribution: dict[str, int]   # {"cited": N, "corroborated": N, "speculative": N}
+       intent_kind_distribution: dict[str, int]  # {"rejection": N, "incident": N, "preference": N}
+       foresight_scores: list[dict[str, str]]     # [{"hypothesis": ..., "verdict": "confirmed"|"unconfirmed"|"refuted"}]
+       # to_json / from_json
+   ```
+2. **순수 함수**:
+   - `calc_session_metrics(session: SessionResult, pr_decisions: PRDecisions | None = None) -> MeasurementResult` — 규칙 전체에서 cited/MUST 비율, tier/intent_kind 분포 산출. pr_decisions 있으면 intent_kind 분포에 포함.
+   - `diff_sessions(m1: MeasurementResult, m2: MeasurementResult) -> dict[str, Any]` — 두 세션 지표 차이 딕셔너리 반환.
+   - `score_foresight(cards: list[ForesightCard], repo_docs: str, pr_decisions: PRDecisions | None) -> list[dict[str, str]]` — 카드별 결정론 채점 (키워드 매칭 기반). LLM 판단 없이 결정론적으로 가능한 것만 채점. 매칭 안 되면 `"unconfirmed"`.
+3. **I/O 함수**:
+   - `write_measurement(result: MeasurementResult, session_dir: Path) -> None` — `session_dir / "measurement.json"` 에 저장. session.json 재확장 금지. stdout 저장 금지.
+4. **stdout 요약**: `format_measurement_summary(result: MeasurementResult) -> str` 순수 함수로 사람이 읽는 요약 문자열 생성 (cli.py 에서 click.echo 로 출력).
+5. **기존 diff 인프라 재사용**: session.py 의 SessionDiff 가 있으면 diff_sessions 구현 시 참고.
+
+**완료 기준**:
+- `pytest tests/test_measure.py` 전량 통과.
+- `calc_session_metrics` 단위 테스트: cited 규칙만 있는 세션 → cited_ratio=1.0, mixed → 정확한 비율.
+- `diff_sessions` 단위 테스트: 두 MeasurementResult 비교 → 차이값 딕셔너리.
+- `write_measurement` 통합 테스트: 파일 생성 확인 + from_json 역직렬화 검증.
+
+---
+
+#### T-038 스펙: cli.py measure 서브커맨드
+
+**담당**: backend_coder
+**생성·수정 파일**:
+- `backend/src/hijack/cli.py` (수정 — measure 서브커맨드 추가)
+- `backend/docs/skeleton.md` §6 (수정 — measure 서브커맨드 등재)
+- `tests/test_cli.py` (수정 — measure 커맨드 테스트 추가)
+
+**skeleton 참조**: §6 CLI 커맨드 (diff 서브커맨드와 동일 패턴), §9 T-037 의존
+
+**구현 세부**:
+1. **measure 서브커맨드** (diff 서브커맨드 패턴 준수):
+   ```
+   code-hijack measure <session.json>
+     → calc_session_metrics + write_measurement + stdout 요약 출력
+
+   code-hijack measure <session1.json> <session2.json>
+     → calc_session_metrics x2 + diff_sessions + stdout diff 출력
+   ```
+2. session.json 경로 인자 1개 또는 2개 수락. 1개면 단일 세션 측정, 2개면 비교 측정.
+3. session.json 로드는 `SessionResult.from_json` 사용 (기존 인프라).
+4. `write_measurement` 는 session.json 과 동일 디렉토리에 `measurement.json` 저장.
+5. §6 skeleton.md 에 measure 서브커맨드 사용법/인자/예시 등재.
+
+**완료 기준**:
+- `click.testing.CliRunner` 로 `measure <session.json>` 호출 → measurement.json 생성 + 0 exit code.
+- `measure <s1.json> <s2.json>` → diff 출력 + 0 exit code.
+- `pytest tests/test_cli.py` 전량 통과.
+
+---
+
+#### T-039 스펙: SKILL.md PR/issue 마이닝 + foresight 채점 갱신
+
+**담당**: backend_coder
+**생성·수정 파일**:
+- `.claude/skills/code-hijack/SKILL.md` (수정)
+
+**skeleton 참조**: §2 PR/issue 마이닝 요구사항, §7 핵심 비즈니스 규칙 #12, §9 T-036/T-037 의존
+
+**구현 세부**:
+1. **step 1 수집 단계** 에 `pr_decisions` 추가:
+   - `fetch_pr_decisions(repo_url)` 호출 명시 (gh CLI 없으면 빈 PRDecisions 로 계속 — 경고 출력).
+   - 결과: `pr_decisions: PRDecisions` 를 이후 단계에 전달.
+2. **step 3.5 evidence chain** 소스에 `pr_decisions` 합류:
+   - commit_decisions 와 병렬 소스로 명시.
+   - rejection/incident PRDecision 은 evidence chain 에서 높은 가중치 부여 안내.
+3. **step 3.7 foresight 삼각측량** 에 `pr_decisions` 소스 추가:
+   - ForesightCard.signals 교차 검증 시 pr_decisions.decisions 도 참조.
+   - rejection 패턴과 일치하는 카드 → "rejection" intent_kind 로 분류 권장.
+4. **foresight 채점 절차** 추가 (step 3.8 또는 적절한 단계로 삽입):
+   - `score_foresight(cards, repo_docs, pr_decisions)` 호출 → 결정론적 채점.
+   - LLM 이 unconfirmed 카드를 검토해 confirmed/refuted 판단 추가.
+   - 최종 verdict 목록을 `write_measurement` 에 전달 → `measurement.json` 저장.
+
+**완료 기준**:
+- SKILL.md 가 위 4개 변경을 포함하는 워크플로우로 갱신됨.
+- 각 단계에 입력/출력/판단 기준이 명시됨 (Coder 자율 결정 여지 없음).
+
 ---
 
 #### T-030 스펙: models.py 스키마 확장
@@ -254,6 +410,12 @@ Phase 3 (Foresight inference layer):
                         ├─► T-033 (normalize_rationale_tier)
                         └─► T-034 (generator, T-032 도 의존)
   T-031 + T-032 + T-033 + T-034 ──► T-035 (SKILL.md 갱신)
+
+Phase 4 (Evidence source expansion + measurement loop):
+  T-036 (pr_archaeology) 병렬 가능 (의존성 없음)
+  T-037 (measure.py)     병렬 가능 (의존성 없음)
+  T-037 ──► T-038 (cli measure 서브커맨드)
+  T-036 + T-037 ──► T-039 (SKILL.md 갱신)
 \`\`\`
 
 ### 병렬 실행 가능 조합
@@ -262,6 +424,7 @@ Phase 3 (Foresight inference layer):
 - **T-004 완료 후**: T-005 추가
 - **T-007 이후 병렬**: T-008(있었으면), T-009
 - **Phase 2 즉시 병렬**: T-020, T-022 (독립)
+- **Phase 4 즉시 병렬**: T-036, T-037 (독립 — 의존성 없음)
 
 ### 진행 상태
 - \`pending\` — 아직 시작 안 함

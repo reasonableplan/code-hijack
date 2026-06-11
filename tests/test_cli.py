@@ -757,3 +757,82 @@ class TestApplyCommand:
         )
         assert result.exit_code == 0
         assert "Warning" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# measure subcommand
+# ---------------------------------------------------------------------------
+
+class TestMeasureCommand:
+    def _session_json(self, path: Path, session_id: str = "2026-01-01_repo") -> Path:
+        """Write a minimal session.json for measure tests."""
+        rule = AnalysisRule(
+            rule="Use type hints", priority="MUST", confidence="high",
+            ref_files=[], good_example="", bad_example="", reason="", layer="backend",
+        )
+        cat = CategoryResult(
+            category="architecture", design_intent="clean", rules=[rule],
+            anti_patterns=[], file_type_guides={}, checklist=[], raw_llm_output="",
+        )
+        session = SessionResult(
+            session_id=session_id, target="t", model="m",
+            timestamp="2026-01-01T00:00:00", selected_files=[],
+            categories=[cat], analysis_duration_seconds=0.0,
+            project_structure="",
+        )
+        path.mkdir(parents=True, exist_ok=True)
+        json_path = path / "session.json"
+        json_path.write_text(json.dumps(session.to_json()), encoding="utf-8")
+        return json_path
+
+    def test_measure_single_creates_measurement_json(self, tmp_path: Path) -> None:
+        session_json = self._session_json(tmp_path / "session")
+        runner = CliRunner()
+        result = runner.invoke(cli, ["measure", str(session_json)])
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / "session" / "measurement.json").exists()
+
+    def test_measure_single_stdout_contains_session_id(self, tmp_path: Path) -> None:
+        session_json = self._session_json(tmp_path / "session", "2026-01-01_myrepo")
+        runner = CliRunner()
+        result = runner.invoke(cli, ["measure", str(session_json)])
+        assert result.exit_code == 0, result.output
+        assert "2026-01-01_myrepo" in result.output
+
+    def test_measure_single_measurement_json_is_valid(self, tmp_path: Path) -> None:
+        session_json = self._session_json(tmp_path / "session")
+        runner = CliRunner()
+        runner.invoke(cli, ["measure", str(session_json)])
+        measurement_path = tmp_path / "session" / "measurement.json"
+        data = json.loads(measurement_path.read_text(encoding="utf-8"))
+        assert "session_id" in data
+        assert "cited_ratio" in data
+        assert "must_ratio" in data
+
+    def test_measure_two_sessions_shows_diff(self, tmp_path: Path) -> None:
+        s1 = self._session_json(tmp_path / "s1", "2026-01-01_before")
+        s2 = self._session_json(tmp_path / "s2", "2026-01-02_after")
+        runner = CliRunner()
+        result = runner.invoke(cli, ["measure", str(s1), str(s2)])
+        assert result.exit_code == 0, result.output
+        # diff output must reference both session ids
+        assert "before" in result.output or "2026-01-01" in result.output
+        assert "after" in result.output or "2026-01-02" in result.output
+
+    def test_measure_two_sessions_exit_code_zero(self, tmp_path: Path) -> None:
+        s1 = self._session_json(tmp_path / "s1", "2026-01-01_a")
+        s2 = self._session_json(tmp_path / "s2", "2026-01-02_b")
+        runner = CliRunner()
+        result = runner.invoke(cli, ["measure", str(s1), str(s2)])
+        assert result.exit_code == 0
+
+    def test_measure_missing_session_errors(self, tmp_path: Path) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["measure", str(tmp_path / "nonexistent.json")])
+        assert result.exit_code != 0
+
+    def test_measure_help_shows_usage(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["measure", "--help"])
+        assert result.exit_code == 0
+        assert "SESSION" in result.output

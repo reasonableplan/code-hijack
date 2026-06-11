@@ -12,25 +12,28 @@ Tags: ✅ validated with measurable data, ⚠️ partial / has known limits, ❓
 
 - ✅ **10 analysis categories** — architecture, coding_style, api_design, testing, dependencies, security, performance, devops, state_management, data_model. (5 categories matched-validated on starlette through v12; remaining 5 implemented, dogfooding pending.)
 - ✅ **5-layer deterministic classification** — frontend / backend / db / devops / shared (path + extension + dep-file heuristics, no LLM guessing). Calibration regression caught and fixed (e117c4c).
-- ⚠️ **Evidence-based rules** — every rule includes `ref_files:line`, verbatim ✅/❌ examples from the actual repo, confidence + priority. **Evidence-chain (verbatim commit quotes) ceiling: ~50% matched on senior OSS (starlette v12, 5 categories), ~0% on individual repos with terse commit messages (HarnessAI: 1 decision-signal commit / 61 scanned)**. Quality-gap with no-evidence rules measured ~2x by external reviewer.
+- ⚠️ **Evidence-based rules with 3-tier rationale grading** — every rule carries `rationale_tier`: `cited` (verbatim senior evidence), `corroborated` (2+ independent code signals), or `speculative` (LLM inference). **Only `cited` rules can be MUST** — corroborated/speculative are mechanically demoted to SHOULD at parse time. Evidence-chain ceiling: ~50% cited on senior OSS (starlette v12, 5 categories); ~0% on individual repos with terse commit messages. Quality-gap with no-evidence rules measured ~2x by external reviewer.
 - ❓ **Scope-tagged rules** — every rule is classified `cross_project`, `framework_internal`, or `domain_specific`. Lets a downstream tool auto-apply the safe ones and quarantine the rest. (Code present, end-to-end downstream usage not yet measured.)
 - ✅ **Critic layer** — second LLM pass that drops duplicates, downgrades inflated MUST, tags scope. Plus mechanical safeguards: MUST ratio auto-lint (`write_output` stderr warn if >40%), and **R6 auto-downgrade** of speculative MUSTs (no verified citation → SHOULD).
+- ✅ **Foresight inference layer** — `ForesightCard` artifact (hypothesis + verified signals + falsification conditions + tier) rendered per session into `foresight.md`. Never MUST-eligible. Hypotheses are triangulated against 2+ independent repo signals. `core/negative_space.py` feeds deterministic signals (dep_count, stdlib-only hints, public_ratio, deprecation patterns, layer import violations).
 - ✅ **Two execution modes**:
   - **CLI mode** (`code-hijack analyze`) — direct Anthropic API, fully automatable
   - **Skill mode** (`/code-hijack`) — uses the current Claude Code session, no API key needed
 - ❓ **HarnessAI integration** — `harness-export` subcommand converts a session into [HarnessAI](https://github.com/reasonableplan/harnessai)-shaped docs. Only `cross_project` rules auto-apply; the rest become reviewable candidates. (Implemented; downstream HarnessAI consumption not yet dogfooded.)
 - ❓ **Session management** — `--resume` to skip completed categories, `diff` subcommand to compare rule changes across sessions. (Implemented; usage data thin.)
-- ⚠️ **Decision mining from Git** — extracts senior reasoning from PR descriptions, review comments, commit bodies, and reverts; rule `evidence` field carries verbatim quotes with intent classification (rejection/constraint/incident/preference). **Effective when target repo has decision-pattern keywords ("instead of", "rather than", etc.); a typical busy-developer repo may yield close to zero.**
+- ✅ **PR/issue mining** — `core/pr_archaeology.py` mines closed-unmerged PRs (rejection), wontfix/discussion issues, and maintainer comments via `gh` CLI. Same decision-pattern set as commit mining. Graceful skip when `gh` is unavailable. First unlocked rejection/incident signals on starlette (32 decisions: 22 rejection + 10 incident from 100 items scanned).
+- ⚠️ **Decision mining from Git** — extracts senior reasoning from PR descriptions, review comments, commit bodies, and reverts; rule `evidence` field carries verbatim quotes with intent classification (rejection/constraint/incident/preference). **Effective when target repo has decision-pattern keywords ("instead of", "rather than", etc.); a typical busy-developer repo may yield close to zero from commit mining alone — PR/issue mining now supplements this gap.**
+- ✅ **Measurement loop** — `core/measure.py` + `code-hijack measure` subcommand computes `cited_ratio`, `must_ratio`, tier/intent distributions and writes `measurement.json` per session. Future improvements are scored numerically instead of manually.
 - ❓ **Style exemplars + statistical fingerprint** — beyond rules, surfaces concrete code samples and statistical style stats (test framework, naming, line lengths, ...) for higher-fidelity agent grounding. (Code present in `core/exemplars.py` + `core/style_fingerprint.py`; ROI not yet measured against rule-only output.)
 - ✅ **Persistent repo cache** — git clones land in `~/.cache/code-hijack/repos/<hash>/` and reuse across runs; no double-clone overhead in skill mode (327fb1a).
 
 ## Validation status
 
-Numbers from the 2026-05-06 measurement cycle on `encode/httpx`, `encode/starlette`, and a private-app dogfooding target. See `memory/project_validation_findings.md` for the full chain.
+Numbers from the 2026-06-11 measurement cycle on `encode/starlette` (skill mode). Earlier cycles on `encode/httpx` and a private-app dogfooding target; see `memory/project_validation_findings.md` for the full chain.
 
 | What | Measured | Source |
 |---|---|---|
-| Evidence-chain matching rate (senior OSS, best case) | **50%** (starlette v12, 5 categories: architecture+coding_style+api_design+testing+security+performance, depth=30) | v12 session |
+| Evidence-chain cited rate (senior OSS, best case) | **50%** (starlette v12, 5 categories: architecture+coding_style+api_design+testing+security+performance, depth=30) | v12 session |
 | Same on a typical individual-developer repo | **~0%** (HarnessAI: 1 decision-signal commit / 61 scanned) | dogfood-harnessai session |
 | External reviewer score (clean LLM session, no codebase context) | **6/10 user-learning, 5/10 AI-coding-guide** | C external eval (v8) |
 | Evidence vs no-evidence rule quality gap | **~2x** (external reviewer judgement, intent-kind preserved verbatim helps) | C external eval |
@@ -38,11 +41,15 @@ Numbers from the 2026-05-06 measurement cycle on `encode/httpx`, `encode/starlet
 | Auto-downgrade impact (R6) | starlette MUST 58%→25%, all surviving MUSTs are cited | v8 vs v7 |
 | Decision-pattern keywords currently mined | 18 patterns (incl. `instead of`, `rather than`, `to avoid`, `to prevent`, `due to`, `motivated by`, `as opposed to`, `regression`, …) | `archaeology._DECISION_PATTERNS` |
 | G category-expansion ROI (verified) | **+5%p evidence per added category** (testing→38%, security→45%, performance→50%) | v10/v11/v12 chain |
-| intent_kind diversity (cumulative across 4 measurements) | **incident: 0** in expanded categories — senior OSS frames perf/security decisions as `to avoid`/`as opposed to` (preference), not `regression`/`reverted because` (incident) | v10/v11/v12 + R7 phase 1 |
+| intent_kind diversity — commit mining alone | **rejection/incident: 0** across all prior cycles — senior OSS frames perf/security decisions as `to avoid`/`as opposed to` (preference), not `regression`/`reverted because` (incident) | v10/v11/v12 + R7 phase 1 |
+| intent_kind diversity — after PR/issue mining (2026-06-11) | **32 decisions: rejection 22, incident 10** (100 items scanned, starlette) — first non-zero rejection/incident signal in the project's measurement history | 0.3.0 starlette cycle |
+| Rule honesty grading (2026-06-11, starlette) | 14 rules: cited 7 / corroborated 5 / speculative 2; **MUST 5/14 (35.7%), all 5 cited** | 0.3.0 starlette cycle |
+| Foresight accuracy (2026-06-11, starlette) | 4 cards: **3/4 confirmed** (repo docs + rejection corpus); 1 unconfirmed (honest) | 0.3.0 starlette cycle |
+| Tests | **1020 passed** (884 in 0.2.0) | 0.3.0 |
 
-**Honest read**: the tool's differentiator (verbatim-citation evidence chains) works as advertised on **well-curated senior repos** with PR-style commit bodies. For everyday repos with terse commits, it degrades to a "rule + ✅/❌ example" extractor — still useful, but no different from a generic LLM rule miner.
+**Honest read**: the tool's differentiator (verbatim-citation evidence chains) works as advertised on **well-curated senior repos** with PR-style commit bodies. For everyday repos with terse commits, commit mining alone degrades to a "rule + ✅/❌ example" extractor; PR/issue mining now supplements this gap for repos with active issue trackers.
 
-Direction status (2026-05-06 end-of-day):
+Direction status (2026-06-11):
 - **G (more categories)** — verified: +5%p evidence per added category, ceiling now 50% on starlette. Diminishing returns past 5 categories; commit-pool richness, not category count, is the real lever.
 - **R7 (commit-corpus-first rule derivation)** — phase 1 complete (`backend/docs/r7_pipeline_reversal.md`). Hypothesis viable on multi-commit clusters (CORS preflight: 3 commits → 1 cluster) but **only 21% of starlette clusters are multi-commit** — single-commit clusters get no advantage over forward pipeline. Phase 2-4 (LLM derivation + verify + external eval) still ungated; will likely become a hybrid forward+inversion mode.
 - **D (dogfooding)** — the ceiling-vs-good-enough question. Started on HarnessAI 2026-05-06 (1-week horizon); resolution comes from "did the agent code measurably better with `.code-hijack/CLAUDE.md` than without".
@@ -93,6 +100,9 @@ code-hijack analyze ./my-repo \
 
 # Compare two sessions
 code-hijack diff old_session/ new_session/
+
+# Score a session: cited_ratio, must_ratio, tier/intent distributions → measurement.json
+code-hijack measure ./docs/hijacked/2026-04-10_my-repo/session.json
 ```
 
 ### Skill mode (inside Claude Code)
@@ -129,10 +139,13 @@ The MUST-ratio calibration runs automatically on `write_output` and prints a `[W
 <target>/docs/hijacked/
 ├── 2026-04-17_fastapi/         # per-session raw analysis
 │   ├── meta.md                 # metadata: session ID, selected files, layer distribution, scope distribution
-│   ├── architecture.md         # rules per category (rule + ✅/❌ + scope + reason)
+│   ├── architecture.md         # rules per category (rule + ✅/❌ + scope + reason + rationale_tier)
 │   ├── coding_style.md
 │   ├── api_design.md
-│   └── session.json            # structured data, reused for diff / harness-export
+│   ├── foresight.md            # inferred design hypotheses (hypothesis + signals + falsification + tier); never MUST
+│   ├── pr_decisions.json       # raw PR/issue mining output (rejection + incident decisions)
+│   ├── measurement.json        # cited_ratio, must_ratio, tier/intent distributions per session
+│   └── session.json            # structured data, reused for diff / harness-export / measure
 ├── integrated/                 # agent-ready combined view
 │   ├── CLAUDE.md               # entry point + layer guide + top MUST rules
 │   ├── backend.md              # backend-layer rules across all categories
@@ -140,7 +153,8 @@ The MUST-ratio calibration runs automatically on `write_output` and prints a `[W
 │   ├── database.md
 │   ├── devops.md
 │   ├── shared.md               # cross-cutting rules
-│   └── system-prompt.md        # agent system prompt (rule + ✅/❌/ref inline)
+│   ├── foresight.md            # integrated foresight cards across categories
+│   └── system-prompt.md        # agent system prompt (rule + ✅/❌/ref inline; context-conditional tone)
 └── (harness-form/)             # optional: produced by `harness-export`
     ├── conventions.md          # HarnessAI-style decision tables (cross_project + dependencies)
     ├── guidelines/<area>/*.md  # per-area guides (✅/❌ + design intent)
@@ -155,17 +169,26 @@ Copy `integrated/CLAUDE.md` into your own project's Claude Code context, and you
 input (GitHub URL or local path)
   ↓ Fetcher        — git clone + persistent cache (`~/.cache/code-hijack/repos/<hash>/`)
   ↓ detect_layer   — deterministic layer tagging
+  ↓ repo_nature    — library / app / app-cli detection (sets system-prompt tone)
   ↓ Preprocessor   — role classification + per-category file selection
-                     (auxiliary path demote, truncate-aware ranking, near-dup dedup)
+                     (auxiliary path demote, barrel demote, truncate-aware ranking, near-dup dedup)
+  ↓ Negative space — deterministic signals (dep_count, stdlib hints, public_ratio, deprecation patterns)
   ↓ Exemplars (G1) — concrete code samples extracted per category
   ↓ Style FP (G2)  — statistical style fingerprint (frameworks, naming, line lengths)
-  ↓ Test decisions (B) — senior defense catalog from test code (parametrize edges, raises blocks)
-  ↓ PR decisions (A1)  — GitHub PR signals (vocabulary, notable PRs, rejected PRs, labels)
+  ↓ Test decisions (B)   — senior defense catalog from test code (parametrize edges, raises blocks)
+  ↓ PR/issue mining      — closed-unmerged PRs (rejection) + wontfix issues + maintainer comments
+                           via gh CLI; graceful skip if gh unavailable (core/pr_archaeology.py)
+  ↓ PR decisions (A1)    — GitHub PR signals (vocabulary, notable PRs, rejected PRs, labels)
   ↓ Commit decisions (C) — decision trails from commit bodies (tried/decided/instead/reverted)
   ↓ Analyzer       — per-category LLM calls with evidence prompts
+                     + rationale_tier assignment (cited/corroborated/speculative)
+                     + corroborated/speculative MUST → SHOULD at parse time
+  ↓ Foresight      — ForesightCard generation (hypothesis + triangulation signals + falsification)
+                     + deterministic foresight scoring; rendered to foresight.md
   ↓ Critic         — drop duplicates, downgrade inflated MUST + scope tagging
-  ↓ Generator      — per-layer .md + CLAUDE.md + system-prompt.md
+  ↓ Generator      — per-layer .md + CLAUDE.md + system-prompt.md + foresight.md
                      + auto MUST calibration lint (stderr warn if >40%)
+  ↓ Measure        — measurement.json (cited_ratio, must_ratio, tier/intent distributions)
 output
 ```
 
@@ -227,11 +250,14 @@ backend/
       style_fingerprint.py             # G2: statistical style fingerprint
       test_decisions.py                # B: senior defense catalog from tests
       pr_decisions.py                  # A1: GitHub PR judgment signals
+      pr_archaeology.py                # PR/issue mining via gh CLI (rejection + wontfix + maintainer comments)
+      negative_space.py                # deterministic negative-space signals (dep_count, public_ratio, …)
+      measure.py                       # calc_session_metrics / diff_sessions / score_foresight / write_measurement
       target_stack.py                  # target repo stack detection
     llm/
       base.py                          # BaseLLM ABC
       api.py                           # ClaudeAPIClient (anthropic SDK)
-tests/                                 # pytest — 839 tests, ruff clean
+tests/                                 # pytest — 1020 tests, ruff clean
   fixtures/senior_wisdom/              # mini repo for layer-detection tests
 examples/                              # real analysis outputs
   fastapi/                             # latest fastapi analysis (17 rules)
@@ -251,7 +277,11 @@ What's now mitigated (since 2026-04-17): Git history + PR discussion mining is i
 
 Skill-mode evidence chains (closed 2026-05-06): A2.1 ships `commit_decisions` injection into the skill-mode prompt, so skill-mode runs now populate the same evidence chain as CLI mode. Verified on starlette v3→v12 cycle: matching rate 17%→50%.
 
-Remaining gap: **incident-kind evidence** (the most valuable for hallucination prevention per external review) is missing from category expansion alone. Senior OSS frames perf/security decisions as preferences (`to avoid`, `as opposed to`), not incidents (`regression`, `reverted because`). Closing this gap requires either (a) cross-repo CVE-DB style reference mining, or (b) a different repo class (post-mortem-heavy infra projects).
+PR/issue mining (0.3.0): `pr_archaeology.py` unlocked rejection/incident signals that commit mining alone could not reach. **Known noise**: dependabot bump commits are misclassified as incident (~4-5 of 10 incident signals on starlette); 1 spam PR was classified as rejection. Mining precision is imperfect — treat incident/rejection counts as directional, not exact.
+
+`score_foresight` keyword matching: tokens shorter than 4 characters are not matched, so short operator/symbol names may not register as confirmed signals. Foresight cards involving very short identifiers may stay `speculative` even when corroborating evidence exists.
+
+Remaining gap: **incident-kind evidence** (the most valuable for hallucination prevention per external review) is only partially filled by PR/issue mining — dependabot noise reduces precision. Closing the gap further requires either (a) cross-repo CVE-DB style reference mining, or (b) a different repo class (post-mortem-heavy infra projects).
 
 ## Roadmap
 
@@ -262,8 +292,9 @@ Remaining gap: **incident-kind evidence** (the most valuable for hallucination p
 - ✅ **Phase 4a (decision mining)** — Git history + PR discussion + commit body mining. Modules: `archaeology`, `exemplars` (G1), `style_fingerprint` (G2), `test_decisions` (B), `pr_decisions` (A1), commit-decision pattern mining (C).
 - ✅ **Phase 4b (validation hardening, 2026-05-05)** — Layer detection false-positive guards, file selector docs_src demote + truncate-aware ranking, cargo-cult guard in rule extraction, MUST calibration auto-lint, persistent fetch cache.
 - ✅ **Phase 4c (skill-mode parity + calibration, 2026-05-06)** — A2.1 commit_decisions injection (skill-mode evidence chains now match CLI mode), R6 auto-downgrade of speculative MUSTs, E1 body-excerpt 800 chars, D pattern set 6→18, G7 cited-MUST self-check guidance, G8 feature-doc noise filter, G9 top-level dotted-py demote.
+- ✅ **Phase 3 foresight + Phase 4 evidence expansion (0.3.0, 2026-06-11)** — 3-tier rationale grading (cited/corroborated/speculative), cited-only MUST enforced at parse time, ForesightCard + foresight.md, `core/negative_space.py` deterministic signals, `repo_nature` detection (library/app/app-cli), PR/issue mining via gh CLI (`core/pr_archaeology.py`: first non-zero rejection/incident signals), measurement loop (`core/measure.py` + `code-hijack measure` subcommand, measurement.json). 1020 tests.
 - **Phase 5a (planned)** — R7 phase 2-4 (commit-corpus-first rule derivation, hybrid forward+inversion mode).
-- **Phase 5b (planned)** — ORM-aware layer detection, additional language support (Go/Rust), incident-kind cross-repo reference mining.
+- **Phase 5b (planned)** — ORM-aware layer detection, additional language support (Go/Rust), incident-kind cross-repo reference mining with improved precision (dependabot noise filter).
 
 ## Development
 
@@ -275,4 +306,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Background
 
-Built using the harnessai + gstack workflow (plan → build → verify → review loop). Incremental commits, 839 passing tests, dogfooded on 5 repos with documented quality progression (httpx, fastapi, starlette OSS + HarnessAI + code-hijack self). Phase 4b added selector hardening, cargo-cult guards, MUST calibration auto-lint, and persistent fetch cache. Phase 4c (2026-05-06) lifted starlette evidence-chain matching from 17% to 50% via category expansion + skill-mode parity. Full design documents: [`backend/docs/skeleton.md`](backend/docs/skeleton.md), [`backend/docs/r7_pipeline_reversal.md`](backend/docs/r7_pipeline_reversal.md).
+Built using the harnessai + gstack workflow (plan → build → verify → review loop). Incremental commits, 1020 passing tests, dogfooded on 5 repos with documented quality progression (httpx, fastapi, starlette OSS + HarnessAI + code-hijack self). Phase 4b added selector hardening, cargo-cult guards, MUST calibration auto-lint, and persistent fetch cache. Phase 4c (2026-05-06) lifted starlette evidence-chain matching from 17% to 50% via category expansion + skill-mode parity. 0.3.0 (2026-06-11) added foresight inference layer, 3-tier rationale grading with cited-only MUST enforcement, PR/issue mining (first non-zero rejection/incident signals), and numeric measurement loop. Full design documents: [`backend/docs/skeleton.md`](backend/docs/skeleton.md), [`backend/docs/r7_pipeline_reversal.md`](backend/docs/r7_pipeline_reversal.md).

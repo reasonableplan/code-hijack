@@ -14,6 +14,12 @@ from hijack.core.apply import apply_session_to_target, render_applied_md
 from hijack.core.fetcher import fetch_source
 from hijack.core.generator import write_output
 from hijack.core.harness_export import export_session
+from hijack.core.measure import (
+    calc_session_metrics,
+    diff_sessions,
+    format_measurement_summary,
+    write_measurement,
+)
 from hijack.core.models import SessionResult
 from hijack.core.prompts import MVP_CATEGORIES
 from hijack.core.session import SessionDiff
@@ -178,6 +184,40 @@ def diff_cmd(session1: str, session2: str, output: str | None) -> None:
         click.echo(f"diff 저장: {output}")
     else:
         click.echo(md)
+
+
+@cli.command("measure")
+@click.argument("session1")
+@click.argument("session2", required=False, default=None)
+def measure_cmd(session1: str, session2: str | None) -> None:
+    """세션 지표를 산출하거나 두 세션을 비교한다.
+
+    SESSION1: session.json 또는 세션 디렉토리 (단일 측정 또는 비교 기준)
+    SESSION2: (선택) session.json 또는 세션 디렉토리 — 지정 시 SESSION1과 비교
+    """
+    s1 = _load_session_json(session1)
+    m1 = calc_session_metrics(s1)
+
+    p1 = Path(session1)
+    session_dir1 = p1 if p1.is_dir() else p1.parent
+    write_measurement(m1, session_dir1)
+
+    if session2 is None:
+        click.echo(format_measurement_summary(m1))
+    else:
+        s2 = _load_session_json(session2)
+        m2 = calc_session_metrics(s2)
+        delta = diff_sessions(m1, m2)
+        click.echo(f"session_id_before : {delta['session_id_before']}")
+        click.echo(f"session_id_after  : {delta['session_id_after']}")
+        click.echo(f"cited_ratio_delta : {delta['cited_ratio_delta']:+.4f}")
+        click.echo(f"must_ratio_delta  : {delta['must_ratio_delta']:+.4f}")
+        click.echo("tier_distribution_delta:")
+        for tier, count in delta["tier_distribution_delta"].items():
+            click.echo(f"  {tier}: {count:+d}")
+        click.echo("intent_kind_distribution_delta:")
+        for kind, count in delta["intent_kind_distribution_delta"].items():
+            click.echo(f"  {kind}: {count:+d}")
 
 
 @cli.command("harness-export")
