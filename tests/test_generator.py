@@ -7,12 +7,13 @@ from hijack.core.exemplars import Exemplar
 from hijack.core.generator import (
     render_category_md,
     render_claude_md_entrypoint,
+    render_foresight_md,
     render_layer_md,
     render_meta_md,
     render_system_prompt_md,
     write_output,
 )
-from hijack.core.models import AnalysisRule, CategoryResult, Evidence, SessionResult
+from hijack.core.models import AnalysisRule, CategoryResult, Evidence, ForesightCard, SessionResult
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -792,3 +793,149 @@ class TestMustCalibrationLint:
         err = capsys.readouterr().err
         assert "target 30-40%" in err
         assert "PR 거부" in err  # 액션 힌트
+
+
+# ---------------------------------------------------------------------------
+# T-034: render_foresight_md
+# ---------------------------------------------------------------------------
+
+def _foresight_card(tier: str = "corroborated", layer: str = "backend") -> ForesightCard:
+    return ForesightCard(
+        hypothesis="이 코드베이스는 성능 최적화를 최우선으로 한다",
+        signals=["src/cache.py:42 — LRU 캐시 적용", "benchmarks/ 디렉토리 존재"],
+        falsification="캐싱 없는 순수 DB 쿼리 패턴이 주를 이루면 반증됨",
+        tier=tier,
+        layer=layer,
+    )
+
+
+class TestRenderForesightMd:
+    def test_header_contains_repo_nature(self) -> None:
+        cards = [_foresight_card()]
+        md = render_foresight_md(cards, "library")
+        assert "library" in md
+        assert "Foresight" in md
+
+    def test_corroborated_card_no_forced_note(self) -> None:
+        cards = [_foresight_card(tier="corroborated")]
+        md = render_foresight_md(cards, "library")
+        assert "[corroborated]" in md
+        assert "강제 아님" not in md
+
+    def test_speculative_card_has_forced_note(self) -> None:
+        cards = [_foresight_card(tier="speculative")]
+        md = render_foresight_md(cards, "app")
+        assert "speculative" in md
+        assert "강제 아님" in md
+
+    def test_card_contains_hypothesis(self) -> None:
+        cards = [_foresight_card()]
+        md = render_foresight_md(cards, "library")
+        assert "성능 최적화를 최우선" in md
+
+    def test_card_contains_signals(self) -> None:
+        cards = [_foresight_card()]
+        md = render_foresight_md(cards, "library")
+        assert "LRU 캐시 적용" in md
+
+    def test_card_contains_falsification(self) -> None:
+        cards = [_foresight_card()]
+        md = render_foresight_md(cards, "library")
+        assert "캐싱 없는 순수 DB 쿼리" in md
+
+    def test_mixed_tiers(self) -> None:
+        cards = [
+            _foresight_card(tier="corroborated"),
+            _foresight_card(tier="speculative"),
+        ]
+        md = render_foresight_md(cards, "app/cli")
+        assert "[corroborated]" in md
+        assert "강제 아님" in md
+        # corroborated section 에는 "강제 아님" 없음 — 순서로 검증
+        lines = md.splitlines()
+        corroborated_idx = next(
+            i for i, line in enumerate(lines) if "[corroborated]" in line
+        )
+        speculative_idx = next(
+            i for i, line in enumerate(lines)
+            if "speculative" in line and "강제 아님" in line
+        )
+        assert corroborated_idx < speculative_idx
+
+
+# ---------------------------------------------------------------------------
+# T-034: write_output foresight.md 생성 여부
+# ---------------------------------------------------------------------------
+
+class TestWriteOutputForesight:
+    def test_foresight_md_created_when_cards_present(self, tmp_path: Path) -> None:
+        s = _session()
+        s.foresight_cards = [_foresight_card()]
+        write_output(s, tmp_path)
+        assert (tmp_path / "integrated" / "foresight.md").exists()
+        assert (tmp_path / "2026-04-17_repo" / "foresight.md").exists()
+
+    def test_foresight_md_not_created_when_cards_empty(self, tmp_path: Path) -> None:
+        s = _session()
+        s.foresight_cards = []
+        write_output(s, tmp_path)
+        assert not (tmp_path / "integrated" / "foresight.md").exists()
+        assert not (tmp_path / "2026-04-17_repo" / "foresight.md").exists()
+
+    def test_foresight_md_content_correct(self, tmp_path: Path) -> None:
+        s = _session()
+        s.foresight_cards = [_foresight_card(tier="speculative")]
+        write_output(s, tmp_path)
+        content = (tmp_path / "integrated" / "foresight.md").read_text(encoding="utf-8")
+        assert "강제 아님" in content
+        assert "성능 최적화를 최우선" in content
+
+
+# ---------------------------------------------------------------------------
+# T-034: 성격 헤더 (repo_nature) — layer md + CLAUDE.md
+# ---------------------------------------------------------------------------
+
+class TestRepoNatureHeader:
+    def test_layer_md_contains_repo_nature(self) -> None:
+        cats = [_category("architecture", layer="backend")]
+        md = render_layer_md("backend", cats, repo_nature="app/cli")
+        assert "app/cli" in md
+
+    def test_claude_md_contains_repo_nature(self) -> None:
+        s = _session()
+        s.repo_nature = "app"
+        md = render_claude_md_entrypoint(s)
+        assert "app" in md
+
+    def test_layer_md_nature_phrase(self) -> None:
+        cats = [_category("architecture", layer="backend")]
+        md = render_layer_md("backend", cats, repo_nature="library")
+        assert "library" in md
+        # 문구가 헤더에 포함됨 확인
+        assert "맥락" in md or "library" in md
+
+
+# ---------------------------------------------------------------------------
+# T-034: system-prompt 맥락 조건부 톤
+# ---------------------------------------------------------------------------
+
+class TestSystemPromptTone:
+    def test_no_non_negotiable_phrase(self) -> None:
+        md = render_system_prompt_md(_session())
+        assert "non-negotiable" not in md
+
+    def test_contextual_must_phrase_present(self) -> None:
+        md = render_system_prompt_md(_session())
+        assert "MUST" in md
+        # 맥락 조건부 톤 문구 포함
+        assert "맥락" in md
+
+    def test_foresight_consideration_phrase(self) -> None:
+        md = render_system_prompt_md(_session())
+        assert "고려" in md
+
+    def test_system_prompt_contains_repo_nature(self) -> None:
+        s = _session()
+        s.repo_nature = "app/cli"
+        md = render_system_prompt_md(s)
+        assert "app/cli" in md

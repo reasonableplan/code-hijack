@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime
 import json
 import logging
@@ -131,6 +132,19 @@ def _rules_from_parsed(
             )
         )
     return rules
+
+
+def normalize_rationale_tier(rules: list[AnalysisRule]) -> list[AnalysisRule]:
+    """corroborated/speculative MUST 규칙을 SHOULD 로 강등한다.
+
+    cited tier 만 MUST 를 유지할 수 있다. 원본 객체는 수정하지 않는다.
+    """
+    result = []
+    for rule in rules:
+        if rule.rationale_tier in ("corroborated", "speculative") and rule.priority == "MUST":
+            rule = dataclasses.replace(rule, priority="SHOULD")
+        result.append(rule)
+    return result
 
 
 def _evidence_from_parsed(
@@ -278,6 +292,7 @@ async def _analyze_category(
         valid_doc_paths=valid_doc_paths,
         sha_to_date=sha_to_date,
     )
+    rules = normalize_rationale_tier(rules)
     return CategoryResult(
         category=category,
         design_intent=parsed.get("design_intent", ""),
@@ -317,6 +332,7 @@ async def run_full_analysis(
     target: str = "",
     critic: bool = True,
     refresh_prs: bool = False,
+    pyproject_toml: dict | None = None,
 ) -> SessionResult:
     """카테고리별 LLM 분석을 실행하고 SessionResult를 반환한다.
 
@@ -324,7 +340,7 @@ async def run_full_analysis(
     실패해도 원본 결과는 보존됨.
     """
     start = time.monotonic()
-    preprocess = build_preprocess_result(files, repo_root)
+    preprocess = build_preprocess_result(files, repo_root, pyproject_toml=pyproject_toml)
 
     # Build the validation pools once, before any LLM call. They feed both the
     # per-category evidence parser (which drops hallucinated refs) and the
@@ -412,6 +428,7 @@ async def run_full_analysis(
         test_decisions=test_decisions,
         pr_decisions=pr_decisions,
         commit_decisions=commit_decisions,
+        repo_nature=preprocess.repo_nature,
     )
 
     if critic and any(c.rules for c in category_results):

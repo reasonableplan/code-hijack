@@ -11,9 +11,11 @@ from hijack.core.analyzer import (
     _parse_json,
     _parse_regex_fallback,
     _rules_from_parsed,
+    normalize_rationale_tier,
     run_full_analysis,
 )
 from hijack.core.fetcher import SourceFile
+from hijack.core.models import AnalysisRule
 from hijack.core.preprocessor import (
     _CATEGORY_ROLES,
     build_preprocess_result,
@@ -573,3 +575,105 @@ async def test_files_by_layer_populated_in_session_result() -> None:
     assert result.files_by_layer.get("backend") == 1
     assert result.files_by_layer.get("frontend") == 1
     assert result.files_by_layer.get("shared") == 1
+
+
+# ---------------------------------------------------------------------------
+# normalize_rationale_tier (T-033)
+# ---------------------------------------------------------------------------
+
+def _make_rule(priority: str, rationale_tier: str) -> AnalysisRule:
+    return AnalysisRule(
+        rule="test rule",
+        priority=priority,
+        confidence="high",
+        ref_files=[],
+        good_example="",
+        bad_example="",
+        reason="reason",
+        layer="backend",
+        rationale_tier=rationale_tier,
+    )
+
+
+class TestNormalizeRationaleTier:
+    def test_cited_must_stays_must(self) -> None:
+        rule = _make_rule("MUST", "cited")
+        result = normalize_rationale_tier([rule])
+        assert result[0].priority == "MUST"
+
+    def test_corroborated_must_demoted_to_should(self) -> None:
+        rule = _make_rule("MUST", "corroborated")
+        result = normalize_rationale_tier([rule])
+        assert result[0].priority == "SHOULD"
+
+    def test_speculative_must_demoted_to_should(self) -> None:
+        rule = _make_rule("MUST", "speculative")
+        result = normalize_rationale_tier([rule])
+        assert result[0].priority == "SHOULD"
+
+    def test_speculative_should_stays_should(self) -> None:
+        rule = _make_rule("SHOULD", "speculative")
+        result = normalize_rationale_tier([rule])
+        assert result[0].priority == "SHOULD"
+
+    def test_original_object_not_mutated(self) -> None:
+        rule = _make_rule("MUST", "speculative")
+        result = normalize_rationale_tier([rule])
+        # original unchanged
+        assert rule.priority == "MUST"
+        # new instance returned
+        assert result[0] is not rule
+        assert result[0].priority == "SHOULD"
+
+    def test_empty_list_returns_empty(self) -> None:
+        assert normalize_rationale_tier([]) == []
+
+    def test_mixed_list_normalizes_selectively(self) -> None:
+        rules = [
+            _make_rule("MUST", "cited"),       # keep MUST
+            _make_rule("MUST", "corroborated"), # demote to SHOULD
+            _make_rule("MUST", "speculative"),  # demote to SHOULD
+            _make_rule("SHOULD", "speculative"),# keep SHOULD
+        ]
+        result = normalize_rationale_tier(rules)
+        assert result[0].priority == "MUST"
+        assert result[1].priority == "SHOULD"
+        assert result[2].priority == "SHOULD"
+        assert result[3].priority == "SHOULD"
+
+
+@pytest.mark.asyncio
+async def test_run_full_analysis_normalize_applied_before_category_result() -> None:
+    """normalize_rationale_tier がパース後に呼ばれ、MUST speculative → SHOULD になること."""
+    import json as _json
+    rules_payload = [
+        {
+            "rule": "speculative rule",
+            "priority": "MUST",
+            "confidence": "high",
+            "ref_files": [],
+            "good_example": "",
+            "bad_example": "",
+            "reason": "reason",
+            "layer": "backend",
+            "rationale_tier": "speculative",
+        }
+    ]
+    mock_resp = _json.dumps({
+        "design_intent": "intent",
+        "rules": rules_payload,
+        "anti_patterns": [],
+        "file_type_guides": {},
+        "checklist": [],
+    })
+    llm = AsyncMock()
+    llm.analyze = AsyncMock(return_value=mock_resp)
+
+    files = _make_files()
+    result = await run_full_analysis(
+        files, Path("/repo"), categories=["architecture"],
+        llm=llm, target="/repo", critic=False,
+    )
+
+    assert result.categories[0].rules[0].priority == "SHOULD"
+    assert result.categories[0].rules[0].rationale_tier == "speculative"

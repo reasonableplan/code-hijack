@@ -10,14 +10,22 @@
   - **Phase 1 (MVP)**: GitHub URL/로컬 경로 입력 → 3개 카테고리(architecture, coding_style, api_design) × 5개 레이어(frontend/backend/db/devops/shared) 분석 → 레이어별 `.md` + CLAUDE.md 진입점 + system-prompt.md 출력. Claude Code skill 모드 + CLI 모드 모두 지원.
   - **Out-of-scope (Phase 2+로 이월)**: 나머지 7개 카테고리, 세션 간 diff, 여러 레포 통합 분석, 언어 확장(Go/Rust), MCP 서버 노출.
 
+<!-- ha-redesign 2026-06-10: Foresight inference layer — affected via /ha-redesign -->
 ## 2. 기능 요구사항
 
 ### 핵심 기능 (MVP — Phase 1)
 - [ ] GitHub URL 또는 로컬 경로를 받아 Python/TypeScript 소스 파일을 수집한다
 - [ ] 휴리스틱 + LLM 협업으로 분석할 핵심 파일을 선별한다
 - [ ] 3개 카테고리(architecture, coding_style, api_design) × 5개 레이어(frontend/backend/db/devops/shared) 분석을 수행한다
-- [ ] 각 규칙에 참조 파일, ✅/❌ 예시 코드, 신뢰도, 우선순위(MUST/SHOULD)를 태깅한다
-- [ ] 대상 레포의 `docs/hijacked/` 하위에 세션별 raw 분석 + 통합 CLAUDE.md/system-prompt.md를 저장한다
+- [ ] 각 규칙에 참조 파일, ✅/❌ 예시 코드, 우선순위(MUST/SHOULD), **3-tier rationale 등급(cited/corroborated/speculative)** 을 태깅한다
+  - `cited`: evidence 가 코드에서 verbatim 인용 가능한 수준
+  - `corroborated`: 독립 코드 신호 2개 이상이 일관적으로 뒷받침
+  - `speculative`: 그 외 LLM 추론 기반
+  - `cited` tier 인 규칙만 MUST 유지 가능. `corroborated`/`speculative` MUST 는 SHOULD 로 자동 강등 (데이터 정규화 시점 적용)
+- [ ] **negative-space 신호 추출**: 레포에서 의도적 절제 패턴 4종을 결정론적으로 추출한다 (의존성 절제, public API surface, deprecation 흔적, 경계 규율)
+- [ ] **foresight 가설 카드 생성**: LLM이 "왜 이렇게 짰는지"를 추론한 `ForesightCard` 목록을 세션당 `foresight.md` 1개 파일로 저장한다. inferred foresight 는 강제 아닌 고려 사항.
+- [ ] **레포 성격 판별**: 결정론 함수로 레포를 `app/cli` / `app` / `library` 로 분류, generator 출력 헤더에 맥락 명시
+- [ ] 대상 레포의 `docs/hijacked/` 하위에 세션별 raw 분석 + 통합 CLAUDE.md/system-prompt.md + `foresight.md` 를 저장한다
 
 ### 추가 기능 (Phase 2+)
 - [ ] 나머지 7개 카테고리 (testing, dependencies, security, performance, devops, state_management, data_model)
@@ -187,6 +195,7 @@ HijackError (baseclass, ClickException 상속)
 - `--model` 옵션 불필요 (세션 모델 사용).
 - API 호출 대신 세션 내 LLM 사용 → 추가 비용 없음.
 
+<!-- ha-redesign 2026-06-10: Foresight inference layer — affected via /ha-redesign -->
 ## 7. 도메인 로직
 
 ### 핵심 비즈니스 규칙
@@ -197,6 +206,64 @@ HijackError (baseclass, ClickException 상속)
 5. LLM이 반환한 규칙 중 필수 필드(`rule`, `priority`, `layer`) 누락 시 해당 규칙 드롭 + 경고. 카테고리 전체는 유효.
 6. `dataclass` only — Pydantic 금지. 직렬화는 `to_json` / `from_json` 수동 구현.
 7. 윈도우/macOS/리눅스 호환 — 경로 비교는 `Path.as_posix()` 사용, `str(path)` 금지.
+8. **rationale_tier 정규화**: 분석 파싱 직후 정규화 단계에서, `corroborated`/`speculative` tier 의 `MUST` 규칙은 `SHOULD` 로 강등. `cited` tier 만 `MUST` 유지 가능. 이 정규화는 generator 렌더링 이전, `AnalysisRule` 객체 생성 직후에 적용해 객체 정합성 보장.
+9. **negative_space 추출**: `negative_space.py` 는 보조 신호 추출기 (archaeology.py 와 동일 역할 분담). stdlib(ast, pathlib, re) 만 사용. 추출 결과는 `NegativeSpaceResult` dataclass. Skill 모드와 CLI 모드 양쪽에서 소비.
+10. **레포 성격 판별**: preprocessor 의 결정론 함수 `detect_repo_nature` 가 `"app/cli"` / `"app"` / `"library"` 셋 중 하나 반환. 판별 기준: `[project.scripts]`/entry_points 존재 → `"app/cli"`, frontend 레이어 파일 존재 → `"app"`, 그 외 → `"library"`.
+11. **ForesightCard 는 강제 아닌 고려 사항**: generator 가 `foresight.md` 를 렌더링할 때, 카드의 tier 가 `speculative` 이면 "강제 아님" 표시. system-prompt 에서 foresight 카드는 제약이 아닌 고려 사항으로 기술.
+
+### 데이터 모델 확장 (Foresight inference layer)
+
+#### `AnalysisRule` 확장 필드
+```python
+@dataclass
+class AnalysisRule:
+    # 기존 필드 유지
+    rule: str
+    priority: str          # "MUST" | "SHOULD"
+    layer: str
+    reason: str            # 자유문자열, 유지
+    evidence: list[str]
+    # 신규 필드
+    rationale_tier: str    # "cited" | "corroborated" | "speculative" (기본값: "speculative")
+```
+- `from_json` 역직렬화 시 `rationale_tier` 키 없으면 기본값 `"speculative"` (하위 호환).
+- 판정 기준: evidence 가 verbatim cited → `"cited"`, 독립 코드 신호 2개 이상 일관 → `"corroborated"`, 그 외 → `"speculative"`.
+
+#### `ForesightCard` (신규 dataclass, `models.py` 추가)
+```python
+@dataclass
+class ForesightCard:
+    hypothesis: str        # "왜 이렇게 짰는지" LLM 추론 가설
+    signals: list[str]     # 뒷받침하는 검증된 사실 목록 (각 항목은 구체 파일/패턴 레퍼런스)
+    falsification: str     # 이 가설이 틀렸음을 보여줄 조건
+    tier: str              # "corroborated" | "speculative" (cited 이면 일반 rule evidence 영역)
+    layer: str
+```
+- `ForesightCard` 는 `foresight.md` 에만 출력. 일반 규칙 문서(`CLAUDE.md`, system-prompt.md)에는 포함되지 않음.
+
+#### `SessionResult` 확장
+```python
+@dataclass
+class SessionResult:
+    # 기존 필드 유지
+    ...
+    # 신규 필드
+    foresight_cards: list[ForesightCard] = field(default_factory=list)  # 기본 빈 리스트
+    repo_nature: str = "library"  # "app/cli" | "app" | "library"
+```
+- `from_json` 에서 `foresight_cards` 없으면 빈 리스트, `repo_nature` 없으면 `"library"` (하위 호환).
+
+#### `NegativeSpaceResult` (`negative_space.py` 에 정의)
+```python
+@dataclass
+class NegativeSpaceResult:
+    dep_count: int                    # 런타임 의존성 수
+    direct_impl_hints: list[str]      # stdlib 로 직접 구현한 흔적 (파일 경로)
+    public_ratio: float               # underscore-prefix 없는 public 심볼 비율
+    has_all_discipline: bool          # __all__ 정의 여부
+    deprecation_patterns: list[str]   # DeprecationWarning 추가/제거 패턴 요약
+    layer_import_violations: list[str] # 레이어 간 역방향 import (기존 detect_layer 결과 소비)
+```
 
 ### 알고리즘
 
@@ -220,6 +287,27 @@ if suffix == ".py" and any(seg in rel for seg in ["backend/", "server/", "api/",
 if suffix == ".py" and pyproject_toml has "fastapi"|"django"|"flask": return "backend"
 return "shared"
 ```
+
+#### `detect_repo_nature` (preprocessor.py 에 추가)
+- **입력**: `pyproject_toml: dict | None`, `detected_layers: set[str]`
+- **출력**: `Literal["app/cli", "app", "library"]`
+- **판별 로직**:
+```
+if pyproject_toml has [project.scripts] or entry_points: return "app/cli"
+if "frontend" in detected_layers: return "app"
+return "library"
+```
+- **복잡도**: `O(1)`
+
+#### `extract_negative_space` (negative_space.py — 순수 함수들의 집합)
+- **입력**: `repo_root: Path`, `py_files: list[Path]`, `pyproject_toml: dict | None`, `layer_map: dict[Path, str]`
+- **출력**: `NegativeSpaceResult`
+- **추출 신호 4종** (모두 stdlib: ast, pathlib, re):
+  1. **의존성 절제**: `pyproject_toml` 의 `[project.dependencies]` 배열 길이 → `dep_count`. `ast.parse` 로 stdlib-only 패턴 파일 탐색 → `direct_impl_hints`.
+  2. **public API surface**: `ast.parse` 로 모듈별 `_` prefix 심볼 vs 전체 심볼 비율 → `public_ratio`. `__all__` 존재 여부 → `has_all_discipline`.
+  3. **deprecation 흔적**: `re` 로 `DeprecationWarning` 패턴 스캔 → `deprecation_patterns` 요약 문자열 리스트 (git history 읽기는 별도 I/O 함수 `read_deprecation_history(repo_root)` 로 분리).
+  4. **경계 규율**: `ast` import 분석 + `layer_map` (기존 `detect_layer` 결과) → 역방향 import → `layer_import_violations`.
+- **순수/I/O 분리**: AST 분석·경로 분석·비율 계산 = 순수. git history 읽기 (`read_deprecation_history`) = I/O (별도 함수, `core/fetcher.py` 또는 `negative_space.py` 말미에 분리 표시).
 
 #### `run_full_analysis`
 - **입력**: `files: list[SourceFile]`, `categories: list[str]`, `llm: BaseLLM`, `model: str`
@@ -249,17 +337,19 @@ return SessionResult(categories=results, ...)
 ### 순수 함수 vs I/O 분리
 
 **pure (`src/hijack/core/`)** — I/O 없음, 테스트 쉬움:
-- `models.py`: 데이터 모델 (`AnalysisRule`, `CategoryResult`, `SessionResult`) + `to_json` / `from_json`
-- `preprocessor.py`: 역할 분류, 2D(role×layer) 분류, 구조 맵 생성 — 순수 함수
+- `models.py`: 데이터 모델 (`AnalysisRule`, `CategoryResult`, `SessionResult`, `ForesightCard`, `NegativeSpaceResult`) + `to_json` / `from_json`
+- `preprocessor.py`: 역할 분류, 2D(role×layer) 분류, 구조 맵 생성, `detect_repo_nature` — 순수 함수
 - `prompts.py`: 카테고리별 프롬프트 빌더 — 순수 문자열 조립
-- `analyzer.py` 의 파싱 함수 (`parse_json`, `parse_regex_fallback`) — LLM 호출부는 impure로 분리
+- `analyzer.py` 의 파싱 함수 (`parse_json`, `parse_regex_fallback`), `normalize_rationale_tier` (MUST 강등 정규화) — LLM 호출부는 impure로 분리
 - `session.py` 의 ID 생성/diff 로직 — 순수
+- `negative_space.py` 의 AST/경로/비율 분석 함수 (`extract_negative_space`, `_calc_public_ratio`, `_find_direct_impls`, `_find_layer_violations`) — 순수 [stdlib: ast, pathlib, re]
 
 **impure (파이프라인 진입/출력 레이어)** — 파일/네트워크:
 - `core/fetcher.py`: 레포 클론 (`git` subprocess) + 파일 수집 [FS/NET]
 - `core/analyzer.py` 의 `run_full_analysis`: LLM 호출 [NET]
-- `core/generator.py`: `write_output` 파일 저장 [FS]
+- `core/generator.py`: `write_output` 파일 저장 (레이어별 .md + CLAUDE.md + system-prompt.md + foresight.md) [FS]
 - `core/session.py` 의 `get_output_dir`: 디렉토리 생성 [FS]
+- `core/negative_space.py` 의 `read_deprecation_history`: git history 읽기 [FS/subprocess]
 - `llm/api.py`: `ClaudeAPIClient.analyze` — anthropic SDK 호출 [NET]
 - `cli.py`: click 진입점 — stdin/stdout/exit
 
@@ -310,17 +400,17 @@ return SessionResult(categories=results, ...)
 ### Phase 1 — MVP (3 카테고리 × 5 레이어, CLI + Skill)
 | ID | 에이전트 | 의존성 | 설명 | 상태 |
 |----|---------|--------|------|------|
-| T-001 | backend_coder | - | core.logic (models.py): AnalysisRule/CategoryResult/SessionResult @dataclass + to_json/from_json. layer 필드 포함. | 대기 |
+| T-001 | backend_coder | - | core.logic (models.py): AnalysisRule/CategoryResult/SessionResult @dataclass + to_json/from_json. layer 필드 포함. [2026-06-10: T-030 이 rationale_tier·ForesightCard·foresight_cards·repo_nature 확장 흡수] | 대기 |
 | T-002 | backend_coder | - | errors + configuration: HijackError(ClickException) 계층 (Input/Fetch/LLM/Output) + 에러 코드 상수 + backend/.env.example 생성. | 대기 |
 | T-003 | backend_coder | T-001 T-002 | core.logic (llm/base.py, llm/api.py): BaseLLM ABC (analyze 추상) + ClaudeAPIClient (anthropic SDK, asyncio.to_thread 래핑, 기본 모델 claude-sonnet-4-6, ANTHROPIC_API_KEY 로드). | 대기 |
 | T-004 | backend_coder | T-001 T-002 | core.logic (fetcher.py): SourceFile + fetch_source (로컬 경로 + git clone), 파일 수집 + _SKIP_DIRS 제외 + detect_layer (frontend/backend/db/devops/shared). | 대기 |
 | T-005 | backend_coder | T-001 T-004 | core.logic (preprocessor.py): 역할 분류 (entry_point/model/api/test/config/...), 2D(role×layer) 분류, PreprocessResult, build_file_summary_for_llm. | 대기 |
-| T-006 | backend_coder | T-001 | core.logic (prompts.py): MVP 3 카테고리 프롬프트 (architecture, coding_style, api_design) + 레이어별 섹션 출력 지시 + MVP_CATEGORIES 상수. | 대기 |
-| T-007 | backend_coder | T-003 T-005 T-006 | core.logic (analyzer.py): run_full_analysis, 카테고리별 LLM 호출, JSON 파싱 + regex 폴백, 최대 2회 재시도, 레이어 파싱. | 대기 |
+| T-006 | backend_coder | T-001 | core.logic (prompts.py): MVP 3 카테고리 프롬프트 (architecture, coding_style, api_design) + 레이어별 섹션 출력 지시 + MVP_CATEGORIES 상수. [2026-06-10: T-034 이 foresight 가설 프롬프트 추가 흡수] | 대기 |
+| T-007 | backend_coder | T-003 T-005 T-006 | core.logic (analyzer.py): run_full_analysis, 카테고리별 LLM 호출, JSON 파싱 + regex 폴백, 최대 2회 재시도, 레이어 파싱. [2026-06-10: T-033 이 normalize_rationale_tier MUST 강등 정규화 흡수] | 대기 |
 | T-008 | backend_coder | T-001 | core.logic (session.py): create_session_id (YYYY-MM-DD_<repo>), get_output_dir, SessionDiff (Phase 2 stub). | 대기 |
-| T-009 | backend_coder | T-001 T-007 T-008 | core.logic (generator.py): 레이어별 .md 분리 렌더러 (frontend/backend/database/devops/shared) + CLAUDE.md 진입점 + system-prompt.md + write_output (세션별 raw + integrated). | 대기 |
+| T-009 | backend_coder | T-001 T-007 T-008 | core.logic (generator.py): 레이어별 .md 분리 렌더러 (frontend/backend/database/devops/shared) + CLAUDE.md 진입점 + system-prompt.md + write_output (세션별 raw + integrated). [2026-06-10: T-034 이 foresight.md 렌더 + 성격 헤더 + system-prompt 맥락 조건부 톤 흡수] | 대기 |
 | T-010 | backend_coder | T-002 T-003 T-007 T-009 | interface.cli (cli.py, skill.py): click 진입점 + --model/--path/--categories/--output/--dry-run/-v/-q, skill 엔트리, 비용 추정 + 사용자 확인 흐름. | 대기 |
-| T-011 | backend_coder | T-001 T-004 T-005 T-007 T-008 T-009 | core.logic (tests): test_models/fetcher/preprocessor/analyzer/generator/session + tests/fixtures/senior_wisdom/ 복원 (ground_truth.md 5 규칙 레이어 검증). | 대기 |
+| T-011 | backend_coder | T-001 T-004 T-005 T-007 T-008 T-009 | core.logic (tests): test_models/fetcher/preprocessor/analyzer/generator/session + tests/fixtures/senior_wisdom/ 복원 (ground_truth.md 5 규칙 레이어 검증). [2026-06-10: T-030~T-034 각 태스크가 자체 테스트 포함 — T-011 범위 외] | 대기 |
 
 ### Phase 2 — 확장 (7 카테고리 + 세션 관리)
 | ID | 에이전트 | 의존성 | 설명 | 상태 |
@@ -329,6 +419,17 @@ return SessionResult(categories=results, ...)
 | T-021 | backend_coder | T-020 | core.logic (analyzer.py): _CATEGORY_ROLES 확장 (7 카테고리별 파일 역할 매핑). | 대기 |
 | T-022 | backend_coder | - | core.logic (session.py): SessionDiff 구현 완성 (두 SessionResult 비교 → 변경/추가/삭제 규칙). | 대기 |
 | T-023 | backend_coder | T-021 T-022 | interface.cli: --resume 옵션 (session.json 읽어 완료 카테고리 스킵) + diff 서브커맨드 + 7 카테고리/resume/diff 테스트 추가. | 대기 |
+
+<!-- ha-redesign 2026-06-10: Foresight inference layer — affected via /ha-redesign -->
+### Phase 3 — Foresight inference layer
+| ID | 에이전트 | 의존성 | 설명 | 상태 |
+|----|---------|--------|------|------|
+| T-030 | backend_coder | - | core.logic (models.py): AnalysisRule 에 `rationale_tier: str` 필드 추가 + `ForesightCard` dataclass 추가 + `SessionResult` 에 `foresight_cards: list[ForesightCard]` / `repo_nature: str` 필드 추가 + `from_json` 기본값 처리 (구버전 하위 호환) + 단위 테스트. | 대기 |
+| T-031 | backend_coder | T-030 | core.logic (negative_space.py): 신규 모듈. `NegativeSpaceResult` dataclass + `extract_negative_space(repo_root, py_files, pyproject_toml, layer_map) → NegativeSpaceResult` (순수, stdlib 전용: ast/pathlib/re). 4종 신호 추출: (a) 의존성 절제 — pyproject dependencies 수 + ast로 직접구현 흔적, (b) public API surface — underscore prefix 비율 + __all__ 규율, (c) deprecation 흔적 — re로 DeprecationWarning 패턴 스캔 (git history 읽기는 `read_deprecation_history(repo_root)` I/O 함수로 분리), (d) 경계 규율 — ast import + layer_map 역방향 import 탐지. 단위 테스트 포함. | 대기 |
+| T-032 | backend_coder | T-030 | core.logic (preprocessor.py): `detect_repo_nature(pyproject_toml, detected_layers) → Literal["app/cli","app","library"]` 순수 함수 추가. 판별: [project.scripts]/entry_points 존재 → "app/cli", "frontend" in detected_layers → "app", 그 외 → "library". `PreprocessResult` 에 `repo_nature` 필드 추가. 단위 테스트 포함. | 대기 |
+| T-033 | backend_coder | T-030 | core.logic (analyzer.py): `normalize_rationale_tier(rules: list[AnalysisRule]) → list[AnalysisRule]` 순수 함수 추가. 로직: `rationale_tier` 가 `"corroborated"` 또는 `"speculative"` 이고 `priority == "MUST"` 인 경우 `priority = "SHOULD"` 로 강등. 정규화 시점은 파싱 직후 `run_full_analysis` 내에서 `CategoryResult` 생성 전 호출 (generator 렌더 시점 아님). 단위 테스트: cited-MUST 유지, corroborated-MUST→SHOULD, speculative-MUST→SHOULD 케이스. | 대기 |
+| T-034 | backend_coder | T-030,T-032 | core.logic (generator.py): (1) `render_foresight_md(cards: list[ForesightCard]) → str` 순수 렌더러 추가 — tier별 섹션 구분, speculative 카드에 "강제 아님" 표시. (2) `write_output` 에서 `foresight.md` 를 세션별 raw + integrated/ 에 복사. (3) 출력 파일 헤더에 "이 규칙들은 `<repo_nature>` 맥락에서 추출됨" 명시. (4) system-prompt.md 의 "MUST rules are non-negotiable" 류 문구 → "MUST 규칙은 추출 맥락(레포 성격 헤더 참조)이 성립할 때 적용. 맥락이 다르면 일탈 가능하되 이유 명시. corroborated/speculative rationale 규칙과 foresight 카드는 강제 아닌 고려 사항." 단위 테스트: foresight.md 렌더 출력 구조 + system-prompt 톤 검증. | 대기 |
+| T-035 | backend_coder | T-031,T-032,T-033,T-034 | `.claude/skills/code-hijack/SKILL.md` Skill 모드 워크플로우 갱신. (1) negative_space 추출 단계 추가 (Fetcher 이후, Analyzer 이전). (2) foresight 가설 생성 절차 — LLM이 `NegativeSpaceResult` 신호를 보고 `ForesightCard` 목록 생성, tier 자가 판정. (3) 삼각측량 절차 — 각 ForesightCard 의 `signals` 가 `NegativeSpaceResult` 신호와 교차 검증되는지 확인. (4) 레포 성격 헤더를 출력 파일에 포함하는 단계 명시. | 대기 |
 
 ### 의존성 그래프
 \`\`\`
@@ -350,6 +451,13 @@ Phase 2:
   T-020 ──► T-021
   T-022 (병렬)
   T-021 + T-022 ──► T-023
+
+Phase 3 (Foresight inference layer):
+  T-030 (models 확장) ─┬─► T-031 (negative_space — 병렬 가능)
+                        ├─► T-032 (detect_repo_nature — 병렬 가능)
+                        ├─► T-033 (normalize_rationale_tier)
+                        └─► T-034 (generator foresight+톤, T-032 도 의존)
+  T-031 + T-032 + T-033 + T-034 ──► T-035 (SKILL.md 갱신)
 \`\`\`
 
 ### 병렬 실행 가능 조합
@@ -365,6 +473,7 @@ Phase 2:
 - \`done\` — 구현 + 검증 완료
 - \`blocked\` — 의존성 미해결 또는 실패 지속
 
+<!-- ha-redesign 2026-06-10: Foresight inference layer — affected via /ha-redesign -->
 ## 10. 구현 노트
 
 > 이 섹션은 `/ha-build`가 구현 중 발견한 것을 기록합니다.
@@ -374,9 +483,11 @@ Phase 2:
 | 날짜 | 태스크 | 결정 | 사유 | 영향 |
 |------|--------|------|------|------|
 | `<YYYY-MM-DD>` | `<T-XXX>` | <결정 내용> | <사유> | <영향 범위> |
+| `2026-06-10` | `T-030~T-035` | Foresight inference layer: rationale 3-tier 등급(cited/corroborated/speculative) + 별도 foresight.md 가설 카드 산출물 + 결정론적 negative-space 신호 추출기; inferred foresight 는 MUST 불가(cited-only MUST); system-prompt 톤을 non-negotiable → context-conditional 로 변경 | 사용자 피드백 2026-06-10: 도구가 "왜 이렇게 짰는지" 설계 의도(foresight/negative space)를 미포착, 과도 강제. 시니어 없이도 LLM 이 가설을 정직하게 등급 매겨 삼각측량 | §2 요구사항, §7 도메인 로직(모델/알고리즘/pure-impure 표), §9 태스크(T-030~T-035 신규), §10 결정 로그 |
 
 ### 트레이드오프 / 타협
-- <예: "페이지네이션은 offset 방식 사용. cursor 방식이 더 좋지만 MVP 범위 외.">
+- AnalysisRule 에 `rationale_tier` 필드 추가는 session.json 스키마 확장. `from_json` 기본값 `"speculative"` 으로 하위 호환 유지. 단, 구세션(rationale_tier 없음)과 신세션(rationale_tier 있음)을 `code-hijack diff` 로 비교할 때 tier 비교는 무의미함 — 구세션 결과는 모두 `"speculative"` 로 취급되므로 diff 보고서에 "구세션은 tier 비교 불가" 경고를 명시할 것.
+- negative_space 추출 4종 중 deprecation 흔적(git history 패턴)은 I/O 함수(`read_deprecation_history`) 로 분리 — git 이 없는 로컬 경로(압축 해제 디렉토리 등)에서 호출 시 graceful skip + 경고 처리 필요.
 
 ### 발견된 엣지 케이스 (skeleton 반영 미완)
 - <예: "Unicode 정규화 충돌 — 다음 릴리스에서 `core.logic`에 규칙 추가 예정">

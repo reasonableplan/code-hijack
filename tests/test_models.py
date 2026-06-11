@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from hijack.core.exemplars import Exemplar
-from hijack.core.models import AnalysisRule, CategoryResult, Evidence, SessionResult
+from hijack.core.models import AnalysisRule, CategoryResult, Evidence, ForesightCard, SessionResult
 
 
 def make_rule(**kwargs) -> AnalysisRule:
@@ -287,3 +287,134 @@ def test_session_result_exemplars_multiple_roundtrip() -> None:
     assert len(restored.exemplars) == 2
     assert restored.exemplars[0].name == "func_a"
     assert restored.exemplars[1].layer == "shared"
+
+
+# ---------------------------------------------------------------------------
+# T-030: AnalysisRule.rationale_tier (Phase 3 — Foresight inference layer)
+# ---------------------------------------------------------------------------
+
+def test_rule_default_rationale_tier() -> None:
+    rule = make_rule()
+    assert rule.rationale_tier == "speculative"
+
+
+def test_rule_rationale_tier_roundtrip() -> None:
+    for tier in ("cited", "corroborated", "speculative"):
+        rule = make_rule(rationale_tier=tier)
+        data = rule.to_json()
+        assert data["rationale_tier"] == tier
+        assert AnalysisRule.from_json(data).rationale_tier == tier
+
+
+def test_rule_rationale_tier_backward_compat_when_key_missing() -> None:
+    # Older session.json files (pre-T-030) won't have rationale_tier.
+    payload = make_rule().to_json()
+    payload.pop("rationale_tier", None)
+    restored = AnalysisRule.from_json(payload)
+    assert restored.rationale_tier == "speculative"
+
+
+# ---------------------------------------------------------------------------
+# T-030: ForesightCard dataclass
+# ---------------------------------------------------------------------------
+
+def _foresight_card(**kwargs) -> ForesightCard:
+    defaults = dict(
+        hypothesis="The author avoids ORMs to keep the DB layer transparent",
+        signals=["sqlalchemy not in dependencies", "direct sql/ directory with .sql files"],
+        falsification="If pyproject.toml ever lists sqlalchemy, this hypothesis is wrong",
+        tier="corroborated",
+        layer="db",
+    )
+    defaults.update(kwargs)
+    return ForesightCard(**defaults)
+
+
+def test_foresight_card_roundtrip() -> None:
+    card = _foresight_card()
+    restored = ForesightCard.from_json(card.to_json())
+    assert restored == card
+
+
+def test_foresight_card_speculative_tier() -> None:
+    card = _foresight_card(tier="speculative", layer="shared")
+    data = card.to_json()
+    assert data["tier"] == "speculative"
+    restored = ForesightCard.from_json(data)
+    assert restored.tier == "speculative"
+    assert restored.layer == "shared"
+
+
+def test_foresight_card_signals_list() -> None:
+    card = _foresight_card(signals=["signal_a", "signal_b", "signal_c"])
+    data = card.to_json()
+    assert data["signals"] == ["signal_a", "signal_b", "signal_c"]
+    restored = ForesightCard.from_json(data)
+    assert restored.signals == ["signal_a", "signal_b", "signal_c"]
+
+
+def test_foresight_card_empty_signals() -> None:
+    card = _foresight_card(signals=[])
+    restored = ForesightCard.from_json(card.to_json())
+    assert restored.signals == []
+
+
+# ---------------------------------------------------------------------------
+# T-030: SessionResult.foresight_cards + repo_nature
+# ---------------------------------------------------------------------------
+
+def test_session_result_foresight_cards_default_empty() -> None:
+    session = make_session()
+    assert session.foresight_cards == []
+
+
+def test_session_result_foresight_cards_roundtrip() -> None:
+    card = _foresight_card()
+    session = make_session(foresight_cards=[card])
+    restored = SessionResult.from_json(session.to_json())
+    assert len(restored.foresight_cards) == 1
+    assert restored.foresight_cards[0] == card
+
+
+def test_session_result_foresight_cards_backward_compat_when_key_missing() -> None:
+    # Pre-T-030 session.json files don't have foresight_cards.
+    payload = make_session().to_json()
+    payload.pop("foresight_cards", None)
+    restored = SessionResult.from_json(payload)
+    assert restored.foresight_cards == []
+
+
+def test_session_result_repo_nature_default_library() -> None:
+    session = make_session()
+    assert session.repo_nature == "library"
+
+
+def test_session_result_repo_nature_roundtrip() -> None:
+    for nature in ("app/cli", "app", "library"):
+        session = make_session(repo_nature=nature)
+        data = session.to_json()
+        assert data["repo_nature"] == nature
+        restored = SessionResult.from_json(data)
+        assert restored.repo_nature == nature
+
+
+def test_session_result_repo_nature_backward_compat_when_key_missing() -> None:
+    # Older session.json files won't have repo_nature.
+    payload = make_session().to_json()
+    payload.pop("repo_nature", None)
+    restored = SessionResult.from_json(payload)
+    assert restored.repo_nature == "library"
+
+
+def test_session_result_full_roundtrip_with_new_fields() -> None:
+    # Verify the full object serialization round-trips cleanly with all new fields.
+    cards = [
+        _foresight_card(tier="corroborated"),
+        _foresight_card(tier="speculative", layer="backend"),
+    ]
+    session = make_session(foresight_cards=cards, repo_nature="app/cli")
+    restored = SessionResult.from_json(session.to_json())
+    assert restored.repo_nature == "app/cli"
+    assert len(restored.foresight_cards) == 2
+    assert restored.foresight_cards[0].tier == "corroborated"
+    assert restored.foresight_cards[1].layer == "backend"

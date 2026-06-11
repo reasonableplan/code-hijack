@@ -291,6 +291,63 @@ class TestAuxiliaryDemote:
             assert max(core_indices) < min(bootstrap_indices)
 
 
+class TestDetectRepoNature:
+    """T-032: detect_repo_nature 단위 테스트."""
+
+    def test_scripts_present_returns_app_cli(self) -> None:
+        from hijack.core.preprocessor import detect_repo_nature
+        pyproject = {"project": {"scripts": {"my-cli": "mypkg.__main__:main"}}}
+        result = detect_repo_nature(pyproject, set())
+        assert result == "app/cli"
+
+    def test_entry_points_present_returns_app_cli(self) -> None:
+        from hijack.core.preprocessor import detect_repo_nature
+        pyproject = {"project": {"entry-points": {"console_scripts": {"cmd": "pkg:main"}}}}
+        result = detect_repo_nature(pyproject, set())
+        assert result == "app/cli"
+
+    def test_frontend_layer_returns_app(self) -> None:
+        from hijack.core.preprocessor import detect_repo_nature
+        result = detect_repo_nature(None, {"frontend", "backend"})
+        assert result == "app"
+
+    def test_no_scripts_no_frontend_returns_library(self) -> None:
+        from hijack.core.preprocessor import detect_repo_nature
+        result = detect_repo_nature(None, {"backend", "shared"})
+        assert result == "library"
+
+    def test_scripts_wins_over_frontend_layer(self) -> None:
+        """scripts 있고 frontend layer 도 있으면 app/cli 우선 (T-032 스펙 (d))."""
+        from hijack.core.preprocessor import detect_repo_nature
+        pyproject = {"project": {"scripts": {"cmd": "pkg:main"}}}
+        result = detect_repo_nature(pyproject, {"frontend", "backend"})
+        assert result == "app/cli"
+
+    def test_none_pyproject_no_frontend_returns_library(self) -> None:
+        from hijack.core.preprocessor import detect_repo_nature
+        result = detect_repo_nature(None, set())
+        assert result == "library"
+
+
+class TestPreprocessResultRepoNature:
+    """PreprocessResult.repo_nature 필드가 build_preprocess_result 에서 채워지는지 검증."""
+
+    def test_default_repo_nature_is_library(self) -> None:
+        result = _make_result([_make_file("a.py")])
+        assert result.repo_nature == "library"
+
+    def test_repo_nature_app_cli_when_pyproject_has_scripts(self) -> None:
+        pyproject = {"project": {"scripts": {"my-cli": "pkg:main"}}}
+        files = [_make_file("a.py")]
+        result = build_preprocess_result(files, Path("/repo"), pyproject_toml=pyproject)
+        assert result.repo_nature == "app/cli"
+
+    def test_repo_nature_app_when_frontend_files(self) -> None:
+        files = [_make_file("app.tsx", layer="frontend")]
+        result = build_preprocess_result(files, Path("/repo"))
+        assert result.repo_nature == "app"
+
+
 class TestOriginalCharsRanking:
     def test_truncated_large_file_ranked_above_full_small_file(self) -> None:
         """truncate 된 큰 파일이 full 인 작은 파일보다 우선해야 한다."""

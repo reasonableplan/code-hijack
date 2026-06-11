@@ -4,6 +4,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from hijack.core.archaeology import render_history_for_prompt
 from hijack.core.docs import RepoDoc, collect_repo_docs
@@ -133,13 +134,38 @@ class PreprocessResult:
     by_role_layer: dict[str, dict[str, list[SourceFile]]] = field(default_factory=dict)
     project_structure: str = ""
     repo_docs: list[RepoDoc] = field(default_factory=list)
+    repo_nature: str = "library"
 
 
 # ---------------------------------------------------------------------------
 # Core functions
 # ---------------------------------------------------------------------------
 
-def build_preprocess_result(files: list[SourceFile], repo_root: Path) -> PreprocessResult:
+def detect_repo_nature(
+    pyproject_toml: dict | None,
+    detected_layers: set[str],
+) -> Literal["app/cli", "app", "library"]:
+    """결정론적으로 레포 성격을 분류한다.
+
+    우선순위:
+    1. [project.scripts] 또는 [project.entry-points] 존재 → "app/cli"
+    2. "frontend" in detected_layers → "app"
+    3. 그 외 → "library"
+    """
+    if pyproject_toml is not None:
+        project = pyproject_toml.get("project", {})
+        if project.get("scripts") or project.get("entry-points"):
+            return "app/cli"
+    if "frontend" in detected_layers:
+        return "app"
+    return "library"
+
+
+def build_preprocess_result(
+    files: list[SourceFile],
+    repo_root: Path,
+    pyproject_toml: dict | None = None,
+) -> PreprocessResult:
     """SourceFile 목록으로 PreprocessResult를 생성한다.
 
     Also collects repo-level rationale docs (README/ARCHITECTURE/ADRs) once per
@@ -157,6 +183,7 @@ def build_preprocess_result(files: list[SourceFile], repo_root: Path) -> Preproc
 
     structure = _build_project_structure(files, repo_root)
     repo_docs = collect_repo_docs(repo_root)
+    nature = detect_repo_nature(pyproject_toml, set(by_layer.keys()))
 
     return PreprocessResult(
         files=files,
@@ -165,6 +192,7 @@ def build_preprocess_result(files: list[SourceFile], repo_root: Path) -> Preproc
         by_role_layer=by_role_layer,
         project_structure=structure,
         repo_docs=repo_docs,
+        repo_nature=nature,
     )
 
 

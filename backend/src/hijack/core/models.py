@@ -89,6 +89,11 @@ class AnalysisRule:
     # an Evidence chain section and `evidence.classify_rule` switches from text-
     # based to structure-based classification. Empty list = pre-D1 behaviour.
     evidence: list[Evidence] = field(default_factory=list)
+    # Rationale confidence tier (T-030). Values: "cited" | "corroborated" | "speculative".
+    # Only "cited" rules may keep MUST priority; the rest are demoted to SHOULD
+    # by normalize_rationale_tier in analyzer.py. Pre-T-030 session.json files
+    # lack this key — from_json defaults to "speculative" for backward compat.
+    rationale_tier: str = "speculative"
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -102,6 +107,7 @@ class AnalysisRule:
             "layer": self.layer,
             "scope": self.scope,
             "evidence": [e.to_json() for e in self.evidence],
+            "rationale_tier": self.rationale_tier,
         }
 
     @classmethod
@@ -117,6 +123,41 @@ class AnalysisRule:
             layer=data.get("layer", "shared"),
             scope=data.get("scope", "cross_project"),
             evidence=[Evidence.from_json(e) for e in data.get("evidence", [])],
+            rationale_tier=data.get("rationale_tier", "speculative"),
+        )
+
+
+@dataclass
+class ForesightCard:
+    """LLM-inferred design-intent hypothesis for a session (T-030).
+
+    ForesightCards are non-binding — they live in foresight.md only and are
+    never included in CLAUDE.md or system-prompt.md as constraints.
+    """
+
+    hypothesis: str       # "Why it was built this way" — LLM inference
+    signals: list[str]    # Concrete file/pattern refs that back the hypothesis
+    falsification: str    # Condition that would disprove the hypothesis
+    tier: str             # "corroborated" | "speculative"
+    layer: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "hypothesis": self.hypothesis,
+            "signals": self.signals,
+            "falsification": self.falsification,
+            "tier": self.tier,
+            "layer": self.layer,
+        }
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> ForesightCard:
+        return cls(
+            hypothesis=data["hypothesis"],
+            signals=data["signals"],
+            falsification=data["falsification"],
+            tier=data["tier"],
+            layer=data["layer"],
         )
 
 
@@ -205,6 +246,14 @@ class SessionResult:
     # Populated by extract_commit_decisions() in run_full_analysis().
     # CommitDecisions | None — typed as Any to avoid circular import.
     commit_decisions: Any | None = None
+    # Foresight hypothesis cards (T-030). Rendered to foresight.md only — not
+    # included in CLAUDE.md / system-prompt.md as constraints.
+    # Pre-T-030 session.json files omit this key — from_json defaults to [].
+    foresight_cards: list[ForesightCard] = field(default_factory=list)
+    # Deterministic repo nature classification (T-030 / T-032).
+    # Values: "app/cli" | "app" | "library". Default: "library".
+    # Pre-T-030 session.json files omit this key — from_json defaults to "library".
+    repo_nature: str = "library"
 
     def to_json(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -227,6 +276,8 @@ class SessionResult:
             result["pr_decisions"] = self.pr_decisions.to_json()
         if self.commit_decisions is not None:
             result["commit_decisions"] = self.commit_decisions.to_json()
+        result["foresight_cards"] = [c.to_json() for c in self.foresight_cards]
+        result["repo_nature"] = self.repo_nature
         return result
 
     @classmethod
@@ -260,4 +311,6 @@ class SessionResult:
             test_decisions=test_decisions,
             pr_decisions=pr_decisions,
             commit_decisions=commit_decisions,
+            foresight_cards=[ForesightCard.from_json(c) for c in data.get("foresight_cards", [])],
+            repo_nature=data.get("repo_nature", "library"),
         )
