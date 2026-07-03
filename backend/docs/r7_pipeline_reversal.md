@@ -1,6 +1,6 @@
 # R7 — Pipeline Reversal (Evidence-First 도구 정체성)
 
-> Status: **sketch** (2026-05-06). Not yet implemented. Several decisions deferred — see Open Questions.
+> Status: **Phase 1 + PR-decision 프로브 완료, Phase 2 보류** (2026-07-03). commit 축(21%)·PR 축(4%) 모두 multi-item leverage 미확인 → 풀 inversion 데이터 미지지. 상세는 아래 "PR-decision 프로브 결과".
 
 ## Problem (forward pipeline 의 한계)
 
@@ -142,3 +142,23 @@
 - 클러스터 false positive (config.py 같은) 는 LLM 의 의도 검증 단계가 잡음
 
 **Open question 1 (클러스터링 알고리즘) partial answer**: file_path overlap 단독으로는 multi-file commit 의 anchor 노이즈 발생. 향후 개선: commit 의 subject 키워드도 클러스터링에 반영 (e.g. "CORS" subject 가 같은 cluster, "CI" subject 가 별도 cluster).
+
+## PR-decision 프로브 결과 (2026-07-03)
+
+Phase 1 은 commit_decisions(incident 0)만 봤다. 이후 0.3.0 PR 마이닝(pr_archaeology)이 rejection/incident 를 직접 공급하므로, `cluster_pr_decisions`(intent_clusterer.py) 로 "PR 을 먹이면 R7 천장이 깨지나?" 를 실측했다. PRDecision 은 intent_kind 를 직접 보유(classify 불필요), file_paths 없음(diff_excerpt `--- {file}` 헤더에서 앵커, 없으면 ref fallback).
+
+**실측 (starlette 24 decisions, 저장된 session.json):**
+
+| 지표 | 값 |
+|---|---|
+| by intent_kind | rejection 19, **incident 5** |
+| clusters | 23 |
+| **multi-item clusters** | **1 (4%)** |
+| 그 1개 | `[rejection] README.md` ×2 (PR#3275+#3250) — 약한 docs 앵커, #3275 은 minimalism 과 부호 반대라 이미 제외한 PR = 노이즈 |
+| rejection/incident multi-item | 1 (그 노이즈 하나) |
+
+**두 결론이 갈림:**
+1. **intent-diversity 천장은 깨짐** ✅ — PR 마이닝이 incident 5 + rejection 19 를 공급(commit-mining incident-0 대비). 그러나 **이 가치는 forward 파이프라인이 이미 소비** 중 (pr_decisions → rule-matching + 거절 diff verbatim ❌ 렌더, 커밋 969e3d2/72f5dbe). R7 없이도 확보됨.
+2. **R7 특유의 leverage(multi-item 클러스터 역도출)는 데이터 미지지** ❌ — 96% 단일 클러스터(Phase-1 doc 이 "forward 와 동등"이라 규정), 유일한 multi-item 은 노이즈. commit 축 21%보다도 얇다. rejection PR 은 각기 다른 제안을 다른 파일에서 거절 → 같은 (intent, file) 로 안 뭉침.
+
+**Abort 판정 (doc §Open-Q5 기준)**: PR 축에서도 inversion leverage 미확인. **풀 Phase 2(=_INVERSION_PROMPT + derivation + quality eval) 보류를 데이터로 뒷받침.** R7 은 marketing 정체성(evidence-first, 매칭율 100% by construction) 효과만 있고 quality lever 로서의 근거가 commit·PR 두 축 모두에서 약하다. `cluster_pr_decisions` 는 측정 도구로 보존(재측정용). 향후 다른 레포에서 multi-item 비율이 유의미하게 높게 나오면 재검토.
