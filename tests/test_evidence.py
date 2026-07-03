@@ -450,6 +450,36 @@ class TestClassifyViaEvidenceList:
         assert m.overall.fake_citation == 1
 
 
+class TestCitedAnchorDecomposition:
+    """The cited bucket splits into history-anchored (a decision record) and
+    code-anchored (only a valid ref_files path:line)."""
+
+    def test_reason_sha_is_history_anchored(self) -> None:
+        m = compute_evidence_metrics(_session({"architecture": [_rule("commit a1b2c3d: why")]}))
+        assert (m.overall.cited, m.overall.cited_history, m.overall.cited_code) == (1, 1, 0)
+
+    def test_structured_evidence_is_history_anchored(self) -> None:
+        m = compute_evidence_metrics(
+            _session({"architecture": [_rule_with_ev([_ev(kind="commit", ref="a1b2c3d")])]})
+        )
+        assert (m.overall.cited, m.overall.cited_history, m.overall.cited_code) == (1, 1, 0)
+
+    def test_ref_files_only_is_code_anchored(self) -> None:
+        s = _session({"architecture": [_rule_with_refs(["mod.py:10"])]})
+        s.selected_files = ["mod.py"]
+        m = compute_evidence_metrics(s)
+        assert (m.overall.cited, m.overall.cited_history, m.overall.cited_code) == (1, 0, 1)
+
+    def test_json_exposes_split_and_ratios(self) -> None:
+        s = _session(
+            {"architecture": [_rule("commit a1b2c3d: why"), _rule_with_refs(["mod.py:10"])]}
+        )
+        s.selected_files = ["mod.py"]
+        j = compute_evidence_metrics(s).to_json()["overall"]
+        assert (j["cited"], j["cited_history"], j["cited_code"]) == (2, 1, 1)
+        assert (j["cited_history_ratio"], j["cited_code_ratio"]) == (0.5, 0.5)
+
+
 # ---------------------------------------------------------------------------
 # compute_evidence_metrics
 # ---------------------------------------------------------------------------

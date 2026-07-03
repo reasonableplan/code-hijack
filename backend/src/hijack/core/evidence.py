@@ -65,13 +65,24 @@ _GENERIC_PHRASES = (
 
 @dataclass
 class RuleClassification:
-    """Per-rule classification — every rule belongs to exactly one bucket."""
+    """Per-rule classification — every rule belongs to exactly one bucket.
 
-    cited: int = 0           # mentions a real commit SHA / PR / Revert / ADR
+    The `cited` bucket is split by what the citation anchors to:
+      - cited_history: a decision record — commit SHA / PR# / revert / ADR
+      - cited_code: only a valid `ref_files` path:line anchor in current code
+    `cited` is their sum, kept as a property for existing callers.
+    """
+
+    cited_history: int = 0   # cites a real commit SHA / PR / Revert / ADR
+    cited_code: int = 0      # cited only via a valid ref_files path:line anchor
     no_evidence: int = 0     # explicit [no-evidence] marker
     fake_citation: int = 0   # cited a commit SHA that wasn't in the input
     generic: int = 0         # generic-justification phrase, no citation
     other: int = 0           # neither cited nor flagged — silently uncited
+
+    @property
+    def cited(self) -> int:
+        return self.cited_history + self.cited_code
 
     @property
     def total(self) -> int:
@@ -86,6 +97,14 @@ class RuleClassification:
     @property
     def cited_ratio(self) -> float:
         return self.cited / self.total if self.total else 0.0
+
+    @property
+    def cited_history_ratio(self) -> float:
+        return self.cited_history / self.total if self.total else 0.0
+
+    @property
+    def cited_code_ratio(self) -> float:
+        return self.cited_code / self.total if self.total else 0.0
 
 
 @dataclass
@@ -309,10 +328,40 @@ def compute_evidence_metrics(session: SessionResult) -> EvidenceMetrics:
                 valid_file_paths=valid_file_paths,
                 valid_pr_refs=valid_pr_refs,
             )
+            if kind == "cited":
+                kind = _cited_anchor(rule, valid_shas=valid_shas)
             setattr(bucket, kind, getattr(bucket, kind) + 1)
             setattr(metrics.overall, kind, getattr(metrics.overall, kind) + 1)
 
     return metrics
+
+
+def _cited_anchor(rule: AnalysisRule, *, valid_shas: set[str] | None) -> str:
+    """For a rule already classified 'cited', return 'cited_history' or 'cited_code'.
+
+    Mirrors the cited-producing branches of `classify_rule`:
+      - history-anchored: structured commit/PR/revert/doc Evidence (Path A), or
+        a commit-SHA / PR / revert / doc reference in the reason prose (Path B).
+      - code-anchored: the remaining path to 'cited' — a valid `ref_files`
+        path:line anchor grounded in current code, not a decision record.
+    """
+    if rule.evidence:
+        return "cited_history"
+
+    reason = rule.reason or ""
+    if (
+        _PR_PATTERN.search(reason)
+        or _REVERT_PATTERN.search(reason)
+        or _DOC_KEYWORD_PATTERN.search(reason)
+        or _DOC_PATH_PATTERN.search(reason)
+    ):
+        return "cited_history"
+
+    cited_shas = [m.group(1).lower() for m in _COMMIT_PATTERN.finditer(reason)]
+    if cited_shas and (valid_shas is None or _any_sha_valid(cited_shas, valid_shas)):
+        return "cited_history"
+
+    return "cited_code"
 
 
 def _any_sha_valid(cited_shas: list[str], valid_shas: set[str]) -> bool:
@@ -357,12 +406,16 @@ def _has_valid_ref_files(
 def _classification_to_json(c: RuleClassification) -> dict[str, Any]:
     return {
         "cited": c.cited,
+        "cited_history": c.cited_history,
+        "cited_code": c.cited_code,
         "no_evidence": c.no_evidence,
         "fake_citation": c.fake_citation,
         "generic": c.generic,
         "other": c.other,
         "total": c.total,
         "cited_ratio": round(c.cited_ratio, 3),
+        "cited_history_ratio": round(c.cited_history_ratio, 3),
+        "cited_code_ratio": round(c.cited_code_ratio, 3),
     }
 
 
@@ -377,9 +430,13 @@ def render_metrics_md(metrics: EvidenceMetrics) -> str:
         "",
         "How many rules cite real artifacts (commit SHA / PR# / quoted revert / ADR)",
         "versus generic justifications. Higher cited-ratio = less LLM opinion.",
+        "Cited splits into history-anchored (a decision record) and code-anchored",
+        "(only a ref_files path:line) — history is the stronger WHY signal.",
         "Fake citations are commit SHAs the LLM invented — they were not in the input.",
         "",
-        f"- **Cited**: {o.cited} ({_pct(o.cited, o.total)}%)",
+        f"- **Cited**: {o.cited} ({_pct(o.cited, o.total)}%) "
+        f"— history {o.cited_history} ({_pct(o.cited_history, o.total)}%), "
+        f"code {o.cited_code} ({_pct(o.cited_code, o.total)}%)",
         f"- **No-evidence (flagged)**: {o.no_evidence} ({_pct(o.no_evidence, o.total)}%)",
         f"- **Fake citation (hallucinated SHA)**: {o.fake_citation} "
         f"({_pct(o.fake_citation, o.total)}%)",
