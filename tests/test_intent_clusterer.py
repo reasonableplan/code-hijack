@@ -11,9 +11,12 @@ from __future__ import annotations
 from hijack.core.archaeology import CommitDecision
 from hijack.core.intent_clusterer import (
     IntentCluster,
+    PRIntentCluster,
     classify_intent_kind,
     cluster_commits,
+    cluster_pr_decisions,
 )
+from hijack.core.pr_archaeology import PRDecision
 
 
 def _commit(
@@ -174,6 +177,83 @@ class TestClusterCommits:
         assert isinstance(cl, IntentCluster)
         try:
             cl.intent_kind = "rejection"  # type: ignore[misc]
+        except FrozenInstanceError:
+            return
+        raise AssertionError("expected FrozenInstanceError")
+
+
+# ---------------------------------------------------------------------------
+# cluster_pr_decisions — R7 probe (PR mining supplies intent_kind directly)
+# ---------------------------------------------------------------------------
+
+
+def _prd(ref: str, intent_kind: str, diff_excerpt: str = "") -> PRDecision:
+    return PRDecision(
+        ref=ref,
+        title="t",
+        date="2024-01-01 00:00:00 +0000",
+        body_excerpt="b",
+        matched_patterns=[],
+        maintainer_comment="",
+        intent_kind=intent_kind,
+        diff_excerpt=diff_excerpt,
+    )
+
+
+class TestClusterPRDecisions:
+    def test_diff_header_anchors_primary_path(self) -> None:
+        d = _prd("PR#1", "rejection", diff_excerpt="--- src/cors.py\n@@ -1 +1 @@\n-a\n+b")
+        clusters = cluster_pr_decisions([d])
+        assert len(clusters) == 1
+        assert clusters[0].intent_kind == "rejection"
+        assert clusters[0].primary_path == "src/cors.py"
+        assert clusters[0].decisions == (d,)
+
+    def test_same_kind_same_file_merge(self) -> None:
+        # Two rejection PRs touching the same source file — the multi-item
+        # cluster that is R7's leverage case, and the incident/rejection axis
+        # commit mining never populated.
+        a = _prd("PR#1", "rejection", diff_excerpt="--- src/cors.py\n+x")
+        b = _prd("PR#2", "rejection", diff_excerpt="--- src/cors.py\n+y")
+        clusters = cluster_pr_decisions([a, b])
+        assert len(clusters) == 1
+        assert clusters[0].size == 2
+        assert clusters[0].primary_path == "src/cors.py"
+
+    def test_empty_diff_falls_back_to_ref(self) -> None:
+        # preference PRs carry no diff — each anchors on its ref, so they stay
+        # separate rather than collapsing into one intent-only mega-bucket.
+        a = _prd("PR#1", "preference")
+        b = _prd("PR#2", "preference")
+        clusters = cluster_pr_decisions([a, b])
+        assert len(clusters) == 2
+        assert {c.primary_path for c in clusters} == {"PR#1", "PR#2"}
+
+    def test_different_intent_kind_splits(self) -> None:
+        a = _prd("PR#1", "incident", diff_excerpt="--- src/foo.py\n+x")
+        b = _prd("PR#2", "rejection", diff_excerpt="--- src/foo.py\n+y")
+        clusters = cluster_pr_decisions([a, b])
+        assert len(clusters) == 2
+
+    def test_ordering_size_desc_then_intent_priority(self) -> None:
+        big = [
+            _prd(f"PR#{i}", "preference", diff_excerpt="--- src/big.py\n+x")
+            for i in range(2)
+        ]
+        rej = _prd("PR#9", "rejection", diff_excerpt="--- src/a.py\n+x")
+        clusters = cluster_pr_decisions([rej, *big])
+        assert clusters[0].size == 2                    # size wins first
+        assert clusters[1].intent_kind == "rejection"   # then intent priority
+
+    def test_empty_input_returns_empty(self) -> None:
+        assert cluster_pr_decisions([]) == []
+
+    def test_cluster_is_frozen(self) -> None:
+        from dataclasses import FrozenInstanceError
+        cl = cluster_pr_decisions([_prd("PR#1", "rejection", "--- a.py\n+x")])[0]
+        assert isinstance(cl, PRIntentCluster)
+        try:
+            cl.intent_kind = "incident"  # type: ignore[misc]
         except FrozenInstanceError:
             return
         raise AssertionError("expected FrozenInstanceError")
