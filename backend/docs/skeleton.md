@@ -315,6 +315,7 @@ class PRDecision:
     matched_patterns: list[str]  # 매칭된 패턴 display name 목록; sorted asc
     maintainer_comment: str      # 메인테이너 마지막 코멘트 요약 (빈 문자열 허용)
     intent_kind: str      # "rejection" | "incident" | "preference" — 하위 intent 분류
+    diff_excerpt: str = ""       # rejection/incident PR 의 실제 diff 발췌 (≤1500자, 빈 문자열 허용)
 
     def to_json(self) -> dict[str, Any]: ...
     @classmethod

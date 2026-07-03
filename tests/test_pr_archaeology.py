@@ -9,8 +9,14 @@ import json
 from unittest.mock import MagicMock, patch
 
 from hijack.core.pr_archaeology import (
+    _DIFF_EXCERPT_CHARS,
+    _MAX_DIFF_FETCHES,
     PRDecision,
     PRDecisions,
+    _build_decision_from_pr,
+    _get_maintainer_comment,
+    _get_pr_diff_excerpt,
+    _is_bot_pr,
     fetch_pr_decisions,
 )
 
@@ -111,6 +117,35 @@ class TestPRDecisionDataclass:
         d = PRDecision.from_json(data)
         assert d.ref == "PR#9"
         assert d.intent_kind == "preference"
+
+    def test_from_json_missing_diff_excerpt_defaults_empty(self) -> None:
+        # Backward compat: sessions saved before diff_excerpt existed.
+        data = {
+            "ref": "PR#9",
+            "title": "T",
+            "date": "2024-01-01 00:00:00 +0000",
+            "body_excerpt": "",
+            "matched_patterns": [],
+            "maintainer_comment": "",
+            "intent_kind": "preference",
+        }
+        d = PRDecision.from_json(data)
+        assert d.diff_excerpt == ""
+
+    def test_to_json_roundtrip_includes_diff_excerpt(self) -> None:
+        d = PRDecision(
+            ref="PR#1",
+            title="Rejected approach",
+            date="2024-01-01 00:00:00 +0000",
+            body_excerpt="decided not to use this",
+            matched_patterns=["decided not to"],
+            maintainer_comment="rejected",
+            intent_kind="rejection",
+            diff_excerpt="--- src/foo.py\n+bad code",
+        )
+        data = d.to_json()
+        assert data["diff_excerpt"] == "--- src/foo.py\n+bad code"
+        assert PRDecision.from_json(data) == d
 
 
 # ---------------------------------------------------------------------------
@@ -362,3 +397,188 @@ class TestIntentKindMapping:
         )
         assert d is not None
         assert d.intent_kind in ("rejection", "preference")
+
+
+# ---------------------------------------------------------------------------
+# TestIsBotPr
+# ---------------------------------------------------------------------------
+
+class TestIsBotPr:
+    def test_user_type_bot_is_true(self) -> None:
+        assert _is_bot_pr({"user": {"type": "Bot", "login": "some-bot"}}) is True
+
+    def test_login_bot_suffix_is_true(self) -> None:
+        assert _is_bot_pr({"user": {"type": "User", "login": "dependabot[bot]"}}) is True
+
+    def test_regular_user_is_false(self) -> None:
+        assert _is_bot_pr({"user": {"type": "User", "login": "octocat"}}) is False
+
+    def test_missing_user_is_false(self) -> None:
+        assert _is_bot_pr({}) is False
+
+    def test_bot_pr_excluded_from_build_decision(self) -> None:
+        item = _pr_item(number=5, body="decided not to use this approach", merged_at=None)
+        item["user"] = {"type": "Bot", "login": "dependabot[bot]"}
+        result = _build_decision_from_pr(item, "owner", "repo", timeout=30)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# TestGetPrDiffExcerpt
+# ---------------------------------------------------------------------------
+
+class TestGetPrDiffExcerpt:
+    def test_concatenates_patches_across_files(self) -> None:
+        files = [
+            {"filename": "src/foo.py", "patch": "+bad line"},
+            {"filename": "src/bar.py", "patch": "+another change"},
+        ]
+        with patch("subprocess.run", return_value=_make_gh_result(json.dumps(files))):
+            result = _get_pr_diff_excerpt("owner", "repo", 1, timeout=30)
+        assert "--- src/foo.py" in result
+        assert "+bad line" in result
+        assert "--- src/bar.py" in result
+        assert "+another change" in result
+
+    def test_skips_test_files(self) -> None:
+        files = [
+            {"filename": "tests/test_foo.py", "patch": "+test change"},
+            {"filename": "src/foo.py", "patch": "+real change"},
+        ]
+        with patch("subprocess.run", return_value=_make_gh_result(json.dumps(files))):
+            result = _get_pr_diff_excerpt("owner", "repo", 1, timeout=30)
+        assert "test_foo" not in result
+        assert "+real change" in result
+
+    def test_missing_patch_key_defended(self) -> None:
+        # Binary/large files have no "patch" key
+        files = [{"filename": "image.png"}]
+        with patch("subprocess.run", return_value=_make_gh_result(json.dumps(files))):
+            result = _get_pr_diff_excerpt("owner", "repo", 1, timeout=30)
+        assert result == ""
+
+    def test_gh_api_failure_returns_empty(self) -> None:
+        with patch("subprocess.run", return_value=_make_gh_result("", returncode=1)):
+            result = _get_pr_diff_excerpt("owner", "repo", 1, timeout=30)
+        assert result == ""
+
+    def test_truncated_to_diff_excerpt_chars_cap(self) -> None:
+        big_patch = "+" + ("x" * 3000)
+        files = [{"filename": "src/foo.py", "patch": big_patch}]
+        with patch("subprocess.run", return_value=_make_gh_result(json.dumps(files))):
+            result = _get_pr_diff_excerpt("owner", "repo", 1, timeout=30)
+        assert len(result) <= _DIFF_EXCERPT_CHARS
+
+
+# ---------------------------------------------------------------------------
+# TestGetMaintainerCommentRejectionPreference
+# ---------------------------------------------------------------------------
+
+class TestGetMaintainerCommentRejectionPreference:
+    def test_prefers_rejection_matching_comment_over_later_non_match(self) -> None:
+        comments = [
+            {"body": "Closing this — out of scope for this project"},
+            {"body": "thanks for contributing anyway"},
+        ]
+        with patch("subprocess.run", return_value=_make_gh_result(json.dumps(comments))):
+            result = _get_maintainer_comment("owner", "repo", 1, timeout=30)
+        assert result == "Closing this — out of scope for this project"
+
+    def test_falls_back_to_last_comment_when_no_rejection_match(self) -> None:
+        comments = [
+            {"body": "looks good"},
+            {"body": "thanks!"},
+        ]
+        with patch("subprocess.run", return_value=_make_gh_result(json.dumps(comments))):
+            result = _get_maintainer_comment("owner", "repo", 1, timeout=30)
+        assert result == "thanks!"
+
+    def test_prefers_last_matching_comment_when_multiple_match(self) -> None:
+        comments = [
+            {"body": "rejected initially"},
+            {"body": "actually not a good fit after all"},
+        ]
+        with patch("subprocess.run", return_value=_make_gh_result(json.dumps(comments))):
+            result = _get_maintainer_comment("owner", "repo", 1, timeout=30)
+        assert result == "actually not a good fit after all"
+
+
+# ---------------------------------------------------------------------------
+# TestFetchPrDecisionsDiffSecondPass
+# ---------------------------------------------------------------------------
+
+class TestFetchPrDecisionsDiffSecondPass:
+    def test_diff_attached_only_to_rejection_not_preference(self) -> None:
+        prs = [_pr_item(
+            number=1,
+            title="Rejected",
+            body="decided not to use this approach",
+            merged_at=None,
+        )]
+        issues = [_issue_item(
+            number=10,
+            title="Pref",
+            body="decided to use a naming convention",
+        )]
+        files_calls: list[str] = []
+
+        def fake_run(args, **kwargs):
+            cmd = " ".join(str(a) for a in args)
+            if "/files" in cmd:
+                files_calls.append(cmd)
+                if "/pulls/1/files" in cmd:
+                    return _make_gh_result(
+                        json.dumps([{"filename": "src/foo.py", "patch": "+bad"}])
+                    )
+                return _make_gh_result("[]")
+            if "/comments" in cmd:
+                return _make_gh_result("[]")
+            if "pulls" in cmd and "issues" not in cmd:
+                return _make_gh_result(json.dumps(prs))
+            if "issues" in cmd:
+                return _make_gh_result(json.dumps(issues))
+            return _make_gh_result("[]")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = fetch_pr_decisions("https://github.com/owner/repo")
+
+        by_ref = {d.ref: d for d in result.decisions}
+        assert by_ref["PR#1"].intent_kind == "rejection"
+        assert "bad" in by_ref["PR#1"].diff_excerpt
+        assert by_ref["issue#10"].intent_kind == "preference"
+        assert by_ref["issue#10"].diff_excerpt == ""
+        # Only the rejection PR triggers a diff fetch — issues have no diff.
+        assert len(files_calls) == 1
+
+    def test_max_diff_fetches_cap(self) -> None:
+        n = _MAX_DIFF_FETCHES + 5
+        prs = [
+            _pr_item(
+                number=i,
+                body="decided not to use this approach",
+                merged_at=None,
+                created_at=f"2024-01-{i + 1:02d}T00:00:00Z",
+            )
+            for i in range(n)
+        ]
+        files_calls: list[str] = []
+
+        def fake_run(args, **kwargs):
+            cmd = " ".join(str(a) for a in args)
+            if "/files" in cmd:
+                files_calls.append(cmd)
+                return _make_gh_result(
+                    json.dumps([{"filename": "src/foo.py", "patch": "+x"}])
+                )
+            if "/comments" in cmd:
+                return _make_gh_result("[]")
+            if "pulls" in cmd and "issues" not in cmd:
+                return _make_gh_result(json.dumps(prs))
+            if "issues" in cmd:
+                return _make_gh_result("[]")
+            return _make_gh_result("[]")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            fetch_pr_decisions("https://github.com/owner/repo")
+
+        assert len(files_calls) == _MAX_DIFF_FETCHES

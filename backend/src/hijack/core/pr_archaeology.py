@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 # Cap on decisions output list.
 _DECISIONS_TOP_N = 50
 
+# Cap on diff excerpt length (chars) per decision.
+_DIFF_EXCERPT_CHARS = 1500
+
+# Cap on number of diff-fetch API calls per fetch_pr_decisions run (network budget).
+_MAX_DIFF_FETCHES = 15
+
 # Patterns that indicate an incident (revert/rollback in the body).
 _INCIDENT_RE = re.compile(r"\b(revert|rollback|roll[-\s]back|regression)\b", re.IGNORECASE)
 
@@ -64,6 +70,7 @@ class PRDecision:
     matched_patterns: list[str]  # matched pattern display names; sorted asc
     maintainer_comment: str      # last maintainer comment (empty string if none)
     intent_kind: str      # "rejection" | "incident" | "preference"
+    diff_excerpt: str = ""       # rejection/incident PR diff excerpt (empty if unavailable)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -74,6 +81,7 @@ class PRDecision:
             "matched_patterns": self.matched_patterns,
             "maintainer_comment": self.maintainer_comment,
             "intent_kind": self.intent_kind,
+            "diff_excerpt": self.diff_excerpt,
         }
 
     @classmethod
@@ -86,6 +94,7 @@ class PRDecision:
             matched_patterns=data.get("matched_patterns", []),
             maintainer_comment=data.get("maintainer_comment", ""),
             intent_kind=data.get("intent_kind", "preference"),
+            diff_excerpt=data.get("diff_excerpt", ""),
         )
 
 
@@ -212,14 +221,21 @@ def _gh_api(
 def _get_maintainer_comment(
     owner: str, repo: str, pr_number: int, *, timeout: int
 ) -> str:
-    """Fetch the last comment on a PR. Returns empty string on failure."""
+    """Fetch the maintainer comment on a PR. Returns empty string on failure.
+
+    Prefers the last comment matching _REJECTION_COMMENT_RE (explicit rejection
+    language); falls back to the last comment overall if none match.
+    """
     path = f"repos/{owner}/{repo}/issues/{pr_number}/comments"
     comments = _gh_api(path, timeout=timeout)
     if not comments:
         return ""
-    # Return the last comment body (most recent maintainer signal)
-    last = comments[-1]
-    return last.get("body", "")
+    for comment in reversed(comments):
+        body = comment.get("body", "")
+        if _REJECTION_COMMENT_RE.search(body):
+            return body
+    # No rejection-language comment — fall back to the last comment overall
+    return comments[-1].get("body", "")
 
 
 def _determine_intent_kind(
@@ -258,6 +274,47 @@ def _match_patterns(text: str) -> list[str]:
     return matched
 
 
+def _is_bot_pr(item: dict) -> bool:
+    """True if the PR author is a bot (e.g. dependabot).
+
+    Bot bump PRs pollute intent_kind classification — "regression" in a
+    dependency-bump body reads as "incident" even though nothing failed
+    (~4-5/10 measured noise). Filtering here also saves a diff-fetch API call.
+    """
+    user = item.get("user") or {}
+    return user.get("type") == "Bot" or str(user.get("login", "")).endswith("[bot]")
+
+
+def _get_pr_diff_excerpt(
+    owner: str, repo: str, pr_number: int, *, timeout: int
+) -> str:
+    """Fetch a diff excerpt for a PR's changed files. Returns "" on failure.
+
+    Skips test files (path segment/filename containing "test"). Concatenates
+    each file's patch as "--- {filename}\\n{patch}" and truncates to
+    _DIFF_EXCERPT_CHARS.
+    """
+    path = f"repos/{owner}/{repo}/pulls/{pr_number}/files"
+    files = _gh_api(path, timeout=timeout)
+    if not files:
+        return ""
+
+    chunks: list[str] = []
+    for f in files:
+        filename = f.get("filename", "")
+        if "test" in filename.lower():
+            continue
+        patch = f.get("patch")
+        if not patch:
+            continue
+        chunks.append(f"--- {filename}\n{patch}")
+
+    if not chunks:
+        return ""
+
+    return "\n".join(chunks)[:_DIFF_EXCERPT_CHARS]
+
+
 def _build_decision_from_pr(
     item: dict,
     owner: str,
@@ -266,6 +323,9 @@ def _build_decision_from_pr(
     timeout: int,
 ) -> PRDecision | None:
     """Build a PRDecision from a closed-unmerged PR item. Returns None if no pattern match."""
+    if _is_bot_pr(item):
+        return None
+
     merged_at = item.get("merged_at")
     # Only process closed-unmerged PRs
     if merged_at is not None:
@@ -389,6 +449,22 @@ def fetch_pr_decisions(repo_url: str, *, timeout: int = 30) -> PRDecisions:
     # Sort by date desc (ISO lexicographic is fine for same-format strings)
     all_decisions.sort(key=lambda d: d.date, reverse=True)
     all_decisions = all_decisions[:_DECISIONS_TOP_N]
+
+    # Second pass: fetch diff excerpts for rejection/incident PRs only (issues
+    # have no diff). Capped at _MAX_DIFF_FETCHES — network budget.
+    diff_fetches = 0
+    for decision in all_decisions:
+        if diff_fetches >= _MAX_DIFF_FETCHES:
+            break
+        if not decision.ref.startswith("PR#"):
+            continue
+        if decision.intent_kind not in ("rejection", "incident"):
+            continue
+        pr_number = int(decision.ref[len("PR#"):])
+        decision.diff_excerpt = _get_pr_diff_excerpt(
+            owner, repo, pr_number, timeout=timeout
+        )
+        diff_fetches += 1
 
     patterns = _aggregate_patterns(all_decisions)
 
