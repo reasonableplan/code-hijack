@@ -6,6 +6,7 @@ All subprocess.run calls are mocked — no real gh/network calls.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from hijack.core.pr_archaeology import (
@@ -18,6 +19,7 @@ from hijack.core.pr_archaeology import (
     _get_pr_diff_excerpt,
     _is_bot_pr,
     fetch_pr_decisions,
+    resolve_github_target,
 )
 
 # ---------------------------------------------------------------------------
@@ -582,3 +584,55 @@ class TestFetchPrDecisionsDiffSecondPass:
             fetch_pr_decisions("https://github.com/owner/repo")
 
         assert len(files_calls) == _MAX_DIFF_FETCHES
+
+
+class TestResolveGithubTarget:
+    # Parsing must be purely syntactic for direct URL inputs. Local-path
+    # resolution goes through subprocess and is tested separately via mocking.
+
+    def test_https_url(self) -> None:
+        assert resolve_github_target("https://github.com/foo/bar", None) == ("foo", "bar")
+
+    def test_https_url_with_git_suffix(self) -> None:
+        assert resolve_github_target("https://github.com/foo/bar.git", None) == ("foo", "bar")
+
+    def test_ssh_url(self) -> None:
+        assert resolve_github_target("git@github.com:foo/bar.git", None) == ("foo", "bar")
+
+    def test_gitlab_url_returns_none(self) -> None:
+        assert resolve_github_target("https://gitlab.com/foo/bar", None) is None
+
+    def test_https_url_trailing_slash(self) -> None:
+        assert resolve_github_target("https://github.com/foo/bar/", None) == ("foo", "bar")
+
+    def test_local_path_no_remote_returns_none(self, tmp_path: Path) -> None:
+        # Directory exists, has its own .git, but `git remote get-url` fails
+        # (no origin configured) — subprocess returns non-zero, expect None.
+        (tmp_path / ".git").mkdir()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="")
+            result = resolve_github_target(str(tmp_path), tmp_path)
+        assert result is None
+
+    def test_local_path_with_github_remote(self, tmp_path: Path) -> None:
+        # Directory must own its .git for git-remote resolution to be
+        # attempted — otherwise the guard against ancestor-inheritance kicks in.
+        (tmp_path / ".git").mkdir()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="https://github.com/myorg/myrepo\n",
+            )
+            result = resolve_github_target(str(tmp_path), tmp_path)
+        assert result == ("myorg", "myrepo")
+
+    def test_local_path_without_own_git_dir_returns_none(self, tmp_path: Path) -> None:
+        # Critical guard: a path nested inside another git repo (test fixtures,
+        # vendored sources, monorepo subprojects) must NOT inherit the parent
+        # repo's origin. Without this guard, fixture tests would silently mine
+        # the host project's PRs and create side-effect cache directories.
+        # No .git is created here — subprocess.run must NOT be called at all.
+        with patch("subprocess.run") as mock_run:
+            result = resolve_github_target(str(tmp_path), tmp_path)
+        assert result is None
+        mock_run.assert_not_called()

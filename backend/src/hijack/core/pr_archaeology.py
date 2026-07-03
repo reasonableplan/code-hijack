@@ -20,6 +20,7 @@ import logging
 import re
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from hijack.core.archaeology import (
@@ -138,6 +139,53 @@ def _parse_github_url(repo_url: str) -> tuple[str, str] | None:
     if m is None:
         return None
     return m.group(1), m.group(2)
+
+
+def resolve_github_target(
+    target: str,
+    repo_root: Path | None,
+) -> tuple[str, str] | None:
+    """Resolve a target to (owner, repo), or None if it is not a GitHub repo.
+
+    Accepts a direct GitHub URL (https or git@ SSH form) or a local path whose
+    `origin` remote points at github.com. Reuses `_parse_github_url` so there is
+    a single GitHub-URL grammar in this module.
+
+    Guards against ancestor-`.git` inheritance: a path inside another git repo
+    (test fixtures, monorepo subprojects, vendored sources) must NOT be treated
+    as that parent repo. git is only consulted when the path owns its own
+    `.git` directory.
+    """
+    direct = _parse_github_url(target)
+    if direct is not None:
+        return direct
+
+    search_root: Path | None = None
+    if repo_root is not None and repo_root.exists():
+        search_root = repo_root
+    else:
+        p = Path(target)
+        if p.exists() and p.is_dir():
+            search_root = p
+
+    if search_root is None or not (search_root / ".git").exists():
+        return None
+
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(search_root),
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return _parse_github_url(result.stdout.strip())
 
 
 def _iso_to_date_str(iso: str) -> str:

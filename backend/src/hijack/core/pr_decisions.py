@@ -85,13 +85,6 @@ _NOTABLE_CANDIDATES_POOL = 50  # how many diff-filtered PRs get comment fetches
 # Bot label patterns — these are auto-applied and carry no human taxonomy signal
 _BOT_LABEL_RE = re.compile(r"^(bot:|auto:)", re.IGNORECASE)
 
-# GitHub URL patterns for parsing
-_GH_HTTPS_RE = re.compile(
-    r"https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/\.\s]+?)(?:\.git)?/?$"
-)
-_GH_SSH_RE = re.compile(
-    r"git@github\.com:(?P<owner>[^/]+)/(?P<repo>[^/\.\s]+?)(?:\.git)?$"
-)
 
 # Anonymization: strip @username mentions
 _AT_MENTION_RE = re.compile(r"@[A-Za-z0-9_-]+")
@@ -305,64 +298,6 @@ class PRDecisions:
             self.vocabulary_clusters or self.notable_prs
             or self.rejected_prs or self.label_counts
         )
-
-
-# ---------------------------------------------------------------------------
-# GitHub target parsing
-# ---------------------------------------------------------------------------
-
-def _parse_github_target(
-    target: str,
-    repo_root: Path | None,
-) -> tuple[str, str] | None:
-    """Return (owner, repo) if target resolves to a GitHub URL, else None.
-
-    Guards against ancestor-`.git` inheritance: a path inside another git
-    repo (test fixtures, monorepo subprojects, vendored sources) must NOT
-    be treated as that parent repo. Only consults git when the path itself
-    owns a `.git` directory.
-
-    Accepts:
-      - https://github.com/owner/repo
-      - https://github.com/owner/repo.git
-      - git@github.com:owner/repo.git
-      - Local path where git remote get-url origin returns one of the above
-    """
-    # Direct URL match
-    for pattern in (_GH_HTTPS_RE, _GH_SSH_RE):
-        m = pattern.match(target.strip())
-        if m:
-            return m.group("owner"), m.group("repo")
-
-    # Local path — try git remote
-    search_root: Path | None = None
-    if repo_root is not None and repo_root.exists():
-        search_root = repo_root
-    else:
-        p = Path(target)
-        if p.exists() and p.is_dir():
-            search_root = p
-
-    if search_root is not None:
-        # Only consult git when search_root is itself a git repo (has its own
-        # .git). Without this guard, git walks up the directory tree and any
-        # subdirectory inside another repo (test fixtures, vendored sources,
-        # nested workspaces) would inherit the parent's origin — silently
-        # mining the wrong project's PRs and creating side-effect cache dirs.
-        if not (search_root / ".git").exists():
-            return None
-        try:
-            result = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
-                capture_output=True, text=True, cwd=str(search_root), timeout=10,
-            )
-            if result.returncode == 0:
-                remote_url = result.stdout.strip()
-                return _parse_github_target(remote_url, None)
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            pass
-
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -853,7 +788,9 @@ def extract_pr_decisions(
       refresh    — when True, blow away existing cache for this repo first
       gh_runner  — injectable for testing; defaults to _default_gh_runner (real gh CLI)
     """
-    parsed = _parse_github_target(target, repo_root)
+    from hijack.core.pr_archaeology import resolve_github_target
+
+    parsed = resolve_github_target(target, repo_root)
     if parsed is None:
         logger.debug("pr_decisions: target %r is not a GitHub URL — skipping", target)
         return None

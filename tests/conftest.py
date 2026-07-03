@@ -115,7 +115,7 @@ def _block_pr_mining(monkeypatch: pytest.MonkeyPatch) -> None:
 
     Two entry points are patched because analyzer.py's `run_full_analysis`
     resolves a local clone target to its GitHub remote (via
-    `pr_decisions._parse_github_target` — harmless local `git remote` call,
+    `pr_archaeology.resolve_github_target` — harmless local `git remote` call,
     left unmocked) and then calls `pr_archaeology.fetch_pr_decisions` (0.3.0,
     the live pipeline's PR source) with the resolved URL; `pr_decisions.
     extract_pr_decisions` (Phase A1) is retained standalone and unused by the

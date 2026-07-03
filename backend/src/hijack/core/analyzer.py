@@ -414,13 +414,11 @@ async def run_full_analysis(
 
     # 0.3.0 — PR decision-trail: rejection/incident PR + wontfix-issue mining
     # via gh CLI. fetch_pr_decisions only accepts a GitHub URL directly, so a
-    # local clone target is resolved to its GitHub remote first — reusing
-    # pr_decisions._parse_github_target (git remote get-url origin under the
-    # hood) rather than re-implementing that resolution here.
-    from hijack.core.pr_archaeology import fetch_pr_decisions
-    from hijack.core.pr_decisions import _parse_github_target
+    # local clone target is resolved to its GitHub remote first via
+    # resolve_github_target (git remote get-url origin under the hood).
+    from hijack.core.pr_archaeology import fetch_pr_decisions, resolve_github_target
     try:
-        parsed_gh = _parse_github_target(target or repo_root.as_posix(), repo_root)
+        parsed_gh = resolve_github_target(target or repo_root.as_posix(), repo_root)
         if parsed_gh is not None:
             owner, gh_repo = parsed_gh
             pr_decisions = fetch_pr_decisions(f"https://github.com/{owner}/{gh_repo}")
