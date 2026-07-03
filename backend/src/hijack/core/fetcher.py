@@ -416,12 +416,16 @@ def _git_clone(target: str, dest: str) -> None:
         ["git", "clone", "--filter=blob:none", target, dest],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if result.returncode != 0:
         result = subprocess.run(
             ["git", "clone", "--depth=1", target, dest],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     if result.returncode != 0:
         raise FetchError(FETCH_001, f"git clone 실패: {result.stderr.strip()}")

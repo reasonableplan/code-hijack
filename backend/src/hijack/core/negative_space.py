@@ -310,6 +310,8 @@ def read_deprecation_history(repo_root: Path) -> list[str]:
             cwd=repo_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
         )
     except FileNotFoundError:
