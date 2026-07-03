@@ -12,9 +12,11 @@ from typing import Any
 SCOPE_VALUES = ("cross_project", "framework_internal", "domain_specific")
 
 # Source kind for an Evidence entry. Kept narrow on purpose — these are the
-# three artefact types we currently surface to the LLM (git history + docs).
-# Future kinds (in-code comments, external refs) are additive in D2+.
-EVIDENCE_KIND_VALUES = ("commit", "revert", "doc")
+# four artefact types we currently surface to the LLM (git history + docs +
+# PR/issue archaeology). "pr" covers PR/issue refs mined by pr_archaeology.py
+# (rejection/incident decision trails from closed-unmerged PRs and wontfix
+# issues). Future kinds (in-code comments, external refs) are additive in D2+.
+EVIDENCE_KIND_VALUES = ("commit", "revert", "doc", "pr")
 
 # What KIND of why does this evidence support?
 # - rejection : tried a pattern, rolled it back (strongest negative signal)
@@ -46,7 +48,8 @@ class Evidence:
     """
 
     kind: str                # one of EVIDENCE_KIND_VALUES
-    ref: str                 # SHA (commit/revert) or repo-rel path (doc)
+    ref: str                 # SHA (commit/revert), repo-rel path (doc),
+                              # or "PR#123"/"issue#456" (pr)
     headline: str            # ≤120 chars, verbatim subject/heading
     quote: str               # ≤500 chars, verbatim body/paragraph
     intent_kind: str | None = None  # one of INTENT_KIND_VALUES, or None

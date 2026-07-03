@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from hijack.core.evidence import (
     classify_rule,
     compute_evidence_metrics,
@@ -413,6 +415,28 @@ class TestClassifyViaEvidenceList:
         rule = _rule_with_ev([], reason="commit a1b2c3d shows it")
         assert classify_rule(rule, valid_shas=self._VALID_SHAS) == "cited"
 
+    def test_valid_pr_evidence_is_cited(self) -> None:
+        rule = _rule_with_ev([_ev(kind="pr", ref="PR#3346")])
+        assert classify_rule(rule, valid_pr_refs={"pr#3346"}) == "cited"
+
+    def test_unknown_pr_ref_is_fake_citation(self) -> None:
+        rule = _rule_with_ev([_ev(kind="pr", ref="PR#9999")])
+        assert classify_rule(rule, valid_pr_refs={"pr#3346"}) == "fake_citation"
+
+    def test_pr_evidence_with_no_pool_is_best_effort_cited(self) -> None:
+        rule = _rule_with_ev([_ev(kind="pr", ref="PR#3346")])
+        assert classify_rule(rule, valid_pr_refs=None) == "cited"
+        assert classify_rule(rule, valid_pr_refs=set()) == "cited"
+
+    def test_pr_evidence_empty_ref_is_fake_citation(self) -> None:
+        rule = _rule_with_ev([_ev(kind="pr", ref="")])
+        assert classify_rule(rule, valid_pr_refs={"pr#3346"}) == "fake_citation"
+
+    def test_pr_ref_pool_matches_case_insensitively(self) -> None:
+        # Pool holds lowercase "pr#3346"; the LLM's ref is "PR#3346".
+        rule = _rule_with_ev([_ev(kind="pr", ref="PR#3346")])
+        assert classify_rule(rule, valid_pr_refs={"pr#3346"}) == "cited"
+
     def test_compute_metrics_uses_session_repo_doc_paths(self) -> None:
         s = _session({"architecture": [_rule_with_ev([_ev(kind="doc", ref="docs/adr/0001.md")])]})
         s.repo_doc_paths = ["docs/adr/0001.md"]
@@ -599,3 +623,34 @@ class TestDowngradeSpeculativeRules:
         downgraded = downgrade_speculative_rules(sess)
         assert downgraded == 1
         assert sess.categories[0].rules[0].priority == "SHOULD"
+
+    def test_pr_cited_must_kept_when_ref_in_pr_decisions_dict(self) -> None:
+        # session.pr_decisions as a raw dict (session.json round-trip shape) —
+        # a MUST citing a rejected PR that's actually in the pool survives.
+        ev = [Evidence(kind="pr", ref="PR#3346", headline="h", quote="q")]
+        sess = _session({"arch": [self._must_rule(evidence=ev)]})
+        sess.pr_decisions = {"decisions": [{"ref": "PR#3346", "intent_kind": "rejection"}]}
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 0
+        assert sess.categories[0].rules[0].priority == "MUST"
+
+    def test_pr_must_downgraded_when_ref_not_in_pr_decisions(self) -> None:
+        # Same pool, but the rule cites a PR number that was never mined.
+        ev = [Evidence(kind="pr", ref="PR#9999", headline="h", quote="q")]
+        sess = _session({"arch": [self._must_rule(evidence=ev)]})
+        sess.pr_decisions = {"decisions": [{"ref": "PR#3346", "intent_kind": "rejection"}]}
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 1
+        assert sess.categories[0].rules[0].priority == "SHOULD"
+
+    def test_pr_cited_must_kept_when_pr_decisions_is_dataclass_like(self) -> None:
+        # session.pr_decisions as a duck-typed object (pr_archaeology.PRDecisions
+        # shape: `.decisions[*].ref`) instead of a raw dict.
+        ev = [Evidence(kind="pr", ref="PR#3346", headline="h", quote="q")]
+        sess = _session({"arch": [self._must_rule(evidence=ev)]})
+        sess.pr_decisions = SimpleNamespace(
+            decisions=[SimpleNamespace(ref="PR#3346", intent_kind="rejection")]
+        )
+        downgraded = downgrade_speculative_rules(sess)
+        assert downgraded == 0
+        assert sess.categories[0].rules[0].priority == "MUST"

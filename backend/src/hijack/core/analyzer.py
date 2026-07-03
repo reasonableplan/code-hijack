@@ -140,6 +140,7 @@ def assign_rationale_tier(
     valid_shas: set[str] | None = None,
     valid_doc_paths: set[str] | None = None,
     valid_file_paths: set[str] | None = None,
+    valid_pr_refs: set[str] | None = None,
 ) -> list[AnalysisRule]:
     """classify_rule 결과로 rationale_tier 를 채운다.
 
@@ -157,6 +158,7 @@ def assign_rationale_tier(
             valid_shas=valid_shas,
             valid_doc_paths=valid_doc_paths,
             valid_file_paths=valid_file_paths,
+            valid_pr_refs=valid_pr_refs,
         )
         tier = "cited" if kind == "cited" else "speculative"
         result.append(dataclasses.replace(rule, rationale_tier=tier))

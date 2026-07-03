@@ -110,6 +110,7 @@ def classify_rule(
     valid_shas: set[str] | None = None,
     valid_doc_paths: set[str] | None = None,
     valid_file_paths: set[str] | None = None,
+    valid_pr_refs: set[str] | None = None,
 ) -> str:
     """Return one of: 'cited' | 'no_evidence' | 'fake_citation' | 'generic' | 'other'.
 
@@ -120,7 +121,10 @@ def classify_rule(
       entry has a valid ref (or pool is None/empty, which disables the check),
       the rule is `cited`. If every entry's ref is invalid (and we have pools
       to check against), classify as `fake_citation` — the LLM populated the
-      structured field but every citation was hallucinated.
+      structured field but every citation was hallucinated. `valid_pr_refs`
+      is the truth pool for `kind="pr"` entries (PR#123 / issue#456 refs
+      mined by pr_archaeology.py) — same accept-if-no-pool best-effort rule
+      as `valid_shas`/`valid_doc_paths`.
 
     Path B — `rule.evidence` is empty (Phase A/B / pre-D1 sessions):
       Fall back to scanning `rule.reason` for citation patterns. Priority:
@@ -136,6 +140,7 @@ def classify_rule(
             rule.evidence,
             valid_shas=valid_shas,
             valid_doc_paths=valid_doc_paths,
+            valid_pr_refs=valid_pr_refs,
         )
 
     reason = rule.reason or ""
@@ -173,6 +178,7 @@ def _classify_via_evidence(
     *,
     valid_shas: set[str] | None,
     valid_doc_paths: set[str] | None,
+    valid_pr_refs: set[str] | None = None,
 ) -> str:
     """Score a non-empty Evidence list as 'cited' or 'fake_citation'."""
     saw_real = False
@@ -192,6 +198,17 @@ def _classify_via_evidence(
                 saw_fake = True
         elif e.kind == "doc":
             if valid_doc_paths is None or not valid_doc_paths or e.ref in valid_doc_paths:
+                saw_real = True
+            else:
+                saw_fake = True
+        elif e.kind == "pr":
+            ref = (e.ref or "").strip()
+            if not ref:
+                saw_fake = True
+            elif valid_pr_refs is None or not valid_pr_refs:
+                # No truth pool → can't verify; accept as real (best-effort).
+                saw_real = True
+            elif ref.casefold() in valid_pr_refs:
                 saw_real = True
             else:
                 saw_fake = True
@@ -227,6 +244,7 @@ def downgrade_speculative_rules(session: SessionResult) -> int:
     valid_shas = {sha.lower() for sha in session.historic_shas} or None
     valid_doc_paths = set(session.repo_doc_paths) or None
     valid_file_paths = set(session.selected_files) or None
+    valid_pr_refs = _valid_pr_refs_from_session(session)
 
     count = 0
     for cat in session.categories:
@@ -238,6 +256,7 @@ def downgrade_speculative_rules(session: SessionResult) -> int:
                 valid_shas=valid_shas,
                 valid_doc_paths=valid_doc_paths,
                 valid_file_paths=valid_file_paths,
+                valid_pr_refs=valid_pr_refs,
             )
             if kind != "cited":
                 rule.priority = "SHOULD"
@@ -245,17 +264,40 @@ def downgrade_speculative_rules(session: SessionResult) -> int:
     return count
 
 
+def _valid_pr_refs_from_session(session: SessionResult) -> set[str] | None:
+    """Build the truth pool of PR/issue refs surfaced to the LLM.
+
+    `session.pr_decisions` is duck-typed (Any) — it may be a pr_archaeology
+    PRDecisions dataclass (`.decisions[*].ref`) or a raw dict deserialized
+    from session.json (`["decisions"][*]["ref"]`). Refs are casefolded so
+    "PR#123" from the LLM matches "pr#123" in the pool. Returns None when
+    pr_decisions is falsy or yields no refs — best-effort accept, same
+    principle as the commit/doc truth pools above.
+    """
+    pr_decisions = session.pr_decisions
+    if not pr_decisions:
+        return None
+    if isinstance(pr_decisions, dict):
+        raw_decisions = pr_decisions.get("decisions", [])
+        refs = [d.get("ref", "") for d in raw_decisions if isinstance(d, dict)]
+    else:
+        refs = [getattr(d, "ref", "") for d in getattr(pr_decisions, "decisions", [])]
+    return {ref.casefold() for ref in refs if ref} or None
+
+
 def compute_evidence_metrics(session: SessionResult) -> EvidenceMetrics:
     """Walk all rules in `session` and tally citation classifications.
 
-    Uses `session.historic_shas` and `session.repo_doc_paths` as truth pools
-    for ref verification. Sessions analysed without git history / docs (or
-    pre-Phase-A/B) carry empty lists, which disable the corresponding check.
+    Uses `session.historic_shas`, `session.repo_doc_paths`, and the PR/issue
+    refs in `session.pr_decisions` as truth pools for ref verification.
+    Sessions analysed without git history / docs / PR mining (or pre-Phase-A/B)
+    carry empty pools, which disable the corresponding check.
     """
     metrics = EvidenceMetrics()
     valid_shas = {sha.lower() for sha in session.historic_shas} or None
     valid_doc_paths = set(session.repo_doc_paths) or None
     valid_file_paths = set(session.selected_files) or None
+    valid_pr_refs = _valid_pr_refs_from_session(session)
 
     for cat in session.categories:
         bucket = metrics.by_category.setdefault(cat.category, RuleClassification())
@@ -265,6 +307,7 @@ def compute_evidence_metrics(session: SessionResult) -> EvidenceMetrics:
                 valid_shas=valid_shas,
                 valid_doc_paths=valid_doc_paths,
                 valid_file_paths=valid_file_paths,
+                valid_pr_refs=valid_pr_refs,
             )
             setattr(bucket, kind, getattr(bucket, kind) + 1)
             setattr(metrics.overall, kind, getattr(metrics.overall, kind) + 1)

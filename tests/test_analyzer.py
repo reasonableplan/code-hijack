@@ -645,6 +645,27 @@ class TestAssignRationaleTier:
         assign_rationale_tier([rule], valid_shas={"abc1234def5678"})
         assert rule.rationale_tier == "speculative"
 
+    def test_valid_pr_ref_becomes_cited_via_passthrough(self) -> None:
+        from hijack.core.analyzer import assign_rationale_tier
+
+        rule = AnalysisRule(
+            rule="rejected-pattern rule",
+            priority="MUST",
+            confidence="high",
+            ref_files=["src/a.py:10"],
+            good_example="x = 1",
+            bad_example="x = 2",
+            reason="Rejected in PR#3346.",
+            layer="backend",
+            evidence=[
+                Evidence(kind="pr", ref="PR#3346", headline="h", quote="q"),
+            ],
+        )
+        tiered = assign_rationale_tier([rule], valid_pr_refs={"pr#3346"})
+        assert tiered[0].rationale_tier == "cited"
+        result = normalize_rationale_tier(tiered)
+        assert result[0].priority == "MUST"
+
 
 class TestNormalizeRationaleTier:
     def test_cited_must_stays_must(self) -> None:
