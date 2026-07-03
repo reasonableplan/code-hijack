@@ -417,6 +417,7 @@ async def run_full_analysis(
     # local clone target is resolved to its GitHub remote first via
     # resolve_github_target (git remote get-url origin under the hood).
     from hijack.core.pr_archaeology import fetch_pr_decisions, resolve_github_target
+    parsed_gh = None
     try:
         parsed_gh = resolve_github_target(target or repo_root.as_posix(), repo_root)
         if parsed_gh is not None:
@@ -432,6 +433,26 @@ async def run_full_analysis(
     # already loaded by Phase 0's archaeology fetch. No new I/O.
     from hijack.core.archaeology import extract_commit_decisions
     commit_decisions = extract_commit_decisions(files)
+
+    # W1 — enrich pr_decisions with merged PRs that decision-signal commits
+    # point to (squash "(#NNNN)" links). The commit already passed the decision
+    # filter, so its merged PR body is high-signal: it restores the accepted
+    # rationale squash-merge collapsed. Reuses the pr-evidence pool + rendering.
+    if parsed_gh is not None and commit_decisions:
+        from hijack.core.pr_archaeology import (
+            fetch_merged_pr_decisions,
+            merge_pr_decisions,
+        )
+        try:
+            owner, gh_repo = parsed_gh
+            merged = fetch_merged_pr_decisions(
+                f"https://github.com/{owner}/{gh_repo}",
+                [c.subject for c in commit_decisions],
+            )
+            if merged:
+                pr_decisions = merge_pr_decisions(pr_decisions, merged)
+        except Exception as e:
+            logger.warning("merged-PR enrichment failed: %s — continuing", e)
 
     category_results: list[CategoryResult] = []
     for category in categories:

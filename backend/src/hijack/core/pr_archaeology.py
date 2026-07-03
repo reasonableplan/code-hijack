@@ -40,6 +40,27 @@ _DIFF_EXCERPT_CHARS = 1500
 # Cap on number of diff-fetch API calls per fetch_pr_decisions run (network budget).
 _MAX_DIFF_FETCHES = 15
 
+# W1 — merge-PR reference in a squash commit subject: "... (#1234)".
+_MERGED_PR_RE = re.compile(r"\(#(\d+)\)")
+
+# Cap on merged-PR body fetches per analysis (network budget).
+_MAX_MERGED_PR_FETCHES = 20
+
+# GitHub PR-template boilerplate: a "Checklist" heading + task-list items
+# ("- [x] ... I tried ..."). Present on every PR from a repo that ships a
+# template, so its canned wording trips decision patterns (e.g. "tried") and
+# manufactures false decisions. Stripped before pattern matching.
+_CHECKLIST_HEADING_RE = re.compile(r"^#{1,6}\s*checklist\s*$", re.IGNORECASE | re.MULTILINE)
+_CHECKLIST_ITEM_RE = re.compile(r"^\s*[-*]\s*\[[ xX]\].*$", re.MULTILINE)
+
+
+def _strip_pr_template(body: str) -> str:
+    """Remove GitHub PR-template boilerplate (checklist heading + task-list
+    items) so their fixed wording doesn't trip decision-signal patterns."""
+    body = _CHECKLIST_HEADING_RE.sub("", body)
+    body = _CHECKLIST_ITEM_RE.sub("", body)
+    return body
+
 # Patterns that indicate an incident (revert/rollback in the body).
 _INCIDENT_RE = re.compile(r"\b(revert|rollback|roll[-\s]back|regression)\b", re.IGNORECASE)
 
@@ -209,18 +230,9 @@ def _iso_to_date_str(iso: str) -> str:
     return cleaned
 
 
-def _gh_api(
-    path: str,
-    *,
-    timeout: int,
-) -> list[dict] | None:
-    """Call `gh api <path>` and return parsed JSON list.
-
-    Returns None on:
-      - FileNotFoundError (gh not installed)
-      - TimeoutExpired
-      - Non-zero returncode
-      - Response with a "message" key (rate-limit or error)
+def _gh_api_raw(path: str, *, timeout: int) -> Any | None:
+    """Call `gh api <path>`; return parsed JSON (list or dict), or None on any
+    failure (gh missing, timeout, non-zero exit, error "message", non-JSON).
     """
     try:
         result = subprocess.run(
@@ -261,10 +273,28 @@ def _gh_api(
         )
         return None
 
+    return parsed
+
+
+def _gh_api(path: str, *, timeout: int) -> list[dict] | None:
+    """`gh api <path>` expecting a JSON array. None on failure or non-array."""
+    parsed = _gh_api_raw(path, timeout=timeout)
+    if parsed is None:
+        return None
     if not isinstance(parsed, list):
         logger.warning("gh api returned unexpected type for %s — skipping", path)
         return None
+    return parsed
 
+
+def _gh_api_object(path: str, *, timeout: int) -> dict | None:
+    """`gh api <path>` expecting a single JSON object. None on failure or non-object."""
+    parsed = _gh_api_raw(path, timeout=timeout)
+    if parsed is None:
+        return None
+    if not isinstance(parsed, dict):
+        logger.warning("gh api returned unexpected type for %s — skipping", path)
+        return None
     return parsed
 
 
@@ -383,7 +413,7 @@ def _build_decision_from_pr(
 
     number = item.get("number", 0)
     title = item.get("title", "")
-    body = item.get("body") or ""
+    body = _strip_pr_template(item.get("body") or "")
     created_at = item.get("created_at", "")
 
     matched = _match_patterns(body)
@@ -522,6 +552,103 @@ def fetch_pr_decisions(repo_url: str, *, timeout: int = 30) -> PRDecisions:
         items_scanned=items_scanned,
         patterns=patterns,
         decisions=all_decisions,
+    )
+
+
+# ---------------------------------------------------------------------------
+# W1 — merged-PR enrichment
+# ---------------------------------------------------------------------------
+
+def _build_merged_pr_decision(item: dict) -> PRDecision | None:
+    """Build a PRDecision from a MERGED PR object; None if it doesn't qualify.
+
+    Counterpart to _build_decision_from_pr (which keeps only closed-UNMERGED
+    PRs). A merged PR that a decision-signal commit points to carries the
+    accepted rationale that squash-merge collapsed out of the commit body —
+    the WHY behind a convention the senior *adopted*. Skips bots, non-merged
+    PRs, and bodies with no decision-signal pattern (noise filter).
+    """
+    if _is_bot_pr(item):
+        return None
+    merged_at = item.get("merged_at")
+    if merged_at is None:
+        return None
+    number = item.get("number", 0)
+    body = _strip_pr_template(item.get("body") or "")
+    matched = _match_patterns(body)
+    if not matched:
+        return None
+    intent_kind = _determine_intent_kind(merged_at, body, "", f"PR#{number}")
+    return PRDecision(
+        ref=f"PR#{number}",
+        title=item.get("title", ""),
+        date=_iso_to_date_str(item.get("created_at", "")),
+        body_excerpt=_sanitize_body_excerpt(body),
+        matched_patterns=matched,
+        maintainer_comment="",
+        intent_kind=intent_kind,
+    )
+
+
+def fetch_merged_pr_decisions(
+    repo_url: str,
+    commit_subjects: list[str],
+    *,
+    timeout: int = 30,
+) -> list[PRDecision]:
+    """Fetch merged PRs referenced by "(#NNNN)" in decision-signal commit
+    subjects, as PRDecisions. Bounded at _MAX_MERGED_PR_FETCHES.
+
+    Returns [] on a non-GitHub URL or gh failure — never raises.
+    """
+    parsed_url = _parse_github_url(repo_url)
+    if parsed_url is None:
+        return []
+    owner, repo = parsed_url
+
+    seen: set[int] = set()
+    numbers: list[int] = []
+    for subject in commit_subjects:
+        for m in _MERGED_PR_RE.finditer(subject):
+            n = int(m.group(1))
+            if n not in seen:
+                seen.add(n)
+                numbers.append(n)
+
+    decisions: list[PRDecision] = []
+    for n in numbers[:_MAX_MERGED_PR_FETCHES]:
+        item = _gh_api_object(f"repos/{owner}/{repo}/pulls/{n}", timeout=timeout)
+        if item is None:
+            continue
+        decision = _build_merged_pr_decision(item)
+        if decision is not None:
+            decisions.append(decision)
+    return decisions
+
+
+def merge_pr_decisions(
+    base: PRDecisions | None,
+    extra: list[PRDecision],
+) -> PRDecisions:
+    """Fold `extra` into `base`: dedup by ref, date-desc, cap, re-aggregate.
+
+    Lets merged-PR decisions join the rejection/incident set without either
+    source's refs duplicating. `base` may be None (PR mining skipped) — then
+    `extra` stands alone.
+    """
+    existing = list(base.decisions) if base is not None else []
+    base_scanned = base.items_scanned if base is not None else 0
+    seen_refs = {d.ref for d in existing}
+    added = [d for d in extra if d.ref not in seen_refs]
+
+    combined = existing + added
+    combined.sort(key=lambda d: d.date, reverse=True)
+    combined = combined[:_DECISIONS_TOP_N]
+
+    return PRDecisions(
+        items_scanned=base_scanned + len(added),
+        patterns=_aggregate_patterns(combined),
+        decisions=combined,
     )
 
 
