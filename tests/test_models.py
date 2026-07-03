@@ -451,3 +451,16 @@ def test_session_result_pr_decisions_roundtrip_with_diff_excerpt() -> None:
     assert restored_decision.ref == "PR#42"
     assert restored_decision.intent_kind == "rejection"
     assert restored_decision.diff_excerpt == "+def sync_wrapper():\n+    return asyncio.run(...)"
+
+
+def test_session_result_satd_items_roundtrip() -> None:
+    from hijack.core.satd import SatdItem, SatdItems
+
+    items = SatdItems(items=[SatdItem(ref="src/foo.py:42", tag="FIXME", text="race condition")])
+    session = make_session(satd_items=items)
+    restored = SessionResult.from_json(session.to_json())
+    assert restored.satd_items is not None
+    assert len(restored.satd_items.items) == 1
+    assert restored.satd_items.items[0].ref == "src/foo.py:42"
+    assert restored.satd_items.items[0].tag == "FIXME"
+    assert restored.satd_items.items[0].text == "race condition"

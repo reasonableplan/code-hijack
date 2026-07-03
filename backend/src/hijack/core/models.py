@@ -16,7 +16,7 @@ SCOPE_VALUES = ("cross_project", "framework_internal", "domain_specific")
 # PR/issue archaeology). "pr" covers PR/issue refs mined by pr_archaeology.py
 # (rejection/incident decision trails from closed-unmerged PRs and wontfix
 # issues). Future kinds (in-code comments, external refs) are additive in D2+.
-EVIDENCE_KIND_VALUES = ("commit", "revert", "doc", "pr")
+EVIDENCE_KIND_VALUES = ("commit", "revert", "doc", "pr", "comment")
 
 # What KIND of why does this evidence support?
 # - rejection : tried a pattern, rolled it back (strongest negative signal)
@@ -249,6 +249,12 @@ class SessionResult:
     # Populated by extract_commit_decisions() in run_full_analysis().
     # CommitDecisions | None — typed as Any to avoid circular import.
     commit_decisions: Any | None = None
+    # SATD comment mining (W2): TODO/FIXME/XXX/HACK task tags — the senior's own
+    # recorded intent/limitation, an inline WHY source. Populated by
+    # extract_satd() in run_full_analysis(). Each item's "path:line" ref is the
+    # truth pool for evidence kind="comment". SatdItems | None — typed as Any to
+    # avoid circular import.
+    satd_items: Any | None = None
     # Foresight hypothesis cards (T-030). Rendered to foresight.md only — not
     # included in CLAUDE.md / system-prompt.md as constraints.
     # Pre-T-030 session.json files omit this key — from_json defaults to [].
@@ -279,6 +285,8 @@ class SessionResult:
             result["pr_decisions"] = self.pr_decisions.to_json()
         if self.commit_decisions is not None:
             result["commit_decisions"] = self.commit_decisions.to_json()
+        if self.satd_items is not None:
+            result["satd_items"] = self.satd_items.to_json()
         result["foresight_cards"] = [c.to_json() for c in self.foresight_cards]
         result["repo_nature"] = self.repo_nature
         return result
@@ -298,6 +306,10 @@ class SessionResult:
         if "commit_decisions" in data and data["commit_decisions"] is not None:
             from hijack.core.archaeology import CommitDecisions
             commit_decisions = CommitDecisions.from_json(data["commit_decisions"])
+        satd_items = None
+        if "satd_items" in data and data["satd_items"] is not None:
+            from hijack.core.satd import SatdItems
+            satd_items = SatdItems.from_json(data["satd_items"])
         return cls(
             session_id=data["session_id"],
             target=data["target"],
@@ -314,6 +326,7 @@ class SessionResult:
             test_decisions=test_decisions,
             pr_decisions=pr_decisions,
             commit_decisions=commit_decisions,
+            satd_items=satd_items,
             foresight_cards=[ForesightCard.from_json(c) for c in data.get("foresight_cards", [])],
             repo_nature=data.get("repo_nature", "library"),
         )

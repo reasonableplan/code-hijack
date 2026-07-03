@@ -141,6 +141,7 @@ def assign_rationale_tier(
     valid_doc_paths: set[str] | None = None,
     valid_file_paths: set[str] | None = None,
     valid_pr_refs: set[str] | None = None,
+    valid_comment_refs: set[str] | None = None,
 ) -> list[AnalysisRule]:
     """classify_rule 결과로 rationale_tier 를 채운다.
 
@@ -159,6 +160,7 @@ def assign_rationale_tier(
             valid_doc_paths=valid_doc_paths,
             valid_file_paths=valid_file_paths,
             valid_pr_refs=valid_pr_refs,
+            valid_comment_refs=valid_comment_refs,
         )
         tier = "cited" if kind == "cited" else "speculative"
         result.append(dataclasses.replace(rule, rationale_tier=tier))
@@ -288,6 +290,8 @@ async def _analyze_category(
     valid_shas: set[str],
     valid_doc_paths: set[str],
     sha_to_date: dict[str, str],
+    valid_pr_refs: set[str] | None = None,
+    valid_comment_refs: set[str] | None = None,
 ) -> CategoryResult:
     selected = select_files_for_category(preprocess_result, category)
     summaries = build_file_summary_for_llm(selected)
@@ -330,6 +334,8 @@ async def _analyze_category(
         valid_shas=valid_shas or None,
         valid_doc_paths=valid_doc_paths or None,
         valid_file_paths={f.path.as_posix() for f in selected} or None,
+        valid_pr_refs=valid_pr_refs,
+        valid_comment_refs=valid_comment_refs,
     )
     rules = normalize_rationale_tier(rules)
     return CategoryResult(
@@ -434,6 +440,12 @@ async def run_full_analysis(
     from hijack.core.archaeology import extract_commit_decisions
     commit_decisions = extract_commit_decisions(files)
 
+    # W2 — SATD comment mining (TODO/FIXME/XXX/HACK): the senior's own inline
+    # WHY. Pure AST-free regex pass over already-fetched files. Each item's
+    # "path:line" ref is the truth pool for evidence kind="comment".
+    from hijack.core.satd import extract_satd
+    satd_items = extract_satd(files)
+
     # W1 — enrich pr_decisions with merged PRs that decision-signal commits
     # point to (squash "(#NNNN)" links). The commit already passed the decision
     # filter, so its merged PR body is high-signal: it restores the accepted
@@ -454,6 +466,15 @@ async def run_full_analysis(
         except Exception as e:
             logger.warning("merged-PR enrichment failed: %s — continuing", e)
 
+    # Evidence truth pools threaded into per-category tier assignment so pr /
+    # comment citations survive normalize_rationale_tier (else a valid pr/SATD
+    # MUST is wrongly demoted to SHOULD).
+    valid_pr_refs = (
+        {d.ref.casefold() for d in pr_decisions.decisions if d.ref} or None
+        if pr_decisions is not None else None
+    )
+    valid_comment_refs = {i.ref for i in satd_items.items if i.ref} or None
+
     category_results: list[CategoryResult] = []
     for category in categories:
         result = await _analyze_category(
@@ -464,6 +485,8 @@ async def run_full_analysis(
             valid_shas=historic_shas,
             valid_doc_paths=valid_doc_paths,
             sha_to_date=sha_to_date,
+            valid_pr_refs=valid_pr_refs,
+            valid_comment_refs=valid_comment_refs,
         )
         category_results.append(result)
 
@@ -488,6 +511,7 @@ async def run_full_analysis(
         test_decisions=test_decisions,
         pr_decisions=pr_decisions,
         commit_decisions=commit_decisions,
+        satd_items=satd_items,
         repo_nature=preprocess.repo_nature,
     )
 

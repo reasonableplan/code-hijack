@@ -450,6 +450,39 @@ class TestClassifyViaEvidenceList:
         assert m.overall.fake_citation == 1
 
 
+class TestCommentKind:
+    """W2 — SATD evidence kind="comment", verified against a path:line pool."""
+
+    def test_ref_in_pool_is_cited(self) -> None:
+        rule = _rule_with_ev([_ev(kind="comment", ref="src/foo.py:42")])
+        assert classify_rule(rule, valid_comment_refs={"src/foo.py:42"}) == "cited"
+
+    def test_ref_not_in_pool_is_fake(self) -> None:
+        rule = _rule_with_ev([_ev(kind="comment", ref="src/foo.py:99")])
+        assert classify_rule(rule, valid_comment_refs={"src/foo.py:42"}) == "fake_citation"
+
+    def test_no_pool_is_best_effort_cited(self) -> None:
+        rule = _rule_with_ev([_ev(kind="comment", ref="src/foo.py:42")])
+        assert classify_rule(rule) == "cited"
+
+    def test_empty_ref_is_fake(self) -> None:
+        rule = _rule_with_ev([_ev(kind="comment", ref="")])
+        assert classify_rule(rule, valid_comment_refs={"src/foo.py:42"}) == "fake_citation"
+
+    def test_session_pool_makes_it_history_anchored(self) -> None:
+        from hijack.core.satd import SatdItem, SatdItems
+        s = _session({"architecture": [_rule_with_ev([_ev(kind="comment", ref="a.py:1")])]})
+        s.satd_items = SatdItems(items=[SatdItem(ref="a.py:1", tag="TODO", text="x")])
+        m = compute_evidence_metrics(s)
+        assert (m.overall.cited, m.overall.cited_history, m.overall.cited_code) == (1, 1, 0)
+
+    def test_session_unknown_ref_is_fake(self) -> None:
+        from hijack.core.satd import SatdItem, SatdItems
+        s = _session({"architecture": [_rule_with_ev([_ev(kind="comment", ref="a.py:9")])]})
+        s.satd_items = SatdItems(items=[SatdItem(ref="a.py:1", tag="TODO", text="x")])
+        assert compute_evidence_metrics(s).overall.fake_citation == 1
+
+
 class TestCitedAnchorDecomposition:
     """The cited bucket splits into history-anchored (a decision record) and
     code-anchored (only a valid ref_files path:line)."""

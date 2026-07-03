@@ -130,6 +130,7 @@ def classify_rule(
     valid_doc_paths: set[str] | None = None,
     valid_file_paths: set[str] | None = None,
     valid_pr_refs: set[str] | None = None,
+    valid_comment_refs: set[str] | None = None,
 ) -> str:
     """Return one of: 'cited' | 'no_evidence' | 'fake_citation' | 'generic' | 'other'.
 
@@ -160,6 +161,7 @@ def classify_rule(
             valid_shas=valid_shas,
             valid_doc_paths=valid_doc_paths,
             valid_pr_refs=valid_pr_refs,
+            valid_comment_refs=valid_comment_refs,
         )
 
     reason = rule.reason or ""
@@ -198,6 +200,7 @@ def _classify_via_evidence(
     valid_shas: set[str] | None,
     valid_doc_paths: set[str] | None,
     valid_pr_refs: set[str] | None = None,
+    valid_comment_refs: set[str] | None = None,
 ) -> str:
     """Score a non-empty Evidence list as 'cited' or 'fake_citation'."""
     saw_real = False
@@ -228,6 +231,21 @@ def _classify_via_evidence(
                 # No truth pool → can't verify; accept as real (best-effort).
                 saw_real = True
             elif ref.casefold() in valid_pr_refs:
+                saw_real = True
+            else:
+                saw_fake = True
+        elif e.kind == "comment":
+            # SATD "path:line" anchor (W2). Pool is the exact set of refs the
+            # miner collected, so verification is fully deterministic — an
+            # invented TODO ref fails. Same best-effort-when-no-pool rule.
+            ref = (e.ref or "").strip()
+            if not ref:
+                saw_fake = True
+            elif (
+                valid_comment_refs is None
+                or not valid_comment_refs
+                or ref in valid_comment_refs
+            ):
                 saw_real = True
             else:
                 saw_fake = True
@@ -264,6 +282,7 @@ def downgrade_speculative_rules(session: SessionResult) -> int:
     valid_doc_paths = set(session.repo_doc_paths) or None
     valid_file_paths = set(session.selected_files) or None
     valid_pr_refs = _valid_pr_refs_from_session(session)
+    valid_comment_refs = _valid_comment_refs_from_session(session)
 
     count = 0
     for cat in session.categories:
@@ -276,6 +295,7 @@ def downgrade_speculative_rules(session: SessionResult) -> int:
                 valid_doc_paths=valid_doc_paths,
                 valid_file_paths=valid_file_paths,
                 valid_pr_refs=valid_pr_refs,
+                valid_comment_refs=valid_comment_refs,
             )
             if kind != "cited":
                 rule.priority = "SHOULD"
@@ -304,6 +324,25 @@ def _valid_pr_refs_from_session(session: SessionResult) -> set[str] | None:
     return {ref.casefold() for ref in refs if ref} or None
 
 
+def _valid_comment_refs_from_session(session: SessionResult) -> set[str] | None:
+    """Build the truth pool of SATD "path:line" refs surfaced to the LLM.
+
+    `session.satd_items` is duck-typed (Any) — a satd.SatdItems dataclass
+    (`.items[*].ref`) or a raw dict from session.json (`["items"][*]["ref"]`).
+    Refs are exact (paths are case-sensitive); returns None when there are no
+    items — best-effort accept, same principle as the other truth pools.
+    """
+    satd_items = session.satd_items
+    if not satd_items:
+        return None
+    if isinstance(satd_items, dict):
+        raw_items = satd_items.get("items", [])
+        refs = [i.get("ref", "") for i in raw_items if isinstance(i, dict)]
+    else:
+        refs = [getattr(i, "ref", "") for i in getattr(satd_items, "items", [])]
+    return {ref for ref in refs if ref} or None
+
+
 def compute_evidence_metrics(session: SessionResult) -> EvidenceMetrics:
     """Walk all rules in `session` and tally citation classifications.
 
@@ -317,6 +356,7 @@ def compute_evidence_metrics(session: SessionResult) -> EvidenceMetrics:
     valid_doc_paths = set(session.repo_doc_paths) or None
     valid_file_paths = set(session.selected_files) or None
     valid_pr_refs = _valid_pr_refs_from_session(session)
+    valid_comment_refs = _valid_comment_refs_from_session(session)
 
     for cat in session.categories:
         bucket = metrics.by_category.setdefault(cat.category, RuleClassification())
@@ -327,6 +367,7 @@ def compute_evidence_metrics(session: SessionResult) -> EvidenceMetrics:
                 valid_doc_paths=valid_doc_paths,
                 valid_file_paths=valid_file_paths,
                 valid_pr_refs=valid_pr_refs,
+                valid_comment_refs=valid_comment_refs,
             )
             if kind == "cited":
                 kind = _cited_anchor(rule, valid_shas=valid_shas)
