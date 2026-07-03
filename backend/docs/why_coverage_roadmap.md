@@ -39,6 +39,11 @@
 
 **검증**: starlette 재분석 → measurement.json 의 history-anchored ratio 비교. **+10%p 미만이면 W1 은 이 레포에서 소진으로 기록** (레포별 편차 가능).
 
+**구현 완료 (2026-07-03, commit 1e2fae6)**: `fetch_merged_pr_decisions` + `merge_pr_decisions` + `_build_merged_pr_decision`, analyzer 병합. tests 1082.
+- **부수 발견·근본픽스 `_strip_pr_template`**: GitHub PR 템플릿 체크리스트(`- [x] ... I tried ...`)가 **모든** PR 에서 `tried` 패턴 오매칭 → 머지+거절 두 경로 정밀도 결함이었음. 매칭 전 제거. (거절-PR 마이닝의 기존 노이즈도 이걸로 감소.)
+- **소스 검증 (라이브 gh)**: raw 최근 커밋 스모크는 7건 전부 docs-grammar 템플릿 노이즈 → strip 후 0. **결정-필터 커밋 subject**(파이프라인 실입력 근사)로는 머지 PR 3건 verbatim rationale: PR#3179 `to avoid O(n²)`(FormParser perf, 메모리 789b9269 규칙과 일치), PR#2648 `rather than`, PR#2149 `instead of`. → **소스는 진짜 WHY 를 공급함이 실증**. 단 history-anchored ratio 실개선치는 skill-mode 풀 재분석(LLM 규칙생성+매칭) 필요 — 별도 단계.
+- **정직 주의**: starlette 머지 PR body 는 대체로 template+짧은 summary. 결정-필터 없이는 수율 ~0. W1 수율은 레포의 PR-description 풍부도에 강하게 의존 (Django/Rust 류에서 더 높을 가능성, 미검증).
+
 ### W2 — SATD 주석 마이닝 (저비용 인라인 WHY)
 
 **갭**: 코드 안의 `TODO/FIXME/XXX/HACK` + 주변 문장은 시니어가 남긴 self-admitted 의도/한계인데 안 캐고 있음.
