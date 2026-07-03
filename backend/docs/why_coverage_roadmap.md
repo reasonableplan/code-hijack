@@ -56,6 +56,9 @@
 
 **검증**: starlette + httpx 에서 SATD 수집량/규칙 인용률 측정. 인용 0 이면 LLM 프롬프트 배선 재검토.
 
+**구현 완료 (2026-07-03, commit 92e8f64) — `comment` kind 채택**: 초안의 `doc` 재사용은 폐기 (doc 진실 풀 = repo_doc_paths 라 SATD 의 `src/foo.py:42` ref 가 fake 로 오분류됨). 신규 `comment` kind + valid_comment_refs 풀(정확 path:line). `satd.py`(MAT regex) + models/evidence/analyzer/SKILL 배관은 pr kind(72f5dbe) 미러. **부수 이득**: CLI 모드 assign_rationale_tier 에 pr 풀이 안 넘어가던 기존 갭도 함께 해소. tests 1097.
+- **실측**: starlette 34 .py → SATD **1건**(`middleware/exceptions.py:26 [TODO] handle 404 if debug`). 성숙 라이브러리라 희소(W1 처럼 레포 의존). 엔진 E2E(추출→세션→comment 분류→history) 작동 확인. history-anchored 실개선치는 skill-mode 풀 재분석 필요.
+
 ### W3 — 명시적/암묵적 스타일 층 분리 (43% 의 정직한 재해석)
 
 **근거**: MPCODER 가 스타일을 2층으로 분리 — **명시적**(문법 표준: naming/포맷/구조, 기계 검증 가능) vs **암묵적**(의미론적 컨벤션: 분해 방식/idiom) ([2406.17255](https://arxiv.org/pdf/2406.17255)).
