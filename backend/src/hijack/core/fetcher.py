@@ -28,7 +28,12 @@ _SKIP_DIRS = frozenset({
     ".ruff_cache", "coverage", ".coverage",
 })
 
-_SUPPORTED_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".kt", ".java"})
+_SUPPORTED_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".kt", ".java", ".sql", ".prisma"})
+
+# 시그니처 추출 (_read_file_content 의 truncation) 이 의미 있는 suffix.
+# .sql/.prisma 는 import/class/def 패턴이 없어 시그니처 추출 시 빈 내용이 되므로
+# head-truncation 으로 대체한다.
+_SIGNATURE_TRUNCATE_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".kt", ".java"})
 
 _MAX_LINES = 2000
 
@@ -142,20 +147,18 @@ def detect_layer(
     ):
         return "frontend"
 
-    # 4. package_json_deps에 프론트엔드 프레임워크 AND suffix .ts → frontend
-    if _FE_FRAMEWORK_DEPS & package_json_deps and suffix == ".ts":
-        return "frontend"
-
-    # 5. .sql / .prisma → db
+    # 4. .sql / .prisma → db
     if suffix in {".sql", ".prisma"}:
         return "db"
 
-    # 6. STRONG db dirs → db (컨텍스트 불문)
+    # 5. STRONG db dirs → db (컨텍스트 불문).
+    #    FE .ts fallback (rule 8) 보다 먼저 — TS 모노레포에서 prisma/·migrations/
+    #    의 .ts 파일이 frontend 로 쓸려가는 것 방지.
     _db_strong = {"migrations/", "prisma/"}
     if any(d in rel_posix for d in _db_strong) and suffix in {".py", ".ts"}:
         return "db"
 
-    # 7. WEAK db dirs → ORM 컨텍스트 있을 때만 db
+    # 6. WEAK db dirs → ORM 컨텍스트 있을 때만 db
     _db_weak = {"schemas/", "models/"}
     if (
         any(d in rel_posix for d in _db_weak)
@@ -164,16 +167,28 @@ def detect_layer(
     ):
         return "db"
 
-    # 8. Dockerfile 또는 devops 디렉토리 → devops
+    # 7. .ts AND backend 디렉토리 → backend.
+    #    FE .ts fallback (rule 8) 보다 먼저 — react 의존성 있는 풀스택 TS 레포에서
+    #    tRPC 라우터/서버 서비스가 전부 frontend 판정되던 결함 수정.
+    #    (rule 3 의 weak frontend dirs 가 먼저라 `app/api/...` 등 Next app-router
+    #    경로는 기존대로 frontend — 여기서는 명시적 서버 디렉토리만 잡는다.)
+    _backend_dirs = {"backend/", "server/", "api/", "routes/", "routers/", "services/"}
+    if suffix == ".ts" and any(d in rel_posix for d in _backend_dirs):
+        return "backend"
+
+    # 8. package_json_deps에 프론트엔드 프레임워크 AND suffix .ts → frontend
+    if _FE_FRAMEWORK_DEPS & package_json_deps and suffix == ".ts":
+        return "frontend"
+
+    # 9. Dockerfile 또는 devops 디렉토리 → devops
     if name == "Dockerfile" or any(d in rel_posix for d in {".github/", "k8s/", "terraform/"}):
         return "devops"
 
-    # 9. .py AND backend signal → backend
-    #   9a: backend 디렉토리
-    #   9b: pyproject 가 fastapi/django/flask 를 dep 로 선언
-    #   9c: 첫 경로 세그먼트가 backend 프레임워크 이름 — 프레임워크 자기 소스 레포 대응
+    # 10. .py AND backend signal → backend
+    #   10a: backend 디렉토리
+    #   10b: pyproject 가 fastapi/django/flask 를 dep 로 선언
+    #   10c: 첫 경로 세그먼트가 backend 프레임워크 이름 — 프레임워크 자기 소스 레포 대응
     #       (예: fastapi 레포의 `fastapi/applications.py`, django 레포의 `django/core/...`)
-    _backend_dirs = {"backend/", "server/", "api/", "routes/"}
     _backend_frameworks = {"fastapi", "django", "flask"}
     first_seg = rel_posix.split("/", 1)[0] if "/" in rel_posix else ""
     if suffix == ".py" and (
@@ -183,14 +198,14 @@ def detect_layer(
     ):
         return "backend"
 
-    # 10. Android (.kt / .java) — manifest 발견된 레포 한정.
+    # 11. Android (.kt / .java) — manifest 발견된 레포 한정.
     #     Android 는 client-only 앱이라 web 의 frontend/backend 분리와 다름.
     #     매핑: UI 표면 (Activity/Fragment/Compose Screen) → frontend,
     #           ViewModel/UseCase/Repository/DataSource → backend (logic 분리),
     #           Room (Dao/Database) → db.
     if suffix in {".kt", ".java"} and android_context:
         name_lower = name.lower()
-        # 10a. UI 표면 → frontend
+        # 11a. UI 표면 → frontend
         _ui_suffixes = (
             "activity.kt", "activity.java",
             "fragment.kt", "fragment.java",
@@ -200,14 +215,14 @@ def detect_layer(
             return "frontend"
         if any(d in rel_posix for d in {"/ui/", "/presentation/", "/screens/", "/compose/"}):
             return "frontend"
-        # 10b. Room / DB → db
+        # 11b. Room / DB → db
         _db_suffixes = (
             "dao.kt", "dao.java",
             "database.kt", "database.java",
         )
         if name_lower.endswith(_db_suffixes):
             return "db"
-        # 10c. ViewModel / Repository / UseCase / DataSource → backend
+        # 11c. ViewModel / Repository / UseCase / DataSource → backend
         _logic_suffixes = (
             "viewmodel.kt", "viewmodel.java",
             "repository.kt", "repository.java",
@@ -219,7 +234,7 @@ def detect_layer(
         if any(d in rel_posix for d in {"/data/", "/domain/", "/repository/", "/network/"}):
             return "backend"
 
-    # 11. 나머지 → shared
+    # 12. 나머지 → shared
     return "shared"
 
 
@@ -243,6 +258,11 @@ def _read_file_content(path: Path) -> tuple[str, int]:
     lines = text.splitlines(keepends=True)
     if len(lines) <= _MAX_LINES:
         return text, original
+
+    # .sql/.prisma 등 시그니처 패턴이 없는 suffix → head-truncation
+    if path.suffix.lower() not in _SIGNATURE_TRUNCATE_SUFFIXES:
+        header = f"-- [TRUNCATED: {len(lines)} lines -> first {_MAX_LINES}]\n"
+        return header + "".join(lines[:_MAX_LINES]), original
 
     # 핵심 부분 추출: import 문, 클래스/함수 시그니처, 데코레이터, docstring 첫 줄
     _sig_pattern = re.compile(

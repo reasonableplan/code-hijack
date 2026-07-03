@@ -140,6 +140,37 @@ class TestDetectLayer:
         assert detect_layer(fp, root, set(), {"flask"}) == "backend"
 
     # ----------------------------------------------------------------------
+    # 풀스택 TS 모노레포 — FE dep 이 있어도 서버/DB 파일은 frontend 로 쓸리면 안 됨
+    # ----------------------------------------------------------------------
+
+    def test_ts_in_server_dir_with_react_dep_is_backend(self, tmp_path):
+        """tRPC 라우터: react dep 있어도 server/ 의 .ts 는 backend."""
+        fp, root = self._make(tmp_path, "packages/trpc/server/routers/viewer.ts")
+        assert detect_layer(fp, root, {"react", "next"}, set()) == "backend"
+
+    def test_ts_in_api_dir_with_react_dep_is_backend(self, tmp_path):
+        fp, root = self._make(tmp_path, "apps/api/lib/bookings/service.ts")
+        assert detect_layer(fp, root, {"react", "next"}, set()) == "backend"
+
+    def test_prisma_suffix_with_react_dep_is_db(self, tmp_path):
+        fp, root = self._make(tmp_path, "packages/prisma/schema.prisma")
+        assert detect_layer(fp, root, {"react"}, set()) == "db"
+
+    def test_sql_migration_with_react_dep_is_db(self, tmp_path):
+        fp, root = self._make(tmp_path, "packages/prisma/migrations/0001/migration.sql")
+        assert detect_layer(fp, root, {"react"}, set()) == "db"
+
+    def test_ts_in_prisma_dir_with_react_dep_is_db(self, tmp_path):
+        """prisma/ 의 .ts 헬퍼: FE .ts fallback 보다 db strong dir 이 먼저."""
+        fp, root = self._make(tmp_path, "packages/prisma/zod-utils.ts")
+        assert detect_layer(fp, root, {"react"}, set()) == "db"
+
+    def test_next_app_router_api_route_stays_frontend(self, tmp_path):
+        """app/ weak-FE 규칙이 backend .ts 규칙보다 먼저 — 기존 동작 유지."""
+        fp, root = self._make(tmp_path, "app/api/route.ts")
+        assert detect_layer(fp, root, {"react", "next"}, set()) == "frontend"
+
+    # ----------------------------------------------------------------------
     # Android Kotlin/Java — fired only when android_context=True
     # ----------------------------------------------------------------------
 
@@ -248,6 +279,23 @@ class TestReadFileContent:
         assert original == len(raw)  # truncate 와 무관하게 원본 크기
         assert original > len(content)  # 본문은 잘렸어야 함
 
+    def test_large_prisma_schema_head_truncates(self, tmp_path):
+        """시그니처 패턴 없는 suffix 는 head-truncation — 내용이 비면 안 됨."""
+        f = tmp_path / "schema.prisma"
+        raw = "model User {\n  id Int @id\n}\n" * 1000  # 3000 줄
+        f.write_text(raw, encoding="utf-8")
+        content, original = _read_file_content(f)
+        assert "[TRUNCATED" in content
+        assert "model User {" in content  # 실제 스키마 내용이 보존됨
+        assert original == len(raw)
+
+    def test_large_sql_migration_head_truncates(self, tmp_path):
+        f = tmp_path / "migration.sql"
+        raw = "ALTER TABLE users ADD COLUMN c INT;\n" * 2500
+        f.write_text(raw, encoding="utf-8")
+        content, original = _read_file_content(f)
+        assert "ALTER TABLE users" in content
+
 
 # ---------------------------------------------------------------------------
 # fetch_source tests
@@ -274,6 +322,25 @@ class TestFetchSourceLocal:
         assert ".md" not in suffixes
         assert ".json" not in suffixes
         assert {".py", ".ts"} == suffixes
+
+    def test_prisma_and_sql_files_collected(self, tmp_path):
+        """DB 스키마 파일 수집: .prisma/.sql 은 db 레이어로 들어와야 한다."""
+        prisma_dir = tmp_path / "prisma"
+        prisma_dir.mkdir()
+        (prisma_dir / "schema.prisma").write_text(
+            "model User {\n  id Int @id\n}\n", encoding="utf-8"
+        )
+        mig = prisma_dir / "migrations" / "0001"
+        mig.mkdir(parents=True)
+        (mig / "migration.sql").write_text(
+            "CREATE TABLE users (id INT);\n", encoding="utf-8"
+        )
+        files, _ = fetch_source(str(tmp_path))
+        by_suffix = {sf.path.suffix: sf for sf in files}
+        assert ".prisma" in by_suffix
+        assert ".sql" in by_suffix
+        assert by_suffix[".prisma"].layer == "db"
+        assert by_suffix[".sql"].layer == "db"
 
     def test_skip_dirs_excluded(self, tmp_path):
         skip = tmp_path / "node_modules"
