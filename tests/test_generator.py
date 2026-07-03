@@ -676,6 +676,53 @@ class TestExemplarsInGenerator:
 
 
 # ---------------------------------------------------------------------------
+# 0.3.0: pr_decisions wiring in generator (pr_archaeology.PRDecisions)
+# ---------------------------------------------------------------------------
+
+def _pr_decisions_fixture():
+    from hijack.core.pr_archaeology import PRDecision, PRDecisions
+
+    return PRDecisions(
+        items_scanned=3,
+        patterns=[],
+        decisions=[
+            PRDecision(
+                ref="PR#1",
+                title="t",
+                date="2024-01-01 00:00:00 +0000",
+                body_excerpt="b",
+                matched_patterns=[],
+                maintainer_comment="no",
+                intent_kind="rejection",
+                diff_excerpt="+bad code",
+            )
+        ],
+    )
+
+
+class TestPrDecisionsInGenerator:
+    def test_write_output_creates_pr_decisions_md_when_present(self, tmp_path: Path) -> None:
+        s = _session()
+        s.pr_decisions = _pr_decisions_fixture()
+        write_output(s, tmp_path)
+        assert (tmp_path / "integrated" / "pr-decisions.md").exists()
+
+    def test_write_output_no_pr_decisions_md_when_none(self, tmp_path: Path) -> None:
+        s = _session()
+        s.pr_decisions = None
+        write_output(s, tmp_path)
+        assert not (tmp_path / "integrated" / "pr-decisions.md").exists()
+
+    def test_pr_decisions_md_content_includes_diff_excerpt(self, tmp_path: Path) -> None:
+        s = _session()
+        s.pr_decisions = _pr_decisions_fixture()
+        write_output(s, tmp_path)
+        content = (tmp_path / "integrated" / "pr-decisions.md").read_text(encoding="utf-8")
+        assert "PR#1" in content
+        assert "bad code" in content
+
+
+# ---------------------------------------------------------------------------
 # TestMustCalibrationLint
 # ---------------------------------------------------------------------------
 

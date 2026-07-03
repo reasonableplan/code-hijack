@@ -17,7 +17,7 @@ from hijack.core.target_stack import TargetStack, detect_target_stack
 if TYPE_CHECKING:
     from hijack.core.archaeology import CommitDecisions
     from hijack.core.exemplars import Exemplar
-    from hijack.core.pr_decisions import PRDecisions
+    from hijack.core.pr_archaeology import PRDecisions
     from hijack.core.test_decisions import TestDecisions
 
 # ---------------------------------------------------------------------------
@@ -400,7 +400,7 @@ def render_applied_md(result: ApplyResult, *, source_target: str) -> str:
                 lines.append(line)
 
     if result.pr_decisions is not None and result.pr_decisions.has_signal:
-        from hijack.core.pr_decisions import render_pr_decisions_md
+        from hijack.core.pr_archaeology import render_pr_decisions_md
         pr_md = render_pr_decisions_md(
             result.pr_decisions, source_target=source_target
         )

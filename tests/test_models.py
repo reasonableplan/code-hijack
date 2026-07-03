@@ -418,3 +418,36 @@ def test_session_result_full_roundtrip_with_new_fields() -> None:
     assert len(restored.foresight_cards) == 2
     assert restored.foresight_cards[0].tier == "corroborated"
     assert restored.foresight_cards[1].layer == "backend"
+
+
+# ---------------------------------------------------------------------------
+# 0.3.0: SessionResult.pr_decisions holds pr_archaeology.PRDecisions
+# ---------------------------------------------------------------------------
+
+def test_session_result_pr_decisions_roundtrip_with_diff_excerpt() -> None:
+    from hijack.core.pr_archaeology import PRDecision, PRDecisions
+
+    decisions = PRDecisions(
+        items_scanned=5,
+        patterns=[],
+        decisions=[
+            PRDecision(
+                ref="PR#42",
+                title="Add sync wrapper",
+                date="2024-08-12 14:30:00 +0000",
+                body_excerpt="This adds a sync wrapper around the async client.",
+                matched_patterns=["instead of"],
+                maintainer_comment="Won't merge — breaks the async contract.",
+                intent_kind="rejection",
+                diff_excerpt="+def sync_wrapper():\n+    return asyncio.run(...)",
+            )
+        ],
+    )
+    session = make_session(pr_decisions=decisions)
+    restored = SessionResult.from_json(session.to_json())
+    assert restored.pr_decisions is not None
+    assert len(restored.pr_decisions.decisions) == 1
+    restored_decision = restored.pr_decisions.decisions[0]
+    assert restored_decision.ref == "PR#42"
+    assert restored_decision.intent_kind == "rejection"
+    assert restored_decision.diff_excerpt == "+def sync_wrapper():\n+    return asyncio.run(...)"

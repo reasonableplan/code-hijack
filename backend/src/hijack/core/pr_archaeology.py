@@ -475,3 +475,84 @@ def fetch_pr_decisions(repo_url: str, *, timeout: int = 30) -> PRDecisions:
         patterns=patterns,
         decisions=all_decisions,
     )
+
+
+# ---------------------------------------------------------------------------
+# Renderer
+# ---------------------------------------------------------------------------
+
+# Section order + titles, aligned with the tool's mission (rejection/incident
+# PRs are WHY-evidence; preference is supplementary context).
+_SECTION_TITLES: dict[str, str] = {
+    "rejection": "Rejected proposals (closed without merge)",
+    "incident": "Incidents (revert/rollback signals)",
+    "preference": "Reviewer preferences",
+}
+
+
+def render_pr_decisions_md(decisions: PRDecisions, *, source_target: str) -> str:
+    """Render PRDecisions as Markdown.
+
+    Returns '' when has_signal is False — caller skips writing the file.
+
+    Output sections:
+    - Preamble blockquote with items_scanned + source_target
+    - Recurring decision patterns (by occurrence)
+    - Decisions grouped by intent_kind, in rejection -> incident -> preference
+      order (rejection/incident are cited-evidence-grade; preference is not)
+
+    Sections are only rendered when their lists are non-empty — no "(none)"
+    placeholders are emitted (same convention as render_commit_decisions_md).
+    """
+    if not decisions.has_signal:
+        return ""
+
+    lines: list[str] = [
+        "# PR Decisions -- what the senior team explicitly rejected or reverted",
+        "",
+        f"> Mined from {decisions.items_scanned} PRs/issues of {source_target}:"
+        " closed-unmerged proposals, incident reverts, and reviewer preferences",
+        "> recorded in GitHub PR/issue history. Rejection and incident decisions",
+        "> are cited-evidence-grade -- MUST rules may cite them directly.",
+        "",
+    ]
+
+    # --- Section: recurring decision patterns ---
+    if decisions.patterns:
+        lines += ["## Recurring decision patterns (by occurrence)", ""]
+        for i, dp in enumerate(decisions.patterns, start=1):
+            lines.append(f"{i}. **{dp.pattern}** ({dp.count} items)")
+            for ex in dp.examples:
+                lines.append(f'   - "{ex}"')
+        lines.append("")
+
+    # --- Sections: decisions grouped by intent_kind ---
+    by_kind: dict[str, list[PRDecision]] = {"rejection": [], "incident": [], "preference": []}
+    for d in decisions.decisions:
+        by_kind.setdefault(d.intent_kind, []).append(d)
+
+    for kind in ("rejection", "incident", "preference"):
+        items = by_kind.get(kind, [])
+        if not items:
+            continue
+        lines += [f"## {_SECTION_TITLES[kind]}", ""]
+        for d in items:
+            date_short = d.date[:10] if d.date else "?"
+            lines.append(f"- `{d.ref}` ({date_short}) **{d.title}**")
+            if d.matched_patterns:
+                pattern_str = ", ".join(f"`{p}`" for p in d.matched_patterns)
+                lines.append(f"  matched: {pattern_str}")
+            if d.maintainer_comment:
+                comment = " ".join(d.maintainer_comment.split())
+                lines.append(f'  maintainer: "{comment[:200]}"')
+            if d.body_excerpt:
+                lines.append(f"  > {d.body_excerpt}")
+            if d.diff_excerpt:
+                lines.append("  Rejected code:")
+                lines.append("  ```diff")
+                for diff_line in d.diff_excerpt.splitlines():
+                    lines.append(f"  {diff_line}")
+                lines.append("  ```")
+        lines.append("")
+
+    return "\n".join(lines)

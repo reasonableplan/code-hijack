@@ -238,8 +238,8 @@ class SessionResult:
     # in run_full_analysis(). None for older sessions or repos with no test files.
     # TestDecisions | None — typed as Any to avoid circular import.
     test_decisions: Any | None = None
-    # PR-history signals (Phase A1): vocabulary clusters, notable/rejected PRs,
-    # recurring labels. Populated by extract_pr_decisions() in run_full_analysis().
+    # 0.3.0 pr_archaeology decision-trail (rejection/incident PR + diff_excerpt +
+    # maintainer_comment). Populated by fetch_pr_decisions() in run_full_analysis().
     # None when the target is not a GitHub repo, when auth is unavailable, or
     # when the network call fails. PRDecisions | None — typed as Any to avoid
     # circular import.
@@ -292,7 +292,7 @@ class SessionResult:
             test_decisions = TestDecisions.from_json(data["test_decisions"])
         pr_decisions = None
         if "pr_decisions" in data and data["pr_decisions"] is not None:
-            from hijack.core.pr_decisions import PRDecisions
+            from hijack.core.pr_archaeology import PRDecisions
             pr_decisions = PRDecisions.from_json(data["pr_decisions"])
         commit_decisions = None
         if "commit_decisions" in data and data["commit_decisions"] is not None:

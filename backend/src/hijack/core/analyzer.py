@@ -412,18 +412,20 @@ async def run_full_analysis(
     from hijack.core.test_decisions import extract_test_decisions
     test_decisions = extract_test_decisions(files)
 
-    # Phase A1 — PR-history signals: vocabulary clusters, notable/rejected PRs,
-    # recurring labels. Requires GitHub URL or local repo with GitHub remote.
-    # gh CLI or GH_TOKEN must be available; failures are logged and skipped.
-    from hijack.core.pr_decisions import extract_pr_decisions
-    pr_cache_dir = repo_root / "docs" / "hijacked" / "pr_cache"
+    # 0.3.0 — PR decision-trail: rejection/incident PR + wontfix-issue mining
+    # via gh CLI. fetch_pr_decisions only accepts a GitHub URL directly, so a
+    # local clone target is resolved to its GitHub remote first — reusing
+    # pr_decisions._parse_github_target (git remote get-url origin under the
+    # hood) rather than re-implementing that resolution here.
+    from hijack.core.pr_archaeology import fetch_pr_decisions
+    from hijack.core.pr_decisions import _parse_github_target
     try:
-        pr_decisions = extract_pr_decisions(
-            target=target or repo_root.as_posix(),
-            repo_root=repo_root,
-            cache_dir=pr_cache_dir,
-            refresh=refresh_prs,
-        )
+        parsed_gh = _parse_github_target(target or repo_root.as_posix(), repo_root)
+        if parsed_gh is not None:
+            owner, gh_repo = parsed_gh
+            pr_decisions = fetch_pr_decisions(f"https://github.com/{owner}/{gh_repo}")
+        else:
+            pr_decisions = None
     except Exception as e:
         logger.warning("PR mining failed: %s — continuing without PR decisions", e)
         pr_decisions = None

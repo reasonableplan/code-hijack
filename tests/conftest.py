@@ -103,16 +103,30 @@ def senior_wisdom_with_git(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(autouse=True)
 def _block_pr_mining(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Block Phase A1 PR mining by default in every test.
+    """Block PR mining by default in every test.
 
-    Why: PR mining shells out to `gh` and `git remote get-url origin`. In CI
-    or unauthenticated dev environments, those calls either fail or trigger
-    Python 3.13 reader-thread exceptions that surface as
-    PytestUnhandledThreadExceptionWarning. Tests that exercise PR mining
-    explicitly use the injectable `gh_runner` parameter or call
-    `_parse_github_target` directly — neither needs this guard.
+    Why: PR mining shells out to `gh`. In CI or unauthenticated dev
+    environments, those calls either fail or trigger Python 3.13 reader-thread
+    exceptions that surface as PytestUnhandledThreadExceptionWarning. Tests
+    that exercise PR mining explicitly use the injectable `gh_runner`
+    parameter, mock subprocess directly, or import `extract_pr_decisions` /
+    `fetch_pr_decisions` at module scope before this per-test patch applies —
+    none of those need this guard.
+
+    Two entry points are patched because analyzer.py's `run_full_analysis`
+    resolves a local clone target to its GitHub remote (via
+    `pr_decisions._parse_github_target` — harmless local `git remote` call,
+    left unmocked) and then calls `pr_archaeology.fetch_pr_decisions` (0.3.0,
+    the live pipeline's PR source) with the resolved URL; `pr_decisions.
+    extract_pr_decisions` (Phase A1) is retained standalone and unused by the
+    pipeline but still worth blocking for anything that calls it directly.
     """
     monkeypatch.setattr(
         "hijack.core.pr_decisions.extract_pr_decisions",
         lambda *args, **kwargs: None,
+    )
+    from hijack.core.pr_archaeology import PRDecisions as _PRDecisions
+    monkeypatch.setattr(
+        "hijack.core.pr_archaeology.fetch_pr_decisions",
+        lambda *args, **kwargs: _PRDecisions(items_scanned=0, patterns=[], decisions=[]),
     )

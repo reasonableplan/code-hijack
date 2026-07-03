@@ -401,6 +401,7 @@ from hijack.core.models import AnalysisRule, CategoryResult, ForesightCard, Sess
 from hijack.core.analyzer import assign_rationale_tier, normalize_rationale_tier
 from hijack.core.exemplars import select_exemplars
 from hijack.core.style_fingerprint import extract_style
+from hijack.core.pr_archaeology import PRDecisions
 from hijack.core.generator import write_output
 from hijack.core.session import create_session_id
 
@@ -430,17 +431,17 @@ for f in files:
 
 valid_files = {f.path.as_posix() for f in files}
 
-# PR ref 진실 풀 — step 1 이 저장한 pr_decisions 에서 복원 (kind='pr' evidence 검증)
+# PR decision-trail — step 1 이 저장한 pr_decisions 를 복원.
+# session.pr_decisions 에 실어 세션에 영구 저장(measurement/diff/regen 이 실데이터로 동작),
+# 동시에 kind='pr' evidence 검증용 valid_pr_refs 풀을 파생한다.
+pr_decisions = None
 valid_pr_refs = None
 step1_path = Path('/tmp/step1_output.json')
 if step1_path.exists():
     pd_raw = json.loads(step1_path.read_text(encoding='utf-8')).get('pr_decisions')
     if pd_raw:
+        pr_decisions = PRDecisions.from_json(pd_raw)
         valid_pr_refs = {d['ref'].casefold() for d in pd_raw.get('decisions', []) if d.get('ref')} or None
-
-# 주의: session.pr_decisions 필드에 pr_archaeology 객체를 넣지 마라 —
-# SessionResult.from_json / generator 렌더러가 Phase-A1 (pr_decisions.py) 스키마를
-# 기대하는 알려진 부채가 있다. PR 검증은 위 valid_pr_refs 로만 주입한다.
 
 def _tiered(raw_rules):
     rules = [AnalysisRule.from_json(r) for r in raw_rules]  # (**r) 금지 — evidence dict 가 Evidence 로 변환 안 됨
@@ -482,6 +483,7 @@ session = SessionResult(
     repo_doc_paths=[d.path for d in pp.repo_docs],
     exemplars=select_exemplars(files, repo_root=root),   # Python 레포만 결과 나옴
     style_fingerprints=extract_style(files),              # 레이어별 negative-space/치환 통계
+    pr_decisions=pr_decisions,                            # 0.3.0 decision-trail — 세션에 영구 저장
     foresight_cards=foresight_cards,
     repo_nature=pp.repo_nature,
 )
