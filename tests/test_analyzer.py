@@ -15,7 +15,7 @@ from hijack.core.analyzer import (
     run_full_analysis,
 )
 from hijack.core.fetcher import SourceFile
-from hijack.core.models import AnalysisRule
+from hijack.core.models import AnalysisRule, Evidence
 from hijack.core.preprocessor import (
     _CATEGORY_ROLES,
     build_preprocess_result,
@@ -593,6 +593,57 @@ def _make_rule(priority: str, rationale_tier: str) -> AnalysisRule:
         layer="backend",
         rationale_tier=rationale_tier,
     )
+
+
+class TestAssignRationaleTier:
+    """assign_rationale_tier — classify_rule 결과를 tier 로 반영하는 누락됐던 단계."""
+
+    def _rule_with_evidence(self, sha: str) -> AnalysisRule:
+        return AnalysisRule(
+            rule="evidence-backed rule",
+            priority="MUST",
+            confidence="high",
+            ref_files=["src/a.py:10"],
+            good_example="x = 1",
+            bad_example="x = 2",
+            reason="Because commit says so.",
+            layer="backend",
+            evidence=[
+                Evidence(kind="commit", ref=sha, headline="fix: thing", quote="body"),
+            ],
+        )
+
+    def test_valid_evidence_becomes_cited_and_keeps_must(self) -> None:
+        from hijack.core.analyzer import assign_rationale_tier
+
+        rule = self._rule_with_evidence("abc1234")
+        tiered = assign_rationale_tier([rule], valid_shas={"abc1234def5678"})
+        assert tiered[0].rationale_tier == "cited"
+        result = normalize_rationale_tier(tiered)
+        assert result[0].priority == "MUST"
+
+    def test_no_evidence_stays_speculative_and_demoted(self) -> None:
+        from hijack.core.analyzer import assign_rationale_tier
+
+        rule = _make_rule("MUST", "speculative")
+        tiered = assign_rationale_tier([rule], valid_shas={"abc1234def5678"})
+        assert tiered[0].rationale_tier == "speculative"
+        result = normalize_rationale_tier(tiered)
+        assert result[0].priority == "SHOULD"
+
+    def test_fake_sha_stays_speculative(self) -> None:
+        from hijack.core.analyzer import assign_rationale_tier
+
+        rule = self._rule_with_evidence("deadbeef")
+        tiered = assign_rationale_tier([rule], valid_shas={"abc1234def5678"})
+        assert tiered[0].rationale_tier == "speculative"
+
+    def test_original_not_mutated(self) -> None:
+        from hijack.core.analyzer import assign_rationale_tier
+
+        rule = self._rule_with_evidence("abc1234")
+        assign_rationale_tier([rule], valid_shas={"abc1234def5678"})
+        assert rule.rationale_tier == "speculative"
 
 
 class TestNormalizeRationaleTier:

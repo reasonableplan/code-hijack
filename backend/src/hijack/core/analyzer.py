@@ -134,10 +134,41 @@ def _rules_from_parsed(
     return rules
 
 
+def assign_rationale_tier(
+    rules: list[AnalysisRule],
+    *,
+    valid_shas: set[str] | None = None,
+    valid_doc_paths: set[str] | None = None,
+    valid_file_paths: set[str] | None = None,
+) -> list[AnalysisRule]:
+    """classify_rule 결과로 rationale_tier 를 채운다.
+
+    T-030 의 의도("cited 만 MUST 유지")를 실제로 구현하는 누락됐던 단계.
+    이 단계 없이 normalize_rationale_tier 를 부르면 모든 규칙이 default
+    "speculative" 라서 evidence 유무와 무관하게 전체 MUST 가 강등된다.
+    원본 객체는 수정하지 않는다.
+    """
+    from hijack.core.evidence import classify_rule
+
+    result = []
+    for rule in rules:
+        kind = classify_rule(
+            rule,
+            valid_shas=valid_shas,
+            valid_doc_paths=valid_doc_paths,
+            valid_file_paths=valid_file_paths,
+        )
+        tier = "cited" if kind == "cited" else "speculative"
+        result.append(dataclasses.replace(rule, rationale_tier=tier))
+    return result
+
+
 def normalize_rationale_tier(rules: list[AnalysisRule]) -> list[AnalysisRule]:
     """corroborated/speculative MUST 규칙을 SHOULD 로 강등한다.
 
-    cited tier 만 MUST 를 유지할 수 있다. 원본 객체는 수정하지 않는다.
+    cited tier 만 MUST 를 유지할 수 있다. rationale_tier 는 먼저
+    assign_rationale_tier 로 채워져 있어야 한다 (안 채우면 전부 강등됨).
+    원본 객체는 수정하지 않는다.
     """
     result = []
     for rule in rules:
@@ -291,6 +322,12 @@ async def _analyze_category(
         valid_shas=valid_shas,
         valid_doc_paths=valid_doc_paths,
         sha_to_date=sha_to_date,
+    )
+    rules = assign_rationale_tier(
+        rules,
+        valid_shas=valid_shas or None,
+        valid_doc_paths=valid_doc_paths or None,
+        valid_file_paths={f.path.as_posix() for f in selected} or None,
     )
     rules = normalize_rationale_tier(rules)
     return CategoryResult(
