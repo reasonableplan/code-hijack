@@ -236,7 +236,7 @@ step 1 의 `commit_decisions` / `pr_decisions` / `satd_items` 중 하나라도 `
 - `ref` (`"PR#123"` / `"issue#456"`), `title`, `date`, `body_excerpt` (≤800자), `matched_patterns`, `maintainer_comment` (거절 코멘트 우선 선택됨), `intent_kind` (`"rejection"` | `"incident"` | `"preference"`), `diff_excerpt` — 거절/사고 PR 의 실제 diff 발췌 (rejection/incident 만, 빈 문자열 가능)
 
 **`satd_items.items` 구조** (각 entry):
-- `ref` (`"src/foo.py:42"` — 인용 시 이 문자열 그대로), `tag` (`"TODO"` | `"FIXME"` | `"XXX"` | `"HACK"`), `text` (주석 본문 ≤200자)
+- `ref` (`"src/foo.py:42"` — 인용 시 이 문자열 그대로), `tag` (`"TODO"` | `"FIXME"` | `"XXX"` | `"HACK"`), `text` (주석 본문 ≤200자), `context` (주변 컨텍스트: 연속 주석 + 직후 코드, ≤700자 — 규칙 매칭 판단용. quote 는 여전히 text 또는 context 의 주석 부분에서 발췌)
 
 **규칙 별 evidence 채우는 절차**:
 
@@ -247,7 +247,7 @@ step 1 의 `commit_decisions` / `pr_decisions` / `satd_items` 중 하나라도 `
 
    - commit 소스: `{"kind": "commit", "ref": "<sha[:7]>", "headline": "<subject>", "quote": "<body_excerpt ≤500자>", "intent_kind": ...}`
    - PR/issue 소스: `{"kind": "pr", "ref": "<PR#123 그대로>", "headline": "<title>", "quote": "<body_excerpt 또는 maintainer_comment ≤500자>", "intent_kind": "<intent_kind 그대로>"}`
-   - SATD 소스: `{"kind": "comment", "ref": "<path:line 그대로>", "headline": "<tag>", "quote": "<text ≤500자>"}` — `ref` 는 `satd_items` 의 값을 **그대로** 써라 (지어내면 fake_citation 으로 강등됨).
+   - SATD 소스: `{"kind": "comment", "ref": "<path:line 그대로>", "headline": "<tag>", "quote": "<text 또는 context 의 주석 부분에서 발췌, ≤500자>"}` — `ref` 는 `satd_items` 의 값을 **그대로** 써라 (지어내면 fake_citation 으로 강등됨).
 
 4.5. (file 매칭 실패 시 fallback — **SEMANTIC INTENT 매칭**) step 2 의 file_paths 교집합이 비었으면:
      `commit_decisions.commits` 의 `subject + body_excerpt` 를 직접 읽고, **시니어가 기록한 결정의 WHY 가 이 rule 의 reason 과 같은 의도**인 commit 을 1개 고른다. 같은 파일을 안 건드렸어도 OK. `pr_decisions.decisions` 도 동일하게 semantic intent 매칭 가능.

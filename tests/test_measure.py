@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -18,9 +19,11 @@ from hijack.core.measure import (
 from hijack.core.models import (
     AnalysisRule,
     CategoryResult,
+    Evidence,
     ForesightCard,
     SessionResult,
 )
+from hijack.core.satd import SatdItem, SatdItems
 
 # ---------------------------------------------------------------------------
 # Fixture helpers
@@ -31,6 +34,7 @@ def _make_rule(
     priority: str = "MUST",
     rationale_tier: str = "cited",
     layer: str = "shared",
+    evidence: list[Evidence] | None = None,
 ) -> AnalysisRule:
     return AnalysisRule(
         rule=rule,
@@ -42,6 +46,7 @@ def _make_rule(
         reason="",
         layer=layer,
         rationale_tier=rationale_tier,
+        evidence=evidence or [],
     )
 
 
@@ -57,7 +62,11 @@ def _make_category(name: str, rules: list[AnalysisRule]) -> CategoryResult:
     )
 
 
-def _make_session(session_id: str, categories: list[CategoryResult]) -> SessionResult:
+def _make_session(
+    session_id: str,
+    categories: list[CategoryResult],
+    satd_items: Any | None = None,
+) -> SessionResult:
     return SessionResult(
         session_id=session_id,
         target="https://github.com/test/repo",
@@ -67,6 +76,7 @@ def _make_session(session_id: str, categories: list[CategoryResult]) -> SessionR
         categories=categories,
         analysis_duration_seconds=0.0,
         project_structure="",
+        satd_items=satd_items,
     )
 
 
@@ -83,6 +93,10 @@ class TestMeasurementResultSerialization:
             tier_distribution={"cited": 2, "corroborated": 1, "speculative": 1},
             intent_kind_distribution={"rejection": 0, "incident": 0, "preference": 0},
             foresight_scores=[{"hypothesis": "H1", "verdict": "confirmed"}],
+            satd_supplied_count=4,
+            comment_cited_rule_count=2,
+            comment_cited_ref_count=3,
+            satd_citation_ratio=0.75,
         )
         data = m.to_json()
         restored = MeasurementResult.from_json(data)
@@ -92,6 +106,10 @@ class TestMeasurementResultSerialization:
         assert restored.tier_distribution == m.tier_distribution
         assert restored.intent_kind_distribution == m.intent_kind_distribution
         assert restored.foresight_scores == m.foresight_scores
+        assert restored.satd_supplied_count == m.satd_supplied_count
+        assert restored.comment_cited_rule_count == m.comment_cited_rule_count
+        assert restored.comment_cited_ref_count == m.comment_cited_ref_count
+        assert restored.satd_citation_ratio == m.satd_citation_ratio
 
     def test_to_json_keys(self) -> None:
         m = MeasurementResult(
@@ -106,7 +124,25 @@ class TestMeasurementResultSerialization:
         assert set(data.keys()) == {
             "session_id", "cited_ratio", "must_ratio",
             "tier_distribution", "intent_kind_distribution", "foresight_scores",
+            "satd_supplied_count", "comment_cited_rule_count",
+            "comment_cited_ref_count", "satd_citation_ratio",
         }
+
+    def test_from_json_backward_compat_missing_satd_fields(self) -> None:
+        # Pre-W2-strengthening measurement.json lacks the new keys.
+        data = {
+            "session_id": "old",
+            "cited_ratio": 0.5,
+            "must_ratio": 0.5,
+            "tier_distribution": {},
+            "intent_kind_distribution": {},
+            "foresight_scores": [],
+        }
+        restored = MeasurementResult.from_json(data)
+        assert restored.satd_supplied_count == 0
+        assert restored.comment_cited_rule_count == 0
+        assert restored.comment_cited_ref_count == 0
+        assert restored.satd_citation_ratio == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +250,73 @@ class TestCalcSessionMetrics:
 
 
 # ---------------------------------------------------------------------------
+# calc_session_metrics — SATD citation metrics (W2 strengthening)
+# ---------------------------------------------------------------------------
+
+class TestSatdCitationMetrics:
+    def _satd(self, refs: list[str]) -> SatdItems:
+        return SatdItems(items=[SatdItem(ref=r, tag="TODO", text="") for r in refs])
+
+    def test_no_satd_items_gives_zero_supplied(self) -> None:
+        session = _make_session("s10", [])
+        m = calc_session_metrics(session)
+        assert m.satd_supplied_count == 0
+        assert m.satd_citation_ratio == 0.0
+
+    def test_supplied_count_matches_satd_items(self) -> None:
+        satd = self._satd(["a.py:1", "a.py:2", "b.py:3"])
+        session = _make_session("s11", [], satd_items=satd)
+        m = calc_session_metrics(session)
+        assert m.satd_supplied_count == 3
+
+    def test_rules_with_comment_evidence_counted(self) -> None:
+        satd = self._satd(["a.py:1", "a.py:2"])
+        rules = [
+            _make_rule("R1", evidence=[
+                Evidence(kind="comment", ref="a.py:1", headline="TODO", quote="fix"),
+            ]),
+            _make_rule("R2", evidence=[
+                Evidence(kind="commit", ref="abc123", headline="h", quote="q"),
+            ]),
+        ]
+        session = _make_session("s12", [_make_category("c", rules)], satd_items=satd)
+        m = calc_session_metrics(session)
+        assert m.comment_cited_rule_count == 1
+        assert m.comment_cited_ref_count == 1
+        assert m.satd_citation_ratio == pytest.approx(0.5)
+
+    def test_distinct_refs_counted_once(self) -> None:
+        satd = self._satd(["a.py:1", "a.py:2"])
+        rules = [
+            _make_rule("R1", evidence=[
+                Evidence(kind="comment", ref="a.py:1", headline="TODO", quote="fix"),
+            ]),
+            _make_rule("R2", evidence=[
+                Evidence(kind="comment", ref="a.py:1", headline="TODO", quote="fix again"),
+            ]),
+        ]
+        session = _make_session("s13", [_make_category("c", rules)], satd_items=satd)
+        m = calc_session_metrics(session)
+        assert m.comment_cited_rule_count == 2
+        assert m.comment_cited_ref_count == 1
+
+    def test_dict_satd_items_duck_typed(self) -> None:
+        satd_dict = {"items": [{"ref": "a.py:1", "tag": "TODO", "text": ""}]}
+        session = _make_session("s14", [], satd_items=satd_dict)
+        m = calc_session_metrics(session)
+        assert m.satd_supplied_count == 1
+
+    def test_no_evidence_rules_give_zero_cited(self) -> None:
+        satd = self._satd(["a.py:1"])
+        rules = [_make_rule("R1", evidence=[])]
+        session = _make_session("s15", [_make_category("c", rules)], satd_items=satd)
+        m = calc_session_metrics(session)
+        assert m.comment_cited_rule_count == 0
+        assert m.comment_cited_ref_count == 0
+        assert m.satd_citation_ratio == 0.0
+
+
+# ---------------------------------------------------------------------------
 # diff_sessions — pure function tests
 # ---------------------------------------------------------------------------
 
@@ -268,6 +371,14 @@ class TestDiffSessions:
         result = diff_sessions(m1, m2)
         assert result["session_id_before"] == "session-a"
         assert result["session_id_after"] == "session-b"
+
+    def test_satd_citation_ratio_delta(self) -> None:
+        m1 = self._make_m()
+        m1.satd_citation_ratio = 0.2
+        m2 = self._make_m()
+        m2.satd_citation_ratio = 0.6
+        result = diff_sessions(m1, m2)
+        assert result["satd_citation_ratio_delta"] == pytest.approx(0.4)
 
 
 # ---------------------------------------------------------------------------
@@ -457,3 +568,20 @@ class TestFormatMeasurementSummary:
         result = format_measurement_summary(m)
         # Should mention percentages or ratios
         assert "75" in result or "0.75" in result
+
+    def test_includes_satd_citation_ratio(self) -> None:
+        m = MeasurementResult(
+            session_id="s",
+            cited_ratio=0.0,
+            must_ratio=0.0,
+            tier_distribution={"cited": 0, "corroborated": 0, "speculative": 0},
+            intent_kind_distribution={"rejection": 0, "incident": 0, "preference": 0},
+            foresight_scores=[],
+            satd_supplied_count=4,
+            comment_cited_rule_count=2,
+            comment_cited_ref_count=2,
+            satd_citation_ratio=0.5,
+        )
+        result = format_measurement_summary(m)
+        assert "satd_citation_ratio" in result
+        assert "2/4" in result

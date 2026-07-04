@@ -218,6 +218,7 @@ def measure_cmd(session1: str, session2: str | None) -> None:
         click.echo("intent_kind_distribution_delta:")
         for kind, count in delta["intent_kind_distribution_delta"].items():
             click.echo(f"  {kind}: {count:+d}")
+        click.echo(f"satd_citation_ratio_delta: {delta['satd_citation_ratio_delta']:+.4f}")
 
 
 @cli.command("harness-export")

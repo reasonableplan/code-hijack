@@ -24,6 +24,14 @@ class MeasurementResult:
     tier_distribution: dict[str, int]
     intent_kind_distribution: dict[str, int]
     foresight_scores: list[dict[str, str]]
+    # SATD comment-citation metrics (W2 strengthening). satd_supplied_count is
+    # how many SATD items the miner surfaced; comment_cited_rule_count /
+    # comment_cited_ref_count count how many of those were actually cited by
+    # rules as kind="comment" evidence; satd_citation_ratio is the yield.
+    satd_supplied_count: int = 0
+    comment_cited_rule_count: int = 0
+    comment_cited_ref_count: int = 0
+    satd_citation_ratio: float = 0.0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -33,6 +41,10 @@ class MeasurementResult:
             "tier_distribution": self.tier_distribution,
             "intent_kind_distribution": self.intent_kind_distribution,
             "foresight_scores": self.foresight_scores,
+            "satd_supplied_count": self.satd_supplied_count,
+            "comment_cited_rule_count": self.comment_cited_rule_count,
+            "comment_cited_ref_count": self.comment_cited_ref_count,
+            "satd_citation_ratio": self.satd_citation_ratio,
         }
 
     @classmethod
@@ -44,6 +56,10 @@ class MeasurementResult:
             tier_distribution=data["tier_distribution"],
             intent_kind_distribution=data["intent_kind_distribution"],
             foresight_scores=data["foresight_scores"],
+            satd_supplied_count=data.get("satd_supplied_count", 0),
+            comment_cited_rule_count=data.get("comment_cited_rule_count", 0),
+            comment_cited_ref_count=data.get("comment_cited_ref_count", 0),
+            satd_citation_ratio=data.get("satd_citation_ratio", 0.0),
         )
 
 
@@ -86,6 +102,23 @@ def calc_session_metrics(
             if kind in intent_kind_distribution:
                 intent_kind_distribution[kind] += 1
 
+    satd_supplied_count = _satd_supplied_count(session)
+    comment_cited_rule_count = 0
+    comment_refs: set[str] = set()
+    for r in rules:
+        rule_has_comment = False
+        for e in r.evidence:
+            if e.kind == "comment":
+                rule_has_comment = True
+                if e.ref:
+                    comment_refs.add(e.ref)
+        if rule_has_comment:
+            comment_cited_rule_count += 1
+    comment_cited_ref_count = len(comment_refs)
+    satd_citation_ratio = (
+        comment_cited_ref_count / satd_supplied_count if satd_supplied_count > 0 else 0.0
+    )
+
     return MeasurementResult(
         session_id=session.session_id,
         cited_ratio=cited_ratio,
@@ -93,7 +126,26 @@ def calc_session_metrics(
         tier_distribution=tier_distribution,
         intent_kind_distribution=intent_kind_distribution,
         foresight_scores=[],
+        satd_supplied_count=satd_supplied_count,
+        comment_cited_rule_count=comment_cited_rule_count,
+        comment_cited_ref_count=comment_cited_ref_count,
+        satd_citation_ratio=satd_citation_ratio,
     )
+
+
+def _satd_supplied_count(session: SessionResult) -> int:
+    """Count of session.satd_items entries — 0 when absent.
+
+    `session.satd_items` is duck-typed: a satd.SatdItems dataclass (`.items`)
+    or a raw dict from session.json (`["items"]`), same defensive pattern as
+    evidence._valid_comment_refs_from_session.
+    """
+    satd_items = session.satd_items
+    if not satd_items:
+        return 0
+    if isinstance(satd_items, dict):
+        return len(satd_items.get("items", []))
+    return len(getattr(satd_items, "items", []))
 
 
 def diff_sessions(
@@ -119,6 +171,7 @@ def diff_sessions(
         "must_ratio_delta": round(m2.must_ratio - m1.must_ratio, 10),
         "tier_distribution_delta": tier_delta,
         "intent_kind_distribution_delta": intent_delta,
+        "satd_citation_ratio_delta": round(m2.satd_citation_ratio - m1.satd_citation_ratio, 10),
     }
 
 
@@ -191,6 +244,11 @@ def format_measurement_summary(result: MeasurementResult) -> str:
     lines.append("  intent_kind distribution:")
     for kind, count in result.intent_kind_distribution.items():
         lines.append(f"    {kind}: {count}")
+    lines.append(
+        f"  satd_citation_ratio: {result.satd_citation_ratio:.1%} "
+        f"({result.comment_cited_ref_count}/{result.satd_supplied_count} refs, "
+        f"{result.comment_cited_rule_count} rules)"
+    )
     if result.foresight_scores:
         lines.append(f"  foresight scores: {len(result.foresight_scores)} cards")
         for score in result.foresight_scores:

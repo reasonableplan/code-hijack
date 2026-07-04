@@ -3,7 +3,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from hijack.core.satd import _SATD_TOP_N, SatdItems, extract_satd
+from hijack.core.satd import (
+    _CONTEXT_CHAR_CAP,
+    _CONTEXT_CODE_LINES,
+    _CONTEXT_COMMENT_LINES,
+    _SATD_TOP_N,
+    SatdItems,
+    extract_satd,
+)
 
 
 class _File:
@@ -56,3 +63,76 @@ class TestExtractSatd:
         assert restored.items[0].ref == "src/foo.py:1"
         assert restored.items[0].tag == "FIXME"
         assert restored.has_signal is True
+
+
+class TestSatdContext:
+    def test_includes_tag_line(self) -> None:
+        items = extract_satd([_File("a.py", "# TODO: fix this\n")]).items
+        assert items[0].context.startswith("# TODO: fix this")
+
+    def test_collects_continuation_comments(self) -> None:
+        content = (
+            "# TODO: fix this\n"
+            "# it breaks under load\n"
+            "# see issue #42\n"
+            "x = 1\n"
+        )
+        items = extract_satd([_File("a.py", content)]).items
+        assert "# it breaks under load" in items[0].context
+        assert "# see issue #42" in items[0].context
+        assert "x = 1" in items[0].context
+
+    def test_continuation_capped_at_four_lines(self) -> None:
+        # 10 candidate comment-continuation lines available; continuation caps
+        # at 4, then the code-lines slot (cap 5) picks up the next 5 — so the
+        # 10th ("comment 9") falls outside both caps and is excluded entirely.
+        content = "# TODO: start\n" + "".join(f"# comment {i}\n" for i in range(10))
+        items = extract_satd([_File("a.py", content)]).items
+        context_lines = items[0].context.splitlines()
+        assert len(context_lines) == 1 + _CONTEXT_COMMENT_LINES + _CONTEXT_CODE_LINES
+        assert "# comment 9" not in items[0].context
+
+    def test_new_satd_tag_stops_continuation_and_becomes_own_item(self) -> None:
+        content = (
+            "# TODO: first\n"
+            "# still about first\n"
+            "# FIXME: second\n"
+            "code_after_second()\n"
+        )
+        items = extract_satd([_File("a.py", content)]).items
+        assert len(items) == 2
+        assert items[0].tag == "TODO"
+        assert "still about first" in items[0].context
+        assert "FIXME" not in items[0].context
+        assert items[1].tag == "FIXME"
+        assert items[1].ref == "a.py:3"
+        assert "code_after_second()" in items[1].context
+
+    def test_code_lines_capped_at_five(self) -> None:
+        content = "# TODO: x\n" + "".join(f"line{i} = {i}\n" for i in range(10))
+        items = extract_satd([_File("a.py", content)]).items
+        code_lines = [
+            line for line in items[0].context.splitlines() if line.startswith("line")
+        ]
+        assert len(code_lines) == _CONTEXT_CODE_LINES
+
+    def test_trailing_blank_code_lines_removed(self) -> None:
+        content = "# TODO: x\ncode_line = 1\n\n\n"
+        items = extract_satd([_File("a.py", content)]).items
+        assert items[0].context.splitlines()[-1] == "code_line = 1"
+
+    def test_end_of_file_boundary(self) -> None:
+        # Tag on the last line — no continuation comments, no code lines available.
+        items = extract_satd([_File("a.py", "x = 1\n# TODO: last line\n")]).items
+        assert items[0].context == "# TODO: last line"
+
+    def test_char_cap(self) -> None:
+        long_comment = "# " + ("word " * 300)
+        content = "# TODO: start\n" + long_comment + "\ncode()\n"
+        items = extract_satd([_File("a.py", content)]).items
+        assert len(items[0].context) <= _CONTEXT_CHAR_CAP
+
+    def test_from_json_backward_compat_missing_context(self) -> None:
+        data = {"items": [{"ref": "a.py:1", "tag": "TODO", "text": "old session"}]}
+        restored = SatdItems.from_json(data)
+        assert restored.items[0].context == ""
