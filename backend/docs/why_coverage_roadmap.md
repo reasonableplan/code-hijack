@@ -41,8 +41,16 @@
 
 **구현 완료 (2026-07-03, commit 1e2fae6)**: `fetch_merged_pr_decisions` + `merge_pr_decisions` + `_build_merged_pr_decision`, analyzer 병합. tests 1082.
 - **부수 발견·근본픽스 `_strip_pr_template`**: GitHub PR 템플릿 체크리스트(`- [x] ... I tried ...`)가 **모든** PR 에서 `tried` 패턴 오매칭 → 머지+거절 두 경로 정밀도 결함이었음. 매칭 전 제거. (거절-PR 마이닝의 기존 노이즈도 이걸로 감소.)
-- **소스 검증 (라이브 gh)**: raw 최근 커밋 스모크는 7건 전부 docs-grammar 템플릿 노이즈 → strip 후 0. **결정-필터 커밋 subject**(파이프라인 실입력 근사)로는 머지 PR 3건 verbatim rationale: PR#3179 `to avoid O(n²)`(FormParser perf, 메모리 789b9269 규칙과 일치), PR#2648 `rather than`, PR#2149 `instead of`. → **소스는 진짜 WHY 를 공급함이 실증**. 단 history-anchored ratio 실개선치는 skill-mode 풀 재분석(LLM 규칙생성+매칭) 필요 — 별도 단계.
-- **정직 주의**: starlette 머지 PR body 는 대체로 template+짧은 summary. 결정-필터 없이는 수율 ~0. W1 수율은 레포의 PR-description 풍부도에 강하게 의존 (Django/Rust 류에서 더 높을 가능성, 미검증).
+- **소스 검증 (라이브 gh)**: raw 최근 커밋 스모크는 7건 전부 docs-grammar 템플릿 노이즈 → strip 후 0. **결정-필터 커밋 subject**(파이프라인 실입력 근사)로는 머지 PR 3건 verbatim rationale: PR#3179 `to avoid O(n²)`(FormParser perf, 메모리 789b9269 규칙과 일치), PR#2648 `rather than`, PR#2149 `instead of`.
+
+**⚠️ 정정 (2026-07-04): W1 은 1e2fae6 시점에 파이프라인에서 실동작하지 않았다.** 위 "소스 검증" 은 `fetch_merged_pr_decisions` 를 **직접 호출**한 결과였고, analyzer 경로는 3중 결함으로 한 번도 W1 을 돌리지 못했다:
+1. **crash [verified]**: `analyzer.py` 가 `[c.subject for c in commit_decisions]` 로 `CommitDecisions`(`__iter__` 없음)를 순회 → `TypeError` 매 호출 발생 + 아래 `except` 가 삼킴. `.commits` 누락.
+2. **coupling**: PR 번호를 결정-커밋 subject 에서만 소싱 → squash-merge 레포(커밋 얇음)에서 정확히 가장 필요할 때 병목.
+3. **skill 미배선**: `fetch_merged_pr_decisions` 가 CLI(analyzer)에만, SKILL.md step1 엔 없었음.
+
+**실수정 완료 (2026-07-04)**: 신규 순수 헬퍼 `merged_pr_candidate_subjects(files, commit_decisions)` — 결정 subject 먼저, 그다음 **모든** 커밋 subject. body-level `_match_patterns` 필터가 non-decision PR 제거. analyzer 호출부 교체 + SKILL.md step1 배선. tests 1097→1101 (+4). **E2E 라이브 검증**: starlette OLD 7 = NEW 7 (decision-first 라 무회귀), typer(squash-merge, commit-mining 2개만) OLD 1 → NEW 2.
+- **정직 주의**: W1 수율은 레포 PR-description 풍부도 의존. typer 이득이 작은 건(1→2) docs/CI PR 위주라 rationale-rich 머지 PR 이 희소하기 때문 — typer 의 실 fuel 은 W2(SATD 26). starlette 는 커밋 본문이 이미 두툼해 W1 이 대부분 commit-mining 과 중복. **W1 이 순-신규 공급을 크게 내는 레포는 아직 미검증** (얇은 커밋 + 풍부한 PR + 낮은 SATD 조합 필요).
+- **남은 튜닝(후보)**: `_MAX_MERGED_PR_FETCHES=20` 캡 + 비결정 slot 의 file-iteration 순서 → 큰 레포에서 rationale-rich PR 이 캡 밖일 수 있음. recency 정렬 또는 캡 상향은 별도.
 
 ### W2 — SATD 주석 마이닝 (저비용 인라인 WHY)
 
@@ -95,24 +103,36 @@
 
 ## 4. 측정 계획
 
-모든 주장 은 measurement.json 수치로만:
+**⚠️ 개정 (2026-07-04): history-anchored ratio 를 주 지표에서 폐기한다.** 두 가지가 실측으로 드러남:
+1. **baseline 57% 복구 불가**: 저장된 starlette 세션 6개(v7/v8/v10/v11/v12/foresight) 전부 cited 규칙 **100% history-anchored** (code-anchored=0). 57%/43% 는 2026-07-03 transient/gitignored 세션 값으로 비교 대상이 없음.
+2. **지표가 confound**: `_cited_anchor` 는 `rule.evidence` 가 비어있지 않으면 곧 `cited_history` 로 분류. 즉 지표는 "W1/W2 가 새 인용거리를 **공급**했나"가 아니라 "skill 세션 LLM 이 evidence 배열을 **채웠나**"를 잰다. 작성 성실도가 지표를 지배 → W1/W2 소스 효과를 분리 못 함.
 
-| 지표 | baseline (starlette 2026-07-03) | 0.4.0 목표 |
+**대체 주 지표: 결정론적 net-new citable 공급** (LLM 무관, 재현 가능). `scratchpad/supply_measure.py` 방식 — 소스별 citable 근거 단위를 세고, W1/W2 가 commit-mining 대비 **순-신규**로 공급하는 양을 측정.
+
+| 지표 | 성격 | 판정 기준 |
 |---|---|---|
-| history-anchored ratio | 57% (4/7) | **75%+** |
-| implicit_uncited_count (W3 후) | 측정 예정 | 감소 추세 |
-| intent_kind 분포 | rejection 19 / incident 5 / pref 0 | preference 도 확보 (머지 PR 이 공급) |
-| fake_citation | 0 | 0 유지 |
-| exemplar verbatim ratio (W4a) | 측정 예정 | 기록만 (목표 없음, 관찰 지표) |
+| **소스별 공급량** (commit / W1 머지PR / W2 SATD / 거절PR) | 결정론, 레포별 | W1/W2 순-신규 > 0 이면 유효 |
+| fake_citation | 결정론 | 0 유지 |
+| exemplar verbatim ratio (W4a) | 관찰 지표 | 기록만 |
+| history-anchored ratio | **참고용 강등** | LLM 성실도 confound — 추이만 관찰, 목표 아님 |
 
-재분석 프로토콜: 같은 레포(starlette) + skill 모드, W1 전/후 각 1회, `code-hijack measure` diff.
+측정 실적 (2026-07-04):
+
+| 소스 | starlette | typer |
+|---|---|---|
+| commit-mining 결정커밋 | 18 (본문 두툼) | 2 (squash 라 얇음) |
+| W1 머지PR substantive | 7 (대부분 commit 중복) | 1→2 (수정 후) |
+| W2 SATD | 1 | **26** |
+| 거절/incident PR | 9 | 4 |
+
+프로토콜: 레포마다 `supply_measure.py` 1회 (네트워크, bounded). skill-mode 풀 재분석은 downstream A/B (규칙 주입 효과 실측, 2026-07-04) 용도로만 — 공급 측정에는 불필요(confound).
 
 ## 5. Open Questions
 
 1. **W1 fetch 예산**: commit_decisions 만 enrich 하면 통상 10~30 호출. rate-limit 环경(무인증 gh)에서의 graceful skip 은 기존 패턴 재사용 — 확인만.
 2. **W2 evidence kind**: `doc` 재사용 초안에 대한 사용자 확인 필요 (데이터 모델 결정, §3).
 3. **W3 의 explicit 판정 주체**: LLM 태깅으로 시작 (결정론 분류기는 과설계 위험). 태깅 신뢰도 낮으면 AST 기반 재검토.
-4. **abort 기준**: W1+W2 후 history-anchored 가 +10%p 미만이면 "소스 확장" 레버 소진으로 판정하고 D(본인 프로젝트 dogfooding)/언어 확장으로 전환.
+4. **abort 기준 (2026-07-04 판정)**: 원안("+10%p history-anchored 미만이면 소진")은 지표 폐기로 무효. 결정론 공급 측정 기반 재판정 = **소스 확장 소진 아님**. 근거: (a) W2 는 SATD-rich 레포(typer 26 vs starlette 1)에서 실 fuel — 유효, skill 배선 완료. (b) W1 은 3중 결함(crash/coupling/skill-미배선)으로 실동작 못 하던 것을 2026-07-04 수정 — 순-신규 공급이 큰 레포는 미검증이나 인프라는 이제 정상. **다음 레버는 소스 확장이 아니라 (i) SATD-rich app 레포에서 수정된 W1+W2 통합 검증, (ii) downstream A/B(규칙 주입 효과) — 도구 가치의 진짜 축이 "WHY 공급"임이 A/B 로 실증됨.**
 
 ## 6. 참고
 
