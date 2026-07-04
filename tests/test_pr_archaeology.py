@@ -7,25 +7,19 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from hijack.core.pr_archaeology import (
     _DIFF_EXCERPT_CHARS,
     _MAX_DIFF_FETCHES,
-    _MAX_MERGED_PR_FETCHES,
     PRDecision,
     PRDecisions,
     _build_decision_from_pr,
-    _build_merged_pr_decision,
     _get_maintainer_comment,
     _get_pr_diff_excerpt,
     _is_bot_pr,
     _strip_pr_template,
-    fetch_merged_pr_decisions,
     fetch_pr_decisions,
-    merge_pr_decisions,
-    merged_pr_candidate_subjects,
     resolve_github_target,
 )
 
@@ -645,48 +639,6 @@ class TestResolveGithubTarget:
         mock_run.assert_not_called()
 
 
-class TestBuildMergedPrDecision:
-    def _merged(self, **kw) -> dict:
-        kw.setdefault("merged_at", "2024-05-01T00:00:00Z")
-        return _pr_item(**kw)
-
-    def test_merged_with_pattern_is_preference(self) -> None:
-        d = _build_merged_pr_decision(self._merged(number=10, body="decided to switch to X"))
-        assert d is not None
-        assert d.ref == "PR#10"
-        assert d.intent_kind == "preference"
-        assert "decided to" in d.matched_patterns
-
-    def test_unmerged_returns_none(self) -> None:
-        item = _pr_item(number=10, body="instead of", merged_at=None)
-        assert _build_merged_pr_decision(item) is None
-
-    def test_no_pattern_returns_none(self) -> None:
-        item = self._merged(number=10, body="just a normal merge")
-        assert _build_merged_pr_decision(item) is None
-
-    def test_bot_returns_none(self) -> None:
-        item = self._merged(number=10, body="instead of")
-        item["user"] = {"type": "Bot", "login": "dependabot[bot]"}
-        assert _build_merged_pr_decision(item) is None
-
-    def test_incident_body_is_incident(self) -> None:
-        item = self._merged(number=10, body="reverted because of a regression")
-        d = _build_merged_pr_decision(item)
-        assert d is not None
-        assert d.intent_kind == "incident"
-
-    def test_template_only_body_returns_none(self) -> None:
-        # The GitHub PR-template checklist trips "tried" on every PR — after
-        # stripping, a PR whose only "signal" was boilerplate has no pattern.
-        template = (
-            "# Summary\n\nFix a typo.\n\n# Checklist\n\n"
-            "- [x] I understand that this PR may be closed.\n"
-            "- [ ] I tried as much as possible to make a single atomic change.\n"
-        )
-        assert _build_merged_pr_decision(self._merged(number=10, body=template)) is None
-
-
 class TestStripPrTemplate:
     def test_removes_checklist_items_and_heading(self) -> None:
         body = (
@@ -701,116 +653,3 @@ class TestStripPrTemplate:
     def test_keeps_prose_without_template(self) -> None:
         body = "We switched to X instead of Y because it avoids the race."
         assert _strip_pr_template(body) == body
-
-
-def _merged_obj(path, *, timeout):
-    # Fake _gh_api_object: build a merged PR from the number in the path.
-    n = int(path.rsplit("/", 1)[1])
-    return _pr_item(number=n, body="decided to switch to X", merged_at="2024-05-01T00:00:00Z")
-
-
-class TestFetchMergedPrDecisions:
-    def test_extracts_and_fetches(self) -> None:
-        subjects = ["fix: use X instead of Y (#10)", "refactor: cleanup (#11)"]
-        with patch("hijack.core.pr_archaeology._gh_api_object", side_effect=_merged_obj):
-            out = fetch_merged_pr_decisions("https://github.com/o/r", subjects)
-        assert {d.ref for d in out} == {"PR#10", "PR#11"}
-
-    def test_dedups_pr_numbers(self) -> None:
-        calls: list[str] = []
-
-        def fake(path, *, timeout):
-            calls.append(path)
-            return _merged_obj(path, timeout=timeout)
-
-        with patch("hijack.core.pr_archaeology._gh_api_object", side_effect=fake):
-            out = fetch_merged_pr_decisions("https://github.com/o/r", ["a (#10)", "b (#10)"])
-        assert len(calls) == 1
-        assert len(out) == 1
-
-    def test_caps_fetches(self) -> None:
-        subjects = [f"x (#{i})" for i in range(_MAX_MERGED_PR_FETCHES + 5)]
-        calls: list[str] = []
-
-        def fake(path, *, timeout):
-            calls.append(path)
-            return _merged_obj(path, timeout=timeout)
-
-        with patch("hijack.core.pr_archaeology._gh_api_object", side_effect=fake):
-            fetch_merged_pr_decisions("https://github.com/o/r", subjects)
-        assert len(calls) == _MAX_MERGED_PR_FETCHES
-
-    def test_no_pr_ref_no_fetch(self) -> None:
-        with patch("hijack.core.pr_archaeology._gh_api_object") as m:
-            out = fetch_merged_pr_decisions("https://github.com/o/r", ["no ref here"])
-        assert out == []
-        m.assert_not_called()
-
-    def test_non_github_url_returns_empty(self) -> None:
-        assert fetch_merged_pr_decisions("https://gitlab.com/o/r", ["x (#1)"]) == []
-
-
-class TestMergedPrCandidateSubjects:
-    """W1 decoupling: PR numbers come from all commits, decision-signal first."""
-
-    def _sf(self, *subjects: str, reverts: tuple[str, ...] = ()) -> SimpleNamespace:
-        return SimpleNamespace(
-            history=SimpleNamespace(
-                commits=[SimpleNamespace(subject=s) for s in subjects],
-                reverts=[SimpleNamespace(subject=s) for s in reverts],
-            )
-        )
-
-    def test_sources_all_commits_not_just_decisions(self) -> None:
-        files = [self._sf("feat: a (#1)", "chore: b (#2)")]
-        assert merged_pr_candidate_subjects(files, None) == ["feat: a (#1)", "chore: b (#2)"]
-
-    def test_decision_subjects_lead(self) -> None:
-        # Regression guard: decision PRs must win the bounded fetch budget.
-        files = [self._sf("thin (#2)", "thin (#3)")]
-        cd = SimpleNamespace(commits=[SimpleNamespace(subject="rich (#9)")])
-        out = merged_pr_candidate_subjects(files, cd)
-        assert out[0] == "rich (#9)"
-        assert "thin (#2)" in out and "thin (#3)" in out
-
-    def test_skips_files_without_history(self) -> None:
-        files = [SimpleNamespace(history=None), self._sf("a (#1)")]
-        assert merged_pr_candidate_subjects(files, None) == ["a (#1)"]
-
-    def test_includes_reverts(self) -> None:
-        files = [self._sf("c (#1)", reverts=("revert d (#2)",))]
-        assert "revert d (#2)" in merged_pr_candidate_subjects(files, None)
-
-
-class TestMergePrDecisions:
-    def _d(self, ref: str, date: str, kind: str = "preference") -> PRDecision:
-        return PRDecision(
-            ref=ref, title="t", date=date, body_excerpt="instead of",
-            matched_patterns=["instead of"], maintainer_comment="", intent_kind=kind,
-        )
-
-    def test_base_none(self) -> None:
-        out = merge_pr_decisions(None, [self._d("PR#1", "2024-01-01 00:00:00 +0000")])
-        assert len(out.decisions) == 1
-        assert out.items_scanned == 1
-
-    def test_dedup_by_ref(self) -> None:
-        base = PRDecisions(
-            items_scanned=1, patterns=[],
-            decisions=[self._d("PR#1", "2024-01-01 00:00:00 +0000")],
-        )
-        out = merge_pr_decisions(base, [
-            self._d("PR#1", "2024-02-01 00:00:00 +0000"),   # dup ref — dropped
-            self._d("PR#2", "2024-03-01 00:00:00 +0000"),
-        ])
-        assert {d.ref for d in out.decisions} == {"PR#1", "PR#2"}
-        assert out.items_scanned == 2   # 1 base + 1 added (PR#2)
-
-    def test_sorted_date_desc_and_reaggregates(self) -> None:
-        out = merge_pr_decisions(
-            PRDecisions(items_scanned=0, patterns=[], decisions=[]),
-            [self._d("PR#1", "2024-01-01 00:00:00 +0000"),
-             self._d("PR#2", "2024-03-01 00:00:00 +0000")],
-        )
-        assert [d.ref for d in out.decisions] == ["PR#2", "PR#1"]
-        assert any(p.pattern == "instead of" and p.count == 2 for p in out.patterns)

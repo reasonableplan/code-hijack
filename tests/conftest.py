@@ -130,8 +130,3 @@ def _block_pr_mining(monkeypatch: pytest.MonkeyPatch) -> None:
         "hijack.core.pr_archaeology.fetch_pr_decisions",
         lambda *args, **kwargs: _PRDecisions(items_scanned=0, patterns=[], decisions=[]),
     )
-    # W1 merged-PR enrichment also shells out to gh — block it too.
-    monkeypatch.setattr(
-        "hijack.core.pr_archaeology.fetch_merged_pr_decisions",
-        lambda *args, **kwargs: [],
-    )
