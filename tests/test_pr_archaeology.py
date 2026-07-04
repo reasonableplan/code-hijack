@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from hijack.core.pr_archaeology import (
@@ -24,6 +25,7 @@ from hijack.core.pr_archaeology import (
     fetch_merged_pr_decisions,
     fetch_pr_decisions,
     merge_pr_decisions,
+    merged_pr_candidate_subjects,
     resolve_github_target,
 )
 
@@ -746,6 +748,38 @@ class TestFetchMergedPrDecisions:
 
     def test_non_github_url_returns_empty(self) -> None:
         assert fetch_merged_pr_decisions("https://gitlab.com/o/r", ["x (#1)"]) == []
+
+
+class TestMergedPrCandidateSubjects:
+    """W1 decoupling: PR numbers come from all commits, decision-signal first."""
+
+    def _sf(self, *subjects: str, reverts: tuple[str, ...] = ()) -> SimpleNamespace:
+        return SimpleNamespace(
+            history=SimpleNamespace(
+                commits=[SimpleNamespace(subject=s) for s in subjects],
+                reverts=[SimpleNamespace(subject=s) for s in reverts],
+            )
+        )
+
+    def test_sources_all_commits_not_just_decisions(self) -> None:
+        files = [self._sf("feat: a (#1)", "chore: b (#2)")]
+        assert merged_pr_candidate_subjects(files, None) == ["feat: a (#1)", "chore: b (#2)"]
+
+    def test_decision_subjects_lead(self) -> None:
+        # Regression guard: decision PRs must win the bounded fetch budget.
+        files = [self._sf("thin (#2)", "thin (#3)")]
+        cd = SimpleNamespace(commits=[SimpleNamespace(subject="rich (#9)")])
+        out = merged_pr_candidate_subjects(files, cd)
+        assert out[0] == "rich (#9)"
+        assert "thin (#2)" in out and "thin (#3)" in out
+
+    def test_skips_files_without_history(self) -> None:
+        files = [SimpleNamespace(history=None), self._sf("a (#1)")]
+        assert merged_pr_candidate_subjects(files, None) == ["a (#1)"]
+
+    def test_includes_reverts(self) -> None:
+        files = [self._sf("c (#1)", reverts=("revert d (#2)",))]
+        assert "revert d (#2)" in merged_pr_candidate_subjects(files, None)
 
 
 class TestMergePrDecisions:

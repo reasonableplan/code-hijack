@@ -51,7 +51,7 @@ from hijack.core.preprocessor import build_preprocess_result, select_files_for_c
 from hijack.core.docs import render_repo_context
 from hijack.core.archaeology import render_history_for_prompt, extract_commit_decisions
 from hijack.core.negative_space import extract_negative_space, read_deprecation_history
-from hijack.core.pr_archaeology import fetch_pr_decisions
+from hijack.core.pr_archaeology import fetch_pr_decisions, fetch_merged_pr_decisions, merge_pr_decisions, merged_pr_candidate_subjects
 from hijack.core.satd import extract_satd
 
 TARGET = '<TARGET>'
@@ -73,6 +73,11 @@ satd_ = extract_satd(files)  # W2: TODO/FIXME/XXX/HACK 주석 — 시니어 인�
 
 # PR/issue 마이닝 (impure — gh CLI 필요; 부재 시 빈 PRDecisions 반환, 분석 계속)
 pd = fetch_pr_decisions(TARGET)
+# W1: 머지 PR 바인딩 — 모든 커밋의 squash (#NNNN) 에서 PR body fetch (bounded),
+# 결정-패턴 매칭 body 만 병합. squash-merge 레포(얇은 커밋)에서 채택된 rationale 복원.
+merged = fetch_merged_pr_decisions(TARGET, merged_pr_candidate_subjects(files, cd_ if cd_.has_signal else None))
+if merged:
+    pd = merge_pr_decisions(pd, merged)
 if not pd.has_signal:
     print('[WARN] pr_decisions: no signal (gh CLI not installed or not a GitHub URL)', file=sys.stderr)
 

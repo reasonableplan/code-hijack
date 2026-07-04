@@ -590,6 +590,33 @@ def _build_merged_pr_decision(item: dict) -> PRDecision | None:
     )
 
 
+def merged_pr_candidate_subjects(
+    files: list[Any],
+    commit_decisions: Any | None = None,
+) -> list[str]:
+    """Commit subjects to mine for merged-PR "(#NNNN)" links — decision-signal
+    commits first, then every other commit.
+
+    W1 originally sourced PR numbers only from decision-filtered commit subjects,
+    so on squash-merge repos (thin commit subjects that rarely match decision
+    patterns) it had almost nothing to fetch — failing exactly where the accepted
+    rationale lives in the PR body. Sourcing from all commits decouples W1 from
+    commit-mining's recall; each fetched PR body still passes the decision-pattern
+    filter in `_build_merged_pr_decision`, so non-decision PRs are dropped.
+    Decision subjects lead so their PRs win the bounded fetch budget — no
+    regression on commit-rich repos.
+    """
+    subjects: list[str] = []
+    if commit_decisions is not None:
+        subjects.extend(c.subject for c in commit_decisions.commits)
+    for sf in files:
+        history = getattr(sf, "history", None)
+        if history is None:
+            continue
+        subjects.extend(c.subject for c in (*history.commits, *history.reverts))
+    return subjects
+
+
 def fetch_merged_pr_decisions(
     repo_url: str,
     commit_subjects: list[str],

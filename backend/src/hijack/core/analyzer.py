@@ -446,20 +446,23 @@ async def run_full_analysis(
     from hijack.core.satd import extract_satd
     satd_items = extract_satd(files)
 
-    # W1 — enrich pr_decisions with merged PRs that decision-signal commits
-    # point to (squash "(#NNNN)" links). The commit already passed the decision
-    # filter, so its merged PR body is high-signal: it restores the accepted
-    # rationale squash-merge collapsed. Reuses the pr-evidence pool + rendering.
-    if parsed_gh is not None and commit_decisions:
+    # W1 — enrich pr_decisions with merged PRs that squash "(#NNNN)" links point
+    # to, restoring the accepted rationale squash-merge collapsed out of the
+    # commit body. PR numbers are sourced from all commits (decision-signal ones
+    # first), not just decision-filtered commits, so squash-merge repos with thin
+    # commit subjects still yield rich PR bodies; the body-level decision-pattern
+    # filter keeps only substantive ones. Reuses the pr-evidence pool + rendering.
+    if parsed_gh is not None:
         from hijack.core.pr_archaeology import (
             fetch_merged_pr_decisions,
             merge_pr_decisions,
+            merged_pr_candidate_subjects,
         )
         try:
             owner, gh_repo = parsed_gh
             merged = fetch_merged_pr_decisions(
                 f"https://github.com/{owner}/{gh_repo}",
-                [c.subject for c in commit_decisions],
+                merged_pr_candidate_subjects(files, commit_decisions),
             )
             if merged:
                 pr_decisions = merge_pr_decisions(pr_decisions, merged)
