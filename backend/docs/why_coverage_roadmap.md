@@ -26,7 +26,9 @@
 
 ## 2. 제안 항목 (우선순위순)
 
-### W1 — 머지 PR description 바인딩 (최대 레버)
+### W1 — 머지 PR description 바인딩 (~~최대 레버~~ **제거됨 2026-07-04: net-new 0, 전제 false**)
+
+> **결론 먼저 (2026-07-04)**: W1 은 코드에서 **제거**됨(commit 이력 참조). 전제("squash-merge 가 accepted rationale 을 커밋 body 밖으로 collapse")가 실측으로 **틀림** — GitHub squash 는 PR body 를 커밋 body 에 **복사**하므로 rationale 이 커밋에 남고 commit-mining 이 이미 잡는다. 3개 레포(starlette/typer/pydantic) net-new 공급 **0**. 아래는 히스토리 보존용 기록.
 
 **갭**: 현 PR 마이닝(pr_archaeology)은 *거절* PR + wontfix issue 만 캔다. 그런데 **채택된 패턴의 WHY 는 머지 PR 의 설명문**에 있다 — code-anchored 43% 는 대부분 "머지된 결정" 인데 그 결정문을 안 읽고 있음.
 
@@ -48,9 +50,17 @@
 2. **coupling**: PR 번호를 결정-커밋 subject 에서만 소싱 → squash-merge 레포(커밋 얇음)에서 정확히 가장 필요할 때 병목.
 3. **skill 미배선**: `fetch_merged_pr_decisions` 가 CLI(analyzer)에만, SKILL.md step1 엔 없었음.
 
-**실수정 완료 (2026-07-04)**: 신규 순수 헬퍼 `merged_pr_candidate_subjects(files, commit_decisions)` — 결정 subject 먼저, 그다음 **모든** 커밋 subject. body-level `_match_patterns` 필터가 non-decision PR 제거. analyzer 호출부 교체 + SKILL.md step1 배선. tests 1097→1101 (+4). **E2E 라이브 검증**: starlette OLD 7 = NEW 7 (decision-first 라 무회귀), typer(squash-merge, commit-mining 2개만) OLD 1 → NEW 2.
-- **정직 주의**: W1 수율은 레포 PR-description 풍부도 의존. typer 이득이 작은 건(1→2) docs/CI PR 위주라 rationale-rich 머지 PR 이 희소하기 때문 — typer 의 실 fuel 은 W2(SATD 26). starlette 는 커밋 본문이 이미 두툼해 W1 이 대부분 commit-mining 과 중복. **W1 이 순-신규 공급을 크게 내는 레포는 아직 미검증** (얇은 커밋 + 풍부한 PR + 낮은 SATD 조합 필요).
-- **남은 튜닝(후보)**: `_MAX_MERGED_PR_FETCHES=20` 캡 + 비결정 slot 의 file-iteration 순서 → 큰 레포에서 rationale-rich PR 이 캡 밖일 수 있음. recency 정렬 또는 캡 상향은 별도.
+**중간 수정 (2026-07-04, 이후 제거)**: 3중 결함을 먼저 고침 — 신규 헬퍼 `merged_pr_candidate_subjects` 로 decouple + analyzer 호출부 교체 + SKILL.md 배선. E2E: starlette OLD 7 = NEW 7 (무회귀), typer OLD 1 → NEW 2.
+
+**제거 (2026-07-04)**: 수정된 W1 의 **net-new** 공급을 측정 → 폐기 판정. net-new = "W1 이 가져온 머지 PR 의 backing 커밋 body 에 이미 decision signal 이 없어서 W1 이 rationale 을 복원한" 건수.
+
+| 레포 | commit-mining | W1 total | **W1 net-new** | W2 SATD | 거절PR |
+|---|---|---|---|---|---|
+| starlette | 18 | 7 | **0** (커밋 두툼) | 1 | 9 |
+| typer | 2 | 2 | **~0** (얇은 커밋=docs/CI) | 26 | 4 |
+| pydantic | 26 | 9 | **0** | 50 | 35 |
+
+**전제 반증 (pydantic 직접 확인)**: PR#12536 커밋 body(682b)에 `to avoid` rationale 전문 有, PR#11212 커밋 body(92b) `instead of` 전문 有. GitHub squash-merge 가 PR body 를 커밋 body 에 **복사** → rationale 이 collapse 되는 게 아니라 커밋에 그대로 남음 → commit-mining 이 이미 잡음 → W1 복원분 = 0. **W1 코드 전량 제거** (`fetch_merged_pr_decisions`/`merge_pr_decisions`/`merged_pr_candidate_subjects`/`_build_merged_pr_decision` + analyzer/SKILL 배선 + 테스트 18개). tests 1101→1083, ruff clean. **소스 서열 역전 확정: W2(SATD) > 거절/incident PR(0.3.0) > ~~W1~~.**
 
 ### W2 — SATD 주석 마이닝 (저비용 인라인 WHY)
 
@@ -96,8 +106,8 @@
 
 ## 3. 우선순위 논거
 
-1. **W1 이 첫째**: 유일하게 history-anchored ratio 를 직접 올리는 신규 소스이고, 기존 인프라(pr kind evidence, gh 캡 패턴, squash 관행) 재사용이라 구현 위험이 낮다. R7 프로브가 확인했듯 PR 텍스트는 intent 밀도가 가장 높은데, 머지 PR 은 아직 미개척.
-2. **W2 둘째**: 네트워크 불필요·결정론적·연구 검증된(MAT) 최저비용 소스. W1 과 독립이라 병렬 가능.
+1. ~~**W1 이 첫째**~~ **[폐기 2026-07-04]**: 전제("머지 PR 이 미개척 신규 소스")가 틀림 — squash 가 PR body 를 커밋 body 에 복사하므로 commit-mining 이 이미 잡는다. net-new 0, 코드 제거. **실제 첫째는 W2.**
+2. **W2 (실질 1순위)**: 네트워크 불필요·결정론적·연구 검증된(MAT) 최저비용 소스. **유일하게 commit/PR 마이닝이 구조적으로 못 닿는 인라인 WHY** (net-new 검증됨: pydantic 50, typer 26).
 3. **W3 셋째**: 코드가 아니라 *지표의 의미*를 고치는 작업 — W1/W2 효과를 올바르게 읽기 위해 필요하지만 그 자체로 WHY 를 늘리지 않음.
 4. **R7 재확인**: inversion 은 commit 축 21%·PR 축 4% 로 데이터 미지지 (보류 유지). W1 은 R7 과 달리 파이프라인 방향을 안 바꾸고 소스만 늘린다.
 
@@ -116,14 +126,14 @@
 | exemplar verbatim ratio (W4a) | 관찰 지표 | 기록만 |
 | history-anchored ratio | **참고용 강등** | LLM 성실도 confound — 추이만 관찰, 목표 아님 |
 
-측정 실적 (2026-07-04):
+측정 실적 (2026-07-04) — **net-new** = commit-mining 이 이미 못 잡은 순수 추가분:
 
-| 소스 | starlette | typer |
-|---|---|---|
-| commit-mining 결정커밋 | 18 (본문 두툼) | 2 (squash 라 얇음) |
-| W1 머지PR substantive | 7 (대부분 commit 중복) | 1→2 (수정 후) |
-| W2 SATD | 1 | **26** |
-| 거절/incident PR | 9 | 4 |
+| 소스 | starlette | typer | pydantic |
+|---|---|---|---|
+| commit-mining 결정커밋 | 18 | 2 | 26 |
+| ~~W1 머지PR~~ **net-new** | **0** (제거됨) | **~0** | **0** |
+| **W2 SATD** (net-new) | 1 | **26** | **50** |
+| 거절/incident PR | 9 | 4 | 35 |
 
 프로토콜: 레포마다 `supply_measure.py` 1회 (네트워크, bounded). skill-mode 풀 재분석은 downstream A/B (규칙 주입 효과 실측, 2026-07-04) 용도로만 — 공급 측정에는 불필요(confound).
 
@@ -132,7 +142,11 @@
 1. **W1 fetch 예산**: commit_decisions 만 enrich 하면 통상 10~30 호출. rate-limit 环경(무인증 gh)에서의 graceful skip 은 기존 패턴 재사용 — 확인만.
 2. **W2 evidence kind**: `doc` 재사용 초안에 대한 사용자 확인 필요 (데이터 모델 결정, §3).
 3. **W3 의 explicit 판정 주체**: LLM 태깅으로 시작 (결정론 분류기는 과설계 위험). 태깅 신뢰도 낮으면 AST 기반 재검토.
-4. **abort 기준 (2026-07-04 판정)**: 원안("+10%p history-anchored 미만이면 소진")은 지표 폐기로 무효. 결정론 공급 측정 기반 재판정 = **소스 확장 소진 아님**. 근거: (a) W2 는 SATD-rich 레포(typer 26 vs starlette 1)에서 실 fuel — 유효, skill 배선 완료. (b) W1 은 3중 결함(crash/coupling/skill-미배선)으로 실동작 못 하던 것을 2026-07-04 수정 — 순-신규 공급이 큰 레포는 미검증이나 인프라는 이제 정상. **다음 레버는 소스 확장이 아니라 (i) SATD-rich app 레포에서 수정된 W1+W2 통합 검증, (ii) downstream A/B(규칙 주입 효과) — 도구 가치의 진짜 축이 "WHY 공급"임이 A/B 로 실증됨.**
+4. **abort 기준 (2026-07-04 최종)**: 원안("+10%p history-anchored 미만이면 소진")은 지표 폐기로 무효. 결정론 net-new 공급 기반 최종 판정:
+   - **W1 = dead end, 제거됨** (net-new 0 × 3레포, 전제 false). "머지 PR 미개척" 가정이 squash 실동작으로 반증.
+   - **W2 = 유효** (SATD net-new: pydantic 50 / typer 26 / starlette 1), skill 배선 완료. **유일한 확실 net-new 소스.**
+   - **거절/incident PR (0.3.0) = 최강 차별 WHY** (pydantic 35 / starlette 9), 이미 파이프라인 소비 중.
+   - **다음 레버**: (i) SATD 강화 (W2 주변 컨텍스트 확장 + 규칙 인용률 측정), (ii) downstream A/B — 도구 가치 축이 "WHY 공급 + 약한 모델 안티패턴 구조"임이 실증됨 (2026-07-04 A/B). **소스 확장은 W2 로 수렴; W1 류 "머지 PR" 확장은 재시도하지 말 것 (squash 복사로 무효).**
 
 ## 6. 참고
 
