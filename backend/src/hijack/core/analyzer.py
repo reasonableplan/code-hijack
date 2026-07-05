@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from hijack.core.docs import render_repo_context
+from hijack.core.exemplar_check import is_verbatim_excerpt
 from hijack.core.fetcher import SourceFile
 from hijack.core.models import (
     EVIDENCE_HEADLINE_MAX,
@@ -181,6 +182,25 @@ def normalize_rationale_tier(rules: list[AnalysisRule]) -> list[AnalysisRule]:
     return result
 
 
+def assign_exemplar_verbatim(
+    rules: list[AnalysisRule],
+    files: list[SourceFile],
+) -> list[AnalysisRule]:
+    """good_example 이 있는 규칙에 exemplar_verbatim(W4a)을 채운다.
+
+    good_example 이 빈 문자열이면 None 유지(미계산) — is_verbatim_excerpt 를
+    호출할 이유가 없다. 원본 객체는 수정하지 않는다.
+    """
+    result = []
+    for rule in rules:
+        if rule.good_example:
+            rule = dataclasses.replace(
+                rule, exemplar_verbatim=is_verbatim_excerpt(rule.good_example, files)
+            )
+        result.append(rule)
+    return result
+
+
 def _evidence_from_parsed(
     raw_evidence: list,
     *,
@@ -337,6 +357,7 @@ async def _analyze_category(
         valid_comment_refs=valid_comment_refs,
     )
     rules = normalize_rationale_tier(rules)
+    rules = assign_exemplar_verbatim(rules, selected)
     return CategoryResult(
         category=category,
         design_intent=parsed.get("design_intent", ""),

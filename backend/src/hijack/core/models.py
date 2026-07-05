@@ -97,9 +97,14 @@ class AnalysisRule:
     # by normalize_rationale_tier in analyzer.py. Pre-T-030 session.json files
     # lack this key — from_json defaults to "speculative" for backward compat.
     rationale_tier: str = "speculative"
+    # W4a: whether good_example looks like a verbatim excerpt of fetched source
+    # (exemplar_check.is_verbatim_excerpt), vs. LLM-invented. None = not yet
+    # computed (e.g. no good_example, or older session.json). Observational
+    # only — does not affect priority or rationale_tier.
+    exemplar_verbatim: bool | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "rule": self.rule,
             "priority": self.priority,
             "confidence": self.confidence,
@@ -112,6 +117,9 @@ class AnalysisRule:
             "evidence": [e.to_json() for e in self.evidence],
             "rationale_tier": self.rationale_tier,
         }
+        if self.exemplar_verbatim is not None:
+            result["exemplar_verbatim"] = self.exemplar_verbatim
+        return result
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> AnalysisRule:
@@ -127,6 +135,7 @@ class AnalysisRule:
             scope=data.get("scope", "cross_project"),
             evidence=[Evidence.from_json(e) for e in data.get("evidence", [])],
             rationale_tier=data.get("rationale_tier", "speculative"),
+            exemplar_verbatim=data.get("exemplar_verbatim"),
         )
 
 

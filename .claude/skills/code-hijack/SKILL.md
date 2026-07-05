@@ -400,13 +400,14 @@ print('[DONE] measurement.json saved to', session_dir / 'measurement.json')
 ```bash
 cd <ENGINE_ROOT>
 python -c "
-import json, sys, datetime, tomllib
+import dataclasses, json, sys, datetime, tomllib
 sys.path.insert(0, 'backend/src')
 from pathlib import Path
 from hijack.core.fetcher import fetch_source
 from hijack.core.preprocessor import build_preprocess_result
 from hijack.core.models import AnalysisRule, CategoryResult, ForesightCard, SessionResult
 from hijack.core.analyzer import assign_rationale_tier, normalize_rationale_tier
+from hijack.core.exemplar_check import is_verbatim_excerpt
 from hijack.core.exemplars import select_exemplars
 from hijack.core.style_fingerprint import extract_style
 from hijack.core.pr_archaeology import PRDecisions
@@ -471,7 +472,13 @@ def _tiered(raw_rules):
         valid_pr_refs=valid_pr_refs,
         valid_comment_refs=valid_comment_refs,
     )
-    return normalize_rationale_tier(rules)  # cited 만 MUST 유지
+    rules = normalize_rationale_tier(rules)  # cited 만 MUST 유지
+    # W4a — good_example 이 실제 레포 코드의 verbatim 발췌인지 관찰 지표.
+    return [
+        dataclasses.replace(r, exemplar_verbatim=is_verbatim_excerpt(r.good_example, files))
+        if r.good_example else r
+        for r in rules
+    ]
 
 categories = [
     CategoryResult(

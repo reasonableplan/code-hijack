@@ -315,6 +315,36 @@ def test_rule_rationale_tier_backward_compat_when_key_missing() -> None:
 
 
 # ---------------------------------------------------------------------------
+# W4a: AnalysisRule.exemplar_verbatim
+# ---------------------------------------------------------------------------
+
+def test_rule_default_exemplar_verbatim_is_none() -> None:
+    rule = make_rule()
+    assert rule.exemplar_verbatim is None
+
+
+def test_rule_exemplar_verbatim_omitted_from_json_when_none() -> None:
+    rule = make_rule()
+    assert "exemplar_verbatim" not in rule.to_json()
+
+
+def test_rule_exemplar_verbatim_roundtrip() -> None:
+    for value in (True, False):
+        rule = make_rule(exemplar_verbatim=value)
+        data = rule.to_json()
+        assert data["exemplar_verbatim"] == value
+        assert AnalysisRule.from_json(data).exemplar_verbatim == value
+
+
+def test_rule_exemplar_verbatim_backward_compat_when_key_missing() -> None:
+    # Older session.json files (pre-W4a) won't have exemplar_verbatim.
+    payload = make_rule().to_json()
+    payload.pop("exemplar_verbatim", None)
+    restored = AnalysisRule.from_json(payload)
+    assert restored.exemplar_verbatim is None
+
+
+# ---------------------------------------------------------------------------
 # T-030: ForesightCard dataclass
 # ---------------------------------------------------------------------------
 

@@ -32,6 +32,11 @@ class MeasurementResult:
     comment_cited_rule_count: int = 0
     comment_cited_ref_count: int = 0
     satd_citation_ratio: float = 0.0
+    # W4a exemplar verbatim-ratio metrics. exemplar_checked_count is how many
+    # rules had exemplar_verbatim computed (good_example non-empty);
+    # exemplar_verbatim_ratio is the fraction of those that were True.
+    exemplar_checked_count: int = 0
+    exemplar_verbatim_ratio: float = 0.0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -45,6 +50,8 @@ class MeasurementResult:
             "comment_cited_rule_count": self.comment_cited_rule_count,
             "comment_cited_ref_count": self.comment_cited_ref_count,
             "satd_citation_ratio": self.satd_citation_ratio,
+            "exemplar_checked_count": self.exemplar_checked_count,
+            "exemplar_verbatim_ratio": self.exemplar_verbatim_ratio,
         }
 
     @classmethod
@@ -60,6 +67,8 @@ class MeasurementResult:
             comment_cited_rule_count=data.get("comment_cited_rule_count", 0),
             comment_cited_ref_count=data.get("comment_cited_ref_count", 0),
             satd_citation_ratio=data.get("satd_citation_ratio", 0.0),
+            exemplar_checked_count=data.get("exemplar_checked_count", 0),
+            exemplar_verbatim_ratio=data.get("exemplar_verbatim_ratio", 0.0),
         )
 
 
@@ -119,6 +128,14 @@ def calc_session_metrics(
         comment_cited_ref_count / satd_supplied_count if satd_supplied_count > 0 else 0.0
     )
 
+    checked = [r for r in rules if r.exemplar_verbatim is not None]
+    exemplar_checked_count = len(checked)
+    exemplar_verbatim_ratio = (
+        sum(1 for r in checked if r.exemplar_verbatim) / exemplar_checked_count
+        if exemplar_checked_count > 0
+        else 0.0
+    )
+
     return MeasurementResult(
         session_id=session.session_id,
         cited_ratio=cited_ratio,
@@ -130,6 +147,8 @@ def calc_session_metrics(
         comment_cited_rule_count=comment_cited_rule_count,
         comment_cited_ref_count=comment_cited_ref_count,
         satd_citation_ratio=satd_citation_ratio,
+        exemplar_checked_count=exemplar_checked_count,
+        exemplar_verbatim_ratio=exemplar_verbatim_ratio,
     )
 
 
@@ -172,6 +191,9 @@ def diff_sessions(
         "tier_distribution_delta": tier_delta,
         "intent_kind_distribution_delta": intent_delta,
         "satd_citation_ratio_delta": round(m2.satd_citation_ratio - m1.satd_citation_ratio, 10),
+        "exemplar_verbatim_ratio_delta": round(
+            m2.exemplar_verbatim_ratio - m1.exemplar_verbatim_ratio, 10
+        ),
     }
 
 
@@ -248,6 +270,10 @@ def format_measurement_summary(result: MeasurementResult) -> str:
         f"  satd_citation_ratio: {result.satd_citation_ratio:.1%} "
         f"({result.comment_cited_ref_count}/{result.satd_supplied_count} refs, "
         f"{result.comment_cited_rule_count} rules)"
+    )
+    lines.append(
+        f"  exemplar_verbatim_ratio: {result.exemplar_verbatim_ratio:.1%} "
+        f"({result.exemplar_checked_count} checked)"
     )
     if result.foresight_scores:
         lines.append(f"  foresight scores: {len(result.foresight_scores)} cards")

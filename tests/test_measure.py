@@ -35,6 +35,7 @@ def _make_rule(
     rationale_tier: str = "cited",
     layer: str = "shared",
     evidence: list[Evidence] | None = None,
+    exemplar_verbatim: bool | None = None,
 ) -> AnalysisRule:
     return AnalysisRule(
         rule=rule,
@@ -47,6 +48,7 @@ def _make_rule(
         layer=layer,
         rationale_tier=rationale_tier,
         evidence=evidence or [],
+        exemplar_verbatim=exemplar_verbatim,
     )
 
 
@@ -126,6 +128,7 @@ class TestMeasurementResultSerialization:
             "tier_distribution", "intent_kind_distribution", "foresight_scores",
             "satd_supplied_count", "comment_cited_rule_count",
             "comment_cited_ref_count", "satd_citation_ratio",
+            "exemplar_checked_count", "exemplar_verbatim_ratio",
         }
 
     def test_from_json_backward_compat_missing_satd_fields(self) -> None:
@@ -143,6 +146,35 @@ class TestMeasurementResultSerialization:
         assert restored.comment_cited_rule_count == 0
         assert restored.comment_cited_ref_count == 0
         assert restored.satd_citation_ratio == 0.0
+
+    def test_from_json_backward_compat_missing_exemplar_fields(self) -> None:
+        # Pre-W4a measurement.json lacks the new keys.
+        data = {
+            "session_id": "old",
+            "cited_ratio": 0.5,
+            "must_ratio": 0.5,
+            "tier_distribution": {},
+            "intent_kind_distribution": {},
+            "foresight_scores": [],
+        }
+        restored = MeasurementResult.from_json(data)
+        assert restored.exemplar_checked_count == 0
+        assert restored.exemplar_verbatim_ratio == 0.0
+
+    def test_exemplar_fields_roundtrip(self) -> None:
+        m = MeasurementResult(
+            session_id="s",
+            cited_ratio=0.0,
+            must_ratio=0.0,
+            tier_distribution={},
+            intent_kind_distribution={},
+            foresight_scores=[],
+            exemplar_checked_count=4,
+            exemplar_verbatim_ratio=0.75,
+        )
+        restored = MeasurementResult.from_json(m.to_json())
+        assert restored.exemplar_checked_count == 4
+        assert restored.exemplar_verbatim_ratio == pytest.approx(0.75)
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +349,48 @@ class TestSatdCitationMetrics:
 
 
 # ---------------------------------------------------------------------------
+# calc_session_metrics — W4a exemplar verbatim-ratio metrics
+# ---------------------------------------------------------------------------
+
+class TestExemplarVerbatimMetrics:
+    def test_no_rules_gives_zero_checked_and_ratio(self) -> None:
+        session = _make_session("e0", [])
+        m = calc_session_metrics(session)
+        assert m.exemplar_checked_count == 0
+        assert m.exemplar_verbatim_ratio == 0.0
+
+    def test_none_exemplar_verbatim_not_counted_as_checked(self) -> None:
+        rules = [_make_rule("R1", exemplar_verbatim=None)]
+        session = _make_session("e1", [_make_category("c", rules)])
+        m = calc_session_metrics(session)
+        assert m.exemplar_checked_count == 0
+        assert m.exemplar_verbatim_ratio == 0.0
+
+    def test_mixed_true_false_none_gives_accurate_ratio(self) -> None:
+        rules = [
+            _make_rule("R1", exemplar_verbatim=True),
+            _make_rule("R2", exemplar_verbatim=True),
+            _make_rule("R3", exemplar_verbatim=False),
+            _make_rule("R4", exemplar_verbatim=None),
+        ]
+        session = _make_session("e2", [_make_category("c", rules)])
+        m = calc_session_metrics(session)
+        # 3 checked (2 True, 1 False), 1 uncomputed excluded entirely.
+        assert m.exemplar_checked_count == 3
+        assert m.exemplar_verbatim_ratio == pytest.approx(2 / 3)
+
+    def test_all_false_gives_zero_ratio(self) -> None:
+        rules = [
+            _make_rule("R1", exemplar_verbatim=False),
+            _make_rule("R2", exemplar_verbatim=False),
+        ]
+        session = _make_session("e3", [_make_category("c", rules)])
+        m = calc_session_metrics(session)
+        assert m.exemplar_checked_count == 2
+        assert m.exemplar_verbatim_ratio == 0.0
+
+
+# ---------------------------------------------------------------------------
 # diff_sessions — pure function tests
 # ---------------------------------------------------------------------------
 
@@ -379,6 +453,14 @@ class TestDiffSessions:
         m2.satd_citation_ratio = 0.6
         result = diff_sessions(m1, m2)
         assert result["satd_citation_ratio_delta"] == pytest.approx(0.4)
+
+    def test_exemplar_verbatim_ratio_delta(self) -> None:
+        m1 = self._make_m()
+        m1.exemplar_verbatim_ratio = 0.3
+        m2 = self._make_m()
+        m2.exemplar_verbatim_ratio = 0.8
+        result = diff_sessions(m1, m2)
+        assert result["exemplar_verbatim_ratio_delta"] == pytest.approx(0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -585,3 +667,18 @@ class TestFormatMeasurementSummary:
         result = format_measurement_summary(m)
         assert "satd_citation_ratio" in result
         assert "2/4" in result
+
+    def test_includes_exemplar_verbatim_ratio(self) -> None:
+        m = MeasurementResult(
+            session_id="s",
+            cited_ratio=0.0,
+            must_ratio=0.0,
+            tier_distribution={"cited": 0, "corroborated": 0, "speculative": 0},
+            intent_kind_distribution={"rejection": 0, "incident": 0, "preference": 0},
+            foresight_scores=[],
+            exemplar_checked_count=4,
+            exemplar_verbatim_ratio=0.5,
+        )
+        result = format_measurement_summary(m)
+        assert "exemplar_verbatim_ratio" in result
+        assert "4 checked" in result

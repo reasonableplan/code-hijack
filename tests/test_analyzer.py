@@ -11,6 +11,7 @@ from hijack.core.analyzer import (
     _parse_json,
     _parse_regex_fallback,
     _rules_from_parsed,
+    assign_exemplar_verbatim,
     normalize_rationale_tier,
     run_full_analysis,
 )
@@ -712,6 +713,57 @@ class TestNormalizeRationaleTier:
         assert result[1].priority == "SHOULD"
         assert result[2].priority == "SHOULD"
         assert result[3].priority == "SHOULD"
+
+
+class TestAssignExemplarVerbatim:
+    """assign_exemplar_verbatim — W4a: good_example verbatim-excerpt detection wiring."""
+
+    def _rule_with_example(self, good_example: str) -> AnalysisRule:
+        return AnalysisRule(
+            rule="test rule",
+            priority="SHOULD",
+            confidence="high",
+            ref_files=[],
+            good_example=good_example,
+            bad_example="",
+            reason="reason",
+            layer="backend",
+        )
+
+    def test_verbatim_example_marked_true(self) -> None:
+        files = [SourceFile(
+            path=Path("a.py"),
+            content="def create(db: Session = Depends(get_db)):\n    return db.query(User).all()\n",
+            layer="backend",
+            role="service",
+        )]
+        rule = self._rule_with_example(
+            "def create(db: Session = Depends(get_db)):\n    return db.query(User).all()"
+        )
+        result = assign_exemplar_verbatim([rule], files)
+        assert result[0].exemplar_verbatim is True
+
+    def test_invented_example_marked_false(self) -> None:
+        files = [SourceFile(
+            path=Path("a.py"), content="class Foo:\n    pass\n", layer="backend", role="service"
+        )]
+        rule = self._rule_with_example(
+            "def totally_made_up_function(argument_one, argument_two):\n    return None"
+        )
+        result = assign_exemplar_verbatim([rule], files)
+        assert result[0].exemplar_verbatim is False
+
+    def test_empty_good_example_stays_none(self) -> None:
+        files = [SourceFile(path=Path("a.py"), content="x = 1\n", layer="backend", role="service")]
+        rule = self._rule_with_example("")
+        result = assign_exemplar_verbatim([rule], files)
+        assert result[0].exemplar_verbatim is None
+
+    def test_original_not_mutated(self) -> None:
+        files = [SourceFile(path=Path("a.py"), content="x = 1\n", layer="backend", role="service")]
+        rule = self._rule_with_example("def create(db: Session = Depends(get_db)):")
+        assign_exemplar_verbatim([rule], files)
+        assert rule.exemplar_verbatim is None
 
 
 @pytest.mark.asyncio
