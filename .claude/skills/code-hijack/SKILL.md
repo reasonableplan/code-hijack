@@ -349,33 +349,38 @@ print(json.dumps(score_foresight(cards, repo_docs, pd), ensure_ascii=False, inde
 
 2. **LLM 보완 판단** — `verdict == "unconfirmed"` 카드를 직접 검토: hypothesis + signals + falsification 을 읽고 레포 코드 또는 `pr_decisions` 에서 반증/확인 근거를 찾아 `"confirmed"` / `"refuted"` 로 갱신 (근거 없으면 유지). 결정론 채점은 `"refuted"` 를 반환하지 않는다 — refuted 는 이 단계에서만 부여 가능.
 
-3. **저장**:
+3. **저장** — verdict 를 카드에 심어 `session.json` 을 재저장한다 (measure 가 세션만으로 자급하도록; measurement.json 만 저장하고 흘리는 방식은 폐기):
 
 ```bash
 cd <ENGINE_ROOT>
 python -c "
 import json, sys
 sys.path.insert(0, 'backend/src')
-from hijack.core.measure import calc_session_metrics, write_measurement
+from hijack.core.measure import calc_session_metrics, stamp_foresight_verdicts, write_measurement
 from hijack.core.pr_archaeology import PRDecisions
 from hijack.core.models import SessionResult
 from pathlib import Path
 
 session_dir = Path('<session_output_dir>')  # step 4 의 [DONE] 경로
-session = SessionResult.from_json(json.loads((session_dir / 'session.json').read_text(encoding='utf-8')))
+session_path = session_dir / 'session.json'
+session = SessionResult.from_json(json.loads(session_path.read_text(encoding='utf-8')))
+
+final_scores = [
+    # step 3.8-2 의 최종 verdict 목록으로 교체 (cards 와 같은 순서/개수):
+    # {'hypothesis': '...', 'verdict': 'confirmed'},
+]
+session.foresight_cards = stamp_foresight_verdicts(session.foresight_cards, final_scores)
+session_path.write_text(json.dumps(session.to_json(), indent=2, ensure_ascii=False), encoding='utf-8')
+
 pd_raw = json.load(open('/tmp/step1_output.json', encoding='utf-8')).get('pr_decisions')
 pd = PRDecisions.from_json(pd_raw) if pd_raw else None
-
-result = calc_session_metrics(session, pr_decisions=pd)
-result.foresight_scores = [
-    # step 3.8-2 의 최종 verdict 목록으로 교체: {'hypothesis': '...', 'verdict': 'confirmed'},
-]
+result = calc_session_metrics(session, pr_decisions=pd)  # foresight_scores 는 카드 verdict 에서 자동 파생
 write_measurement(result, session_dir)
-print('[DONE] measurement.json saved to', session_dir / 'measurement.json')
+print('[DONE] session.json verdict-stamped + measurement.json saved to', session_dir)
 "
 ```
 
-**가드레일**: `measurement.json` 에만 저장 — `session.json` 스키마 재확장 금지. `foresight_cards` 빈 리스트면 채점 생략 (`foresight_scores: []`).
+**가드레일**: verdict 는 `session.json` 의 `foresight_cards[].verdict` 필드(T-030 스키마 내 기존 필드)에 저장한다 — 새 top-level 키 추가가 아니므로 스키마 재확장이 아니다. `measurement.json` 의 `foresight_scores` 는 세션에서 파생되므로 수기 대입 불필요. `foresight_cards` 빈 리스트면 채점 생략 (`foresight_scores: []`).
 
 ### 4. SessionResult 조립 + 저장 (Bash tool)
 

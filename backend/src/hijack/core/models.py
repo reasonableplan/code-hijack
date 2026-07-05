@@ -40,6 +40,12 @@ EVIDENCE_QUOTE_MAX = 500
 # a difference).
 PROBE_VERDICT_VALUES = ("discriminated", "not_discriminated")
 
+# ForesightCard scoring verdict. score_foresight() (measure.py) is deterministic
+# and only ever emits "confirmed"/"unconfirmed" — "refuted" is reserved for the
+# LLM-supplement step (SKILL.md step 3.8-2) and is never produced mechanically.
+# "" (empty string) means not yet scored.
+FORESIGHT_VERDICT_VALUES = ("confirmed", "unconfirmed", "refuted")
+
 
 @dataclass
 class Evidence:
@@ -207,24 +213,36 @@ class ForesightCard:
     falsification: str    # Condition that would disprove the hypothesis
     tier: str             # "corroborated" | "speculative"
     layer: str
+    # Scoring verdict (measure.score_foresight + optional LLM supplement).
+    # "" = not yet scored. One of FORESIGHT_VERDICT_VALUES otherwise.
+    verdict: str = ""
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "hypothesis": self.hypothesis,
             "signals": self.signals,
             "falsification": self.falsification,
             "tier": self.tier,
             "layer": self.layer,
         }
+        if self.verdict:
+            result["verdict"] = self.verdict
+        return result
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> ForesightCard:
+        # Out-of-range verdicts are demoted to "" (unscored) rather than dropped
+        # — conservative direction, same as ProbeRecord.from_json.
+        verdict = data.get("verdict", "")
+        if verdict and verdict not in FORESIGHT_VERDICT_VALUES:
+            verdict = ""
         return cls(
             hypothesis=data["hypothesis"],
             signals=data["signals"],
             falsification=data["falsification"],
             tier=data["tier"],
             layer=data["layer"],
+            verdict=verdict,
         )
 
 

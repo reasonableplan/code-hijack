@@ -396,6 +396,42 @@ def test_foresight_card_empty_signals() -> None:
     assert restored.signals == []
 
 
+def test_foresight_card_verdict_default_empty() -> None:
+    card = _foresight_card()
+    assert card.verdict == ""
+
+
+def test_foresight_card_verdict_omitted_from_json_when_empty() -> None:
+    card = _foresight_card()
+    assert "verdict" not in card.to_json()
+
+
+def test_foresight_card_verdict_roundtrip() -> None:
+    for verdict in ("confirmed", "unconfirmed", "refuted"):
+        card = _foresight_card(verdict=verdict)
+        data = card.to_json()
+        assert data["verdict"] == verdict
+        restored = ForesightCard.from_json(data)
+        assert restored.verdict == verdict
+
+
+def test_foresight_card_backward_compat_when_verdict_key_missing() -> None:
+    # Pre-fix session.json files don't have a verdict key.
+    payload = _foresight_card().to_json()
+    assert "verdict" not in payload
+    restored = ForesightCard.from_json(payload)
+    assert restored.verdict == ""
+
+
+def test_foresight_card_verdict_out_of_range_demoted() -> None:
+    # Machine-check, not fail-fast: an out-of-range verdict is demoted to ""
+    # (unscored) rather than dropped/raised — mirrors ProbeRecord.from_json.
+    payload = _foresight_card().to_json()
+    payload["verdict"] = "bogus_verdict"
+    restored = ForesightCard.from_json(payload)
+    assert restored.verdict == ""
+
+
 # ---------------------------------------------------------------------------
 # T-030: SessionResult.foresight_cards + repo_nature
 # ---------------------------------------------------------------------------

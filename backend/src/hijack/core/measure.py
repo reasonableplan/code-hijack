@@ -1,17 +1,17 @@
 """measure.py — T-037: session metrics, foresight scoring, measurement.json I/O.
 
 Pure functions: calc_session_metrics, diff_sessions, score_foresight,
-                format_measurement_summary
+                stamp_foresight_verdicts, format_measurement_summary
 I/O function:   write_measurement
 """
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from hijack.core.models import ForesightCard, SessionResult
+from hijack.core.models import FORESIGHT_VERDICT_VALUES, ForesightCard, SessionResult
 
 
 @dataclass
@@ -164,13 +164,22 @@ def calc_session_metrics(
         1 for r in probed_rules if r.probe.verdict == "discriminated"
     )
 
+    # Foresight verdicts live on the cards themselves (stamped by
+    # stamp_foresight_verdicts) so measure can self-supply from the session
+    # alone — same reasoning as the pr_decisions fallback above.
+    foresight_scores = [
+        {"hypothesis": c.hypothesis, "verdict": c.verdict}
+        for c in session.foresight_cards
+        if c.verdict
+    ]
+
     return MeasurementResult(
         session_id=session.session_id,
         cited_ratio=cited_ratio,
         must_ratio=must_ratio,
         tier_distribution=tier_distribution,
         intent_kind_distribution=intent_kind_distribution,
-        foresight_scores=[],
+        foresight_scores=foresight_scores,
         satd_supplied_count=satd_supplied_count,
         comment_cited_rule_count=comment_cited_rule_count,
         comment_cited_ref_count=comment_cited_ref_count,
@@ -285,6 +294,34 @@ def score_foresight(
         results.append({"hypothesis": card.hypothesis, "verdict": verdict})
 
     return results
+
+
+def stamp_foresight_verdicts(
+    cards: list[ForesightCard],
+    scores: list[dict[str, str]],
+) -> list[ForesightCard]:
+    """score_foresight() 결과(또는 LLM 보완 후 최종본)를 카드에 심는다.
+
+    카드는 불변 — dataclasses.replace 로 새 리스트를 반환한다 (analyzer.py의
+    rationale_tier/priority 강등과 동일 패턴). 호출자는 반환값을
+    session.foresight_cards 에 대입하고 session.json 을 재저장해야
+    calc_session_metrics 가 verdict 를 세션만으로 자급할 수 있다.
+
+    scores 는 cards 와 같은 순서/개수를 가정한다 (score_foresight 가 그렇게
+    반환한다) — 개수가 다르면 fail fast. 범위 밖 verdict 는 "" 로 강등한다
+    (ForesightCard.from_json 과 동일한 보수적 방향).
+    """
+    if len(scores) != len(cards):
+        raise ValueError(
+            f"scores length ({len(scores)}) must match cards length ({len(cards)})"
+        )
+    stamped: list[ForesightCard] = []
+    for card, score in zip(cards, scores, strict=True):
+        verdict = score.get("verdict", "")
+        if verdict not in FORESIGHT_VERDICT_VALUES:
+            verdict = ""
+        stamped.append(replace(card, verdict=verdict))
+    return stamped
 
 
 def format_measurement_summary(result: MeasurementResult) -> str:

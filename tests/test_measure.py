@@ -14,6 +14,7 @@ from hijack.core.measure import (
     diff_sessions,
     format_measurement_summary,
     score_foresight,
+    stamp_foresight_verdicts,
     write_measurement,
 )
 from hijack.core.models import (
@@ -67,10 +68,23 @@ def _make_category(name: str, rules: list[AnalysisRule]) -> CategoryResult:
     )
 
 
+def _foresight_card(**kwargs: Any) -> ForesightCard:
+    defaults: dict[str, Any] = dict(
+        hypothesis="The author avoids ORMs to keep the DB layer transparent",
+        signals=["sqlalchemy not in dependencies"],
+        falsification="If pyproject.toml ever lists sqlalchemy, this hypothesis is wrong",
+        tier="corroborated",
+        layer="db",
+    )
+    defaults.update(kwargs)
+    return ForesightCard(**defaults)
+
+
 def _make_session(
     session_id: str,
     categories: list[CategoryResult],
     satd_items: Any | None = None,
+    foresight_cards: list[ForesightCard] | None = None,
 ) -> SessionResult:
     return SessionResult(
         session_id=session_id,
@@ -82,6 +96,7 @@ def _make_session(
         analysis_duration_seconds=0.0,
         project_structure="",
         satd_items=satd_items,
+        foresight_cards=foresight_cards or [],
     )
 
 
@@ -312,6 +327,27 @@ class TestCalcSessionMetrics:
         session = _make_session("s9", [])
         m = calc_session_metrics(session)
         assert m.foresight_scores == []
+
+    def test_foresight_scores_built_from_stamped_cards(self) -> None:
+        cards = [
+            _foresight_card(hypothesis="H1", verdict="confirmed"),
+            _foresight_card(hypothesis="H2", verdict="refuted"),
+        ]
+        session = _make_session("s11", [], foresight_cards=cards)
+        m = calc_session_metrics(session)
+        assert m.foresight_scores == [
+            {"hypothesis": "H1", "verdict": "confirmed"},
+            {"hypothesis": "H2", "verdict": "refuted"},
+        ]
+
+    def test_foresight_scores_excludes_unscored_cards(self) -> None:
+        cards = [
+            _foresight_card(hypothesis="H1", verdict="confirmed"),
+            _foresight_card(hypothesis="H2"),  # verdict="" — not yet scored
+        ]
+        session = _make_session("s12", [], foresight_cards=cards)
+        m = calc_session_metrics(session)
+        assert m.foresight_scores == [{"hypothesis": "H1", "verdict": "confirmed"}]
 
 
 # ---------------------------------------------------------------------------
@@ -628,6 +664,79 @@ class TestScoreForesight:
         result = score_foresight(cards, repo_docs, pr_decisions)
         # Signal "ORM rejected in PR" matches "ORM" in rejection PR title
         assert result[0]["verdict"] in {"confirmed", "unconfirmed"}
+
+
+# ---------------------------------------------------------------------------
+# stamp_foresight_verdicts — verdict-into-card stamping
+# ---------------------------------------------------------------------------
+
+class TestStampForesightVerdicts:
+    def test_stamps_verdict_onto_new_cards(self) -> None:
+        cards = [self._make_card("H1"), self._make_card("H2")]
+        scores = [
+            {"hypothesis": "H1", "verdict": "confirmed"},
+            {"hypothesis": "H2", "verdict": "unconfirmed"},
+        ]
+        stamped = stamp_foresight_verdicts(cards, scores)
+        assert [c.verdict for c in stamped] == ["confirmed", "unconfirmed"]
+
+    def test_original_cards_unmodified(self) -> None:
+        cards = [self._make_card("H1")]
+        stamp_foresight_verdicts(cards, [{"hypothesis": "H1", "verdict": "confirmed"}])
+        assert cards[0].verdict == ""
+
+    def test_mismatched_length_raises(self) -> None:
+        cards = [self._make_card("H1"), self._make_card("H2")]
+        with pytest.raises(ValueError):
+            stamp_foresight_verdicts(cards, [{"hypothesis": "H1", "verdict": "confirmed"}])
+
+    def test_out_of_range_verdict_demoted_to_empty(self) -> None:
+        cards = [self._make_card("H1")]
+        scores = [{"hypothesis": "H1", "verdict": "bogus"}]
+        stamped = stamp_foresight_verdicts(cards, scores)
+        assert stamped[0].verdict == ""
+
+    def test_other_fields_preserved(self) -> None:
+        cards = [self._make_card("H1", ["sig A", "sig B"])]
+        stamped = stamp_foresight_verdicts(
+            cards, [{"hypothesis": "H1", "verdict": "confirmed"}]
+        )
+        assert stamped[0].hypothesis == "H1"
+        assert stamped[0].signals == ["sig A", "sig B"]
+        assert stamped[0].tier == "speculative"
+        assert stamped[0].layer == "shared"
+
+    def _make_card(self, hypothesis: str, signals: list[str] | None = None) -> ForesightCard:
+        return ForesightCard(
+            hypothesis=hypothesis,
+            signals=signals or ["signal A"],
+            falsification="If X then wrong",
+            tier="speculative",
+            layer="shared",
+        )
+
+
+class TestMeasureRerunPreservesScoring:
+    """score_foresight 재실행/measure 재실행이 이미 채점된 verdict 를 잃지 않는다."""
+
+    def test_stamped_session_calc_preserves_verdicts(self) -> None:
+        cards = [
+            ForesightCard(
+                hypothesis="H1",
+                signals=["sig"],
+                falsification="falsified if X",
+                tier="corroborated",
+                layer="shared",
+            ),
+        ]
+        stamped = stamp_foresight_verdicts(cards, [{"hypothesis": "H1", "verdict": "confirmed"}])
+        session = _make_session("s13", [], foresight_cards=stamped)
+
+        # Round-trip through session.json (to_json/from_json), simulating a
+        # fresh `code-hijack measure` invocation loading a saved session file.
+        restored = SessionResult.from_json(session.to_json())
+        m = calc_session_metrics(restored)
+        assert m.foresight_scores == [{"hypothesis": "H1", "verdict": "confirmed"}]
 
 
 # ---------------------------------------------------------------------------
