@@ -46,6 +46,8 @@ AI 에이전트가 짜는 코드는 일반적이고 일관성 없다. code-hijac
 | 규칙 honesty 등급 (2026-06-11, starlette) | 14개 규칙: cited 7 / corroborated 5 / speculative 2; **MUST 5/14 (35.7%), 전원 cited** | 0.3.0 starlette 사이클 |
 | Foresight 정확도 (2026-06-11, starlette) | 4개 카드: **3/4 confirmed** (repo docs + rejection corpus 대조); 1개 미확인 (정직 유지) | 0.3.0 starlette 사이클 |
 | 테스트 | **1020 passed** (0.2.0 에서 884) | 0.3.0 |
+| Downstream A/B — 규칙 주입 3라운드 (2026-07-04) | **규칙이 약한 모델을 구조**: Haiku control 은 시니어가 거절한 버퍼링 안티패턴(PR#1745)에 그대로 빠짐(9/9 청크 전체 버퍼 실측); treatment 은 스트리밍(1/9) + 커밋 인용. frontier(Sonnet)는 규칙 유무 무관 시니어 구조 재현 | 첫 downstream A/B |
+| SATD 공급→소비 (W2, 2026-07-05) | typer: 공급 26 → 2 ref 가 1 규칙에 인용 (`satd_citation_ratio` 7.7%, directional). **SATD 가 cited MUST 를 지탱** — 결정 커밋 2개뿐인 squash-merge 레포에서 | typer W2 사이클 |
 
 **정직한 평가**: 도구 차별점 (verbatim 인용 evidence chain) 은 **잘 정돈된 시니어 OSS** (PR-style commit body 풍부) 에서 광고대로 작동. 일반 짧은-commit repo 에선 commit 마이닝만으로는 "rule + ✅/❌ example" extractor 로 degrade; PR/이슈 마이닝이 이슈 트래커가 활성화된 레포에서 이 격차를 보완한다.
 
@@ -53,6 +55,19 @@ AI 에이전트가 짜는 코드는 일반적이고 일관성 없다. code-hijac
 - **G (카테고리 확장)** — 검증 완료: +5%p evidence per 카테고리, starlette 천장 50% 도달. 5 카테고리 이상은 diminishing returns; commit-pool 풍부함이 진짜 lever 임 (카테고리 수 아님).
 - **R7 (commit corpus → rule 역도출)** — Phase 1 완료 (`backend/docs/r7_pipeline_reversal.md`). multi-commit cluster (CORS preflight: 3 commits → 1 cluster) 에서 가설 viable, 그러나 **starlette cluster 의 21% 만 multi-commit** — 단일-commit cluster 는 forward pipeline 대비 advantage 없음. Phase 2-4 (LLM derivation + verify + 외부 평가) ungated; hybrid forward+inversion 모드로 갈 가능성.
 - **D dogfooding** — ceiling vs good-enough 질문. HarnessAI 에서 2026-05-06 시작 (1주일 horizon); "에이전트가 `.code-hijack/CLAUDE.md` 적용 시 측정 가능한 코드 품질 향상이 있나" 가 결론.
+
+## Positioning (실측 기반, 2026-07)
+
+첫 downstream A/B (2026-07-04) 가 가린 실제 수혜자:
+
+1. **약한/싼 모델이 알려진 안티패턴에서 구조된다.** 규칙 주입 시 Haiku 는 시니어가 명시적으로 거절한 전체-바디 버퍼링을 회피; 규칙 없이는 그대로 빠짐 (자체 rationale 에서 "must accumulate first" 자백). frontier 모델은 규칙 없이도 시니어 구조를 재현 — 이 도구는 frontier 의 correctness 를 사주지 않는다.
+2. **사람 학습자가 추적 가능한 WHY-provenance 를 얻는다.** 규칙 주입 세션은 결정 뒤의 특정 커밋/사고를 인용; control 은 출처 없는 일반론. 이 축은 모델 강도와 무관하며, 측정된 이득 중 더 크다 (학습 독자 > 코드품질 독자).
+
+2026 문헌 대비:
+
+- LLM 이 rationale 을 **생성**하면 precision ~0.27, 오도성 주장 1.6–3.2% ([arxiv 2504.20781](https://arxiv.org/abs/2504.20781)). code-hijack 이 WHY 를 LLM 에게 짓게 하지 않는 이유 — 시니어의 **verbatim** 증거(커밋, 거절 PR, SATD 주석)만 surface 하고, 검증 인용 없는 MUST 는 기계적으로 강등한다.
+- 최근접 접근 Probe-and-Refine ([arxiv 2606.20512](https://arxiv.org/abs/2606.20512)) 은 synthetic probe *행동*으로 레포 가이드를 튜닝 (+7.5pp SWE-bench) 하지만 provenance 가 없다 — *무엇이* 되는지는 말해도 *시니어가 왜 그렇게 골랐는지*는 못 말한다. code-hijack 의 축은 기록된 WHY; 둘은 상보적 (추출 규칙의 probe 검증은 Critic 레이어 후보).
+- 컨텍스트 파일은 동일 완성도에서 에이전트 **비용**을 실측으로 줄인다: runtime −28.6%, 출력 토큰 −16.6% ([arxiv 2601.20404](https://arxiv.org/abs/2601.20404)). 효율은 품질과 독립인 가치 축 — 다음 A/B 사이클의 지표로 예정.
 
 ## Quickstart
 

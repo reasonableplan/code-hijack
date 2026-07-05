@@ -46,6 +46,8 @@ Numbers from the 2026-06-11 measurement cycle on `encode/starlette` (skill mode)
 | Rule honesty grading (2026-06-11, starlette) | 14 rules: cited 7 / corroborated 5 / speculative 2; **MUST 5/14 (35.7%), all 5 cited** | 0.3.0 starlette cycle |
 | Foresight accuracy (2026-06-11, starlette) | 4 cards: **3/4 confirmed** (repo docs + rejection corpus); 1 unconfirmed (honest) | 0.3.0 starlette cycle |
 | Tests | **1020 passed** (884 in 0.2.0) | 0.3.0 |
+| Downstream A/B — rule injection, 3 rounds (2026-07-04) | **Rules rescued the weak model**: Haiku control fell into the buffering anti-pattern the seniors had rejected (PR#1745, full-body buffering measured 9/9 chunks); treatment streamed (1/9) and cited the commit. Frontier (Sonnet) reproduced senior structure with or without rules | first downstream A/B |
+| SATD supply→consumption (W2, 2026-07-05) | typer: 26 SATD supplied → 2 refs cited by 1 rule (`satd_citation_ratio` 7.7%, directional). **SATD sustained a cited MUST** on a squash-merge repo with only 2 decision commits | typer W2 cycle |
 
 **Honest read**: the tool's differentiator (verbatim-citation evidence chains) works as advertised on **well-curated senior repos** with PR-style commit bodies. For everyday repos with terse commits, commit mining alone degrades to a "rule + ✅/❌ example" extractor; PR/issue mining now supplements this gap for repos with active issue trackers.
 
@@ -53,6 +55,19 @@ Direction status (2026-06-11):
 - **G (more categories)** — verified: +5%p evidence per added category, ceiling now 50% on starlette. Diminishing returns past 5 categories; commit-pool richness, not category count, is the real lever.
 - **R7 (commit-corpus-first rule derivation)** — phase 1 complete (`backend/docs/r7_pipeline_reversal.md`). Hypothesis viable on multi-commit clusters (CORS preflight: 3 commits → 1 cluster) but **only 21% of starlette clusters are multi-commit** — single-commit clusters get no advantage over forward pipeline. Phase 2-4 (LLM derivation + verify + external eval) still ungated; will likely become a hybrid forward+inversion mode.
 - **D (dogfooding)** — the ceiling-vs-good-enough question. Started on HarnessAI 2026-05-06 (1-week horizon); resolution comes from "did the agent code measurably better with `.code-hijack/CLAUDE.md` than without".
+
+## Positioning (measured, 2026-07)
+
+Who actually benefits, per the first downstream A/B (2026-07-04):
+
+1. **Weak/cheap models get rescued from known anti-patterns.** With rules injected, Haiku avoided the full-body-buffering approach the senior repo had explicitly rejected; without rules it fell straight into it (and its own rationale admitted "must accumulate first"). Frontier models already reproduce senior structure without rules — the tool does not buy them correctness.
+2. **Human learners get traceable WHY-provenance.** Rule-injected sessions cite the specific commits/incidents behind each decision; control sessions produce generic reasoning with no sources. This axis holds regardless of model strength, and is the larger measured benefit (learning reader > code-quality reader).
+
+Context against the 2026 literature:
+
+- LLM-**generated** design rationale reaches precision ~0.27 with 1.6–3.2% actively misleading claims ([arxiv 2504.20781](https://arxiv.org/abs/2504.20781)). This is why code-hijack never asks the LLM to author the WHY — it surfaces the senior's **verbatim** evidence (commits, rejected PRs, SATD comments) and mechanically demotes any MUST without a verified citation.
+- The nearest-neighbor approach, Probe-and-Refine ([arxiv 2606.20512](https://arxiv.org/abs/2606.20512)), tunes repo guidance from synthetic-probe *behavior* (+7.5pp SWE-bench) but carries no provenance — it can say *what* works, not *why the seniors chose it*. code-hijack's axis is the recorded WHY; the two are complementary (probe-style verification of extracted rules is a Critic-layer candidate).
+- Context files measurably cut agent **cost** at equal completion: −28.6% runtime, −16.6% output tokens ([arxiv 2601.20404](https://arxiv.org/abs/2601.20404)). Efficiency is a value axis independent of quality — planned as a metric in the next A/B cycle.
 
 ## Example outputs
 

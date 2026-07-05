@@ -44,7 +44,7 @@ tests/                 # pytest 테스트 (루트에 위치)
   - **CLI 모드**: `code-hijack analyze <target>` — `ANTHROPIC_API_KEY` 필요, Claude API 호출
   - **Skill 모드**: `/code-hijack <target>` — API key 불필요, 현재 Claude Code 세션이 LLM 역할. 워크플로우는 `.claude/skills/code-hijack/SKILL.md`
   - **diff**: `code-hijack diff <session1> <session2>` — 두 세션 규칙 변경 비교
-  - **measure**: `code-hijack measure <session.json> [session2.json]` — 지표 산출 + measurement.json (주의: cli.py import 체인에 anthropic 있어 `[api]` extra 필요)
+  - **measure**: `code-hijack measure <session.json> [session2.json]` — 지표 산출 + measurement.json (`[api]` extra 불필요 — anthropic lazy import, d751aa3)
   - **resume**: `code-hijack analyze ... --resume <session.json>` — 이전 세션 완료 카테고리 스킵
 - 상세 내용은 `backend/docs/skeleton.md` 참조
 

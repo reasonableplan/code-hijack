@@ -107,7 +107,7 @@
 
 ### 부채 (roadmap 외 트래킹)
 
-- cli.py lazy import (`[api]` extra 없이 measure/diff 불가 — 실사용 발현 확인됨)
+- ~~cli.py lazy import~~ — 해소 (2026-07-05, d751aa3): DEFAULT_MODEL→base.py, ClaudeAPIClient lazy import, anthropic-차단 회귀 테스트
 - 마이닝 노이즈 잔여 (dependabot→incident 은 `_is_bot_pr` 로 부분 해소, 스팸 PR rejection 잔존)
 - test_llm.py 커버리지 (3 vs 86)
 
