@@ -77,6 +77,13 @@
 **구현 완료 (2026-07-03, commit 92e8f64) — `comment` kind 채택**: 초안의 `doc` 재사용은 폐기 (doc 진실 풀 = repo_doc_paths 라 SATD 의 `src/foo.py:42` ref 가 fake 로 오분류됨). 신규 `comment` kind + valid_comment_refs 풀(정확 path:line). `satd.py`(MAT regex) + models/evidence/analyzer/SKILL 배관은 pr kind(72f5dbe) 미러. **부수 이득**: CLI 모드 assign_rationale_tier 에 pr 풀이 안 넘어가던 기존 갭도 함께 해소. tests 1097.
 - **실측**: starlette 34 .py → SATD **1건**(`middleware/exceptions.py:26 [TODO] handle 404 if debug`). 성숙 라이브러리라 희소(W1 처럼 레포 의존). 엔진 E2E(추출→세션→comment 분류→history) 작동 확인. history-anchored 실개선치는 skill-mode 풀 재분석 필요.
 
+**강화 (2026-07-04, commit 9e3833f)**: `SatdItem.context` — 태그 줄 + 연속 주석(≤4줄) + 직후 코드(≤5줄), 700자 캡 (LLM 의 규칙 매칭 단서). measure.py 에 결정론 인용률 지표 4종: `satd_supplied_count` / `comment_cited_rule_count` / `comment_cited_ref_count` / `satd_citation_ratio`. tests 1101.
+
+**인용률 실측 (2026-07-05, typer skill-mode Sonnet 1회)**: 공급 26 → **인용 2 ref / 1 규칙 = satd_citation_ratio 7.7%**. **판정: 배선 유효** (기준 "인용 0 이면 재검토" 통과).
+- **헤드라인: SATD 가 MUST 를 지탱한 첫 사례** — 생존 MUST 2 중 1(공개 파라미터 deprecation 다단계 타임라인)이 SATD 2건(`typer/core.py:263`, `typer/params.py:43`) 인용으로 cited tier 확보. commit-mining 이 2건뿐인 squash 레포에서 W2 가 실질 WHY 공급원 — 소스 서열 1위 판단의 downstream 실증.
+- **해석 주의 (분모 클러스터)**: 26건 중 13건이 2개 주제 클러스터(shell_complete 제거 ×9, is_flag ×4). 인용된 규칙이 바로 그 최대 클러스터의 대표 ref 를 소비 — distinct-ref 비율(7.7%)은 주제 단위 소비율을 과소평가. 지표는 directional (LLM 성실도 confound 내재).
+- 교차검증: comment ref 2/2 진실 풀 실재, fake_citation 0. 세션: scratchpad `typer-w2-run/2026-07-05_typer/` (transient).
+
 ### W3 — 명시적/암묵적 스타일 층 분리 (43% 의 정직한 재해석)
 
 **근거**: MPCODER 가 스타일을 2층으로 분리 — **명시적**(문법 표준: naming/포맷/구조, 기계 검증 가능) vs **암묵적**(의미론적 컨벤션: 분해 방식/idiom) ([2406.17255](https://arxiv.org/pdf/2406.17255)).
@@ -144,7 +151,7 @@
 3. **W3 의 explicit 판정 주체**: LLM 태깅으로 시작 (결정론 분류기는 과설계 위험). 태깅 신뢰도 낮으면 AST 기반 재검토.
 4. **abort 기준 (2026-07-04 최종)**: 원안("+10%p history-anchored 미만이면 소진")은 지표 폐기로 무효. 결정론 net-new 공급 기반 최종 판정:
    - **W1 = dead end, 제거됨** (net-new 0 × 3레포, 전제 false). "머지 PR 미개척" 가정이 squash 실동작으로 반증.
-   - **W2 = 유효** (SATD net-new: pydantic 50 / typer 26 / starlette 1), skill 배선 완료. **유일한 확실 net-new 소스.**
+   - **W2 = 유효** (SATD net-new: pydantic 50 / typer 26 / starlette 1), skill 배선 완료. **유일한 확실 net-new 소스.** 소비 실증 (2026-07-05): typer 인용률 7.7% (2 ref/1 MUST 규칙) — 배선 작동, §2 W2 실측 참조.
    - **거절/incident PR (0.3.0) = 최강 차별 WHY** (pydantic 35 / starlette 9), 이미 파이프라인 소비 중.
    - **다음 레버**: (i) SATD 강화 (W2 주변 컨텍스트 확장 + 규칙 인용률 측정), (ii) downstream A/B — 도구 가치 축이 "WHY 공급 + 약한 모델 안티패턴 구조"임이 실증됨 (2026-07-04 A/B). **소스 확장은 W2 로 수렴; W1 류 "머지 PR" 확장은 재시도하지 말 것 (squash 복사로 무효).**
 
