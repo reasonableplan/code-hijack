@@ -1,0 +1,37 @@
+{
+  "session_id": "2026-07-05_werkzeug",
+  "cited_ratio": 0.9411764705882353,
+  "must_ratio": 0.23529411764705882,
+  "tier_distribution": {
+    "cited": 16,
+    "corroborated": 0,
+    "speculative": 1
+  },
+  "intent_kind_distribution": {
+    "rejection": 4,
+    "incident": 11,
+    "preference": 0
+  },
+  "foresight_scores": [
+    {
+      "hypothesis": "Werkzeug deliberately keeps runtime dependencies to an absolute minimum (a single required dependency) so it can remain an embeddable low-level WSGI toolkit that frameworks like Flask build on, without forcing template-engine/database/etc. choices onto downstream applications.",
+      "verdict": "confirmed"
+    },
+    {
+      "hypothesis": "The maintainers intentionally treat 'importable from the module' as the de facto public API contract instead of curating an explicit `__all__` export list, accepting that most module-level names are effectively public and must be handled through docstring/versionchanged discipline rather than access control.",
+      "verdict": "confirmed"
+    },
+    {
+      "hypothesis": "Security-sensitive modules (password hashing, safe path joining) are deliberately implemented using only the Python standard library, avoiding third-party crypto/path dependencies, to minimize the supply-chain attack surface of the most safety-critical code paths.",
+      "verdict": "confirmed"
+    }
+  ],
+  "satd_supplied_count": 2,
+  "comment_cited_rule_count": 1,
+  "comment_cited_ref_count": 2,
+  "satd_citation_ratio": 1.0,
+  "exemplar_checked_count": 17,
+  "exemplar_verbatim_ratio": 1.0,
+  "probed_rule_count": 0,
+  "probe_discriminated_count": 0
+}

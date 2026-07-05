@@ -2,6 +2,40 @@
 
 실제 시니어 오픈소스 레포를 code-hijack 으로 분석한 결과물. Skill 모드 (few-shot + critic) 적용.
 
+## [`werkzeug/`](werkzeug/) — Werkzeug (pallets) — **2026-07-05 (최신, 최고 품질 샘플)**
+
+> 📊 현재까지 도구가 낸 최고 품질 세션. cited 94% (starlette v12 50% 대비), exemplar-verbatim 100%, incident evidence 11건 (프로젝트 최다). 결정론 공급 측정으로 후보 4개(uvicorn/attrs/structlog/werkzeug) 중 선정 — werkzeug 가 incident 11 로 압도적.
+
+- **Analyzed**: https://github.com/pallets/werkzeug (history depth 30, 768 commits scanned)
+- **Total files scanned**: 138
+- **Rules extracted**: 17 (6 architecture + 5 coding_style + 6 api_design)
+- **Quality metrics**:
+  - MUST ratio: 23.5% (전원 cited)
+  - **Rationale tier: cited 16 / speculative 1 (94% cited)**
+  - **exemplar_verbatim_ratio: 100%** — 모든 good_example 이 실존 소스의 verbatim 발췌 (W4a 결정론 검증)
+  - intent_kind: **incident 11 + rejection 4** (incident 최다 — 보안/회귀 사고 이력 풍부)
+  - foresight: 3 카드 전원 confirmed (min-deps / import=public-API / stdlib-only 보안모듈)
+
+### Highlights
+
+Representative senior patterns captured (전원 verbatim evidence):
+
+1. **Host header는 allowlist 없이 신뢰 금지** — client-controlled host 로 보안 결정 시 explicit allowlist, 없으면 least-trusting fail (evidence: commit `71b69df` trusted_hosts, PR#3143)
+2. **untrusted stream은 incremental hard cap** — declared Content-Length 만 믿지 말고 읽는 중 증분 체크 (evidence: PR#3053 chunked Transfer-Encoding DoS)
+3. **safe_join은 escape 시 None sentinel** — traversal/절대경로/드라이브문자/대체구분자 거부, 'safe-looking' fallback 금지 (evidence: PR#3174 Windows nt-path hardening, incident)
+4. **public 제거는 DeprecationWarning 사이클** — replacement API 명시 + 1릴리스 유지, bare TODO 단독 금지
+5. **sansio 계층 분리** — transport-agnostic 파싱을 WSGI wrapper 가 subclass (evidence: `_SansIOResponse`)
+
+### 정직 노트 — 실전에서 잡힌 정직성 가드 2건
+
+이 세션은 skill 세션이 **미머지 PR 을 규칙으로 만들려다 스스로 차단한** 사례를 남겼다: (a) PR#3183 의 diff 를 good_example 로 쓰려 했으나 W4a exemplar-verbatim 이 `false` (현 소스 `range.py:271` 에 여전히 `assert` 존재 — PR 미머지) → 규칙 드롭, anti-pattern 으로 강등. (b) PR#3182 (O(n²) 픽스) 도 소스 미반영 확인 → 제외. 도구의 "verbatim only" 설계가 hallucination 을 막는 실증.
+
+### How to use
+
+Copy [`werkzeug/integrated/CLAUDE.md`](werkzeug/integrated/CLAUDE.md) into your WSGI/HTTP-library project's Claude Code context. Raw 데이터는 `2026-07-05_werkzeug/session.json`.
+
+---
+
 ## [`starlette/`](starlette/) — Starlette (encode) — **2026-05-06 v10 snapshot (4 categories)**
 
 > 📊 이 디렉토리는 v10 4-category baseline. 같은 날 v11 (+security) → v12 (+performance) 까지 진행되어 매칭율 38% → 45% → **50%** 으로 상승했으나, 그 두 사이클은 `hijack-output/validation-starlette-v{11,12}/` (gitignored) 에만 보관. v10 으로 도구 출력 형태를 보고, 매칭율 추이는 메인 README 의 Validation status 표 참조.
