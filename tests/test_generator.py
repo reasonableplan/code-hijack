@@ -13,7 +13,14 @@ from hijack.core.generator import (
     render_system_prompt_md,
     write_output,
 )
-from hijack.core.models import AnalysisRule, CategoryResult, Evidence, ForesightCard, SessionResult
+from hijack.core.models import (
+    AnalysisRule,
+    CategoryResult,
+    Evidence,
+    ForesightCard,
+    ProbeRecord,
+    SessionResult,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -965,6 +972,76 @@ class TestRepoNatureHeader:
 # ---------------------------------------------------------------------------
 # T-034: system-prompt 맥락 조건부 톤
 # ---------------------------------------------------------------------------
+
+def _probe(**kwargs) -> ProbeRecord:
+    defaults = dict(
+        task="Parse a config file and merge overrides",
+        verdict="discriminated",
+        control_behavior="crashes on double-enter (re-entrant call)",
+        treatment_behavior="raises a clear guard error before corrupting state",
+        model="haiku",
+    )
+    defaults.update(kwargs)
+    return ProbeRecord(**defaults)
+
+
+class TestProbeBadgeRendering:
+    """Behavior probe badge — system-prompt compact line + category/layer detail block."""
+
+    def test_compact_badge_shown_when_discriminated(self) -> None:
+        rule = _rule()
+        rule.probe = _probe(verdict="discriminated", model="haiku")
+        s = _session()
+        s.categories[0].rules = [rule]
+        md = render_system_prompt_md(s)
+        assert "probe: behavior-confirmed (haiku)" in md
+
+    def test_compact_badge_silent_when_not_discriminated(self) -> None:
+        rule = _rule()
+        rule.probe = _probe(verdict="not_discriminated")
+        s = _session()
+        s.categories[0].rules = [rule]
+        md = render_system_prompt_md(s)
+        assert "probe:" not in md
+
+    def test_compact_badge_silent_when_no_probe(self) -> None:
+        rule = _rule()
+        rule.probe = None
+        s = _session()
+        s.categories[0].rules = [rule]
+        md = render_system_prompt_md(s)
+        assert "probe:" not in md
+
+    def test_detail_block_shown_when_discriminated(self) -> None:
+        rule = _rule()
+        rule.probe = _probe(
+            verdict="discriminated",
+            control_behavior="crashes on double-enter",
+            treatment_behavior="raises a clear guard error",
+        )
+        cat = _category()
+        cat.rules = [rule]
+        md = render_category_md(cat)
+        assert "**Probe**: behavior-confirmed" in md
+        assert "control: crashes on double-enter" in md
+        assert "treatment: raises a clear guard error" in md
+
+    def test_detail_block_silent_when_not_discriminated(self) -> None:
+        rule = _rule()
+        rule.probe = _probe(verdict="not_discriminated")
+        cat = _category()
+        cat.rules = [rule]
+        md = render_category_md(cat)
+        assert "**Probe**:" not in md
+
+    def test_detail_block_silent_when_no_probe(self) -> None:
+        rule = _rule()
+        rule.probe = None
+        cat = _category()
+        cat.rules = [rule]
+        md = render_category_md(cat)
+        assert "**Probe**:" not in md
+
 
 class TestSystemPromptTone:
     def test_no_non_negotiable_phrase(self) -> None:

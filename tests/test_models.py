@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 from hijack.core.exemplars import Exemplar
-from hijack.core.models import AnalysisRule, CategoryResult, Evidence, ForesightCard, SessionResult
+from hijack.core.models import (
+    AnalysisRule,
+    CategoryResult,
+    Evidence,
+    ForesightCard,
+    ProbeRecord,
+    SessionResult,
+)
 
 
 def make_rule(**kwargs) -> AnalysisRule:
@@ -481,6 +488,62 @@ def test_session_result_pr_decisions_roundtrip_with_diff_excerpt() -> None:
     assert restored_decision.ref == "PR#42"
     assert restored_decision.intent_kind == "rejection"
     assert restored_decision.diff_excerpt == "+def sync_wrapper():\n+    return asyncio.run(...)"
+
+
+# ---------------------------------------------------------------------------
+# ProbeRecord dataclass + AnalysisRule.probe (behavior probe)
+# ---------------------------------------------------------------------------
+
+def _probe(**kwargs) -> ProbeRecord:
+    defaults = dict(
+        task="Parse a config file and merge overrides",
+        verdict="discriminated",
+        control_behavior="crashes on double-enter (re-entrant call)",
+        treatment_behavior="raises a clear guard error before corrupting state",
+        model="haiku",
+    )
+    defaults.update(kwargs)
+    return ProbeRecord(**defaults)
+
+
+def test_probe_record_roundtrip() -> None:
+    p = _probe()
+    assert ProbeRecord.from_json(p.to_json()) == p
+
+
+def test_probe_record_verdict_out_of_range_demoted() -> None:
+    # Machine-check, not fail-fast: an out-of-range verdict is demoted to
+    # "not_discriminated" (conservative direction) rather than dropped/raised.
+    payload = _probe().to_json()
+    payload["verdict"] = "bogus_verdict"
+    restored = ProbeRecord.from_json(payload)
+    assert restored.verdict == "not_discriminated"
+
+
+def test_rule_default_probe_is_none() -> None:
+    rule = make_rule()
+    assert rule.probe is None
+
+
+def test_rule_probe_omitted_from_json_when_none() -> None:
+    rule = make_rule()
+    assert "probe" not in rule.to_json()
+
+
+def test_rule_probe_roundtrip() -> None:
+    rule = make_rule(probe=_probe())
+    data = rule.to_json()
+    assert data["probe"]["verdict"] == "discriminated"
+    restored = AnalysisRule.from_json(data)
+    assert restored.probe == _probe()
+
+
+def test_rule_probe_backward_compat_when_key_missing() -> None:
+    # Older session.json files (pre-probe-slice) won't have a probe key.
+    payload = make_rule().to_json()
+    payload.pop("probe", None)
+    restored = AnalysisRule.from_json(payload)
+    assert restored.probe is None
 
 
 def test_session_result_satd_items_roundtrip() -> None:

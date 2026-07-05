@@ -37,6 +37,11 @@ class MeasurementResult:
     # exemplar_verbatim_ratio is the fraction of those that were True.
     exemplar_checked_count: int = 0
     exemplar_verbatim_ratio: float = 0.0
+    # Behavioral-probe metrics. probed_rule_count is how many rules carry a
+    # ProbeRecord (regardless of verdict); probe_discriminated_count is how
+    # many of those verdicts are "discriminated".
+    probed_rule_count: int = 0
+    probe_discriminated_count: int = 0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -52,6 +57,8 @@ class MeasurementResult:
             "satd_citation_ratio": self.satd_citation_ratio,
             "exemplar_checked_count": self.exemplar_checked_count,
             "exemplar_verbatim_ratio": self.exemplar_verbatim_ratio,
+            "probed_rule_count": self.probed_rule_count,
+            "probe_discriminated_count": self.probe_discriminated_count,
         }
 
     @classmethod
@@ -69,6 +76,8 @@ class MeasurementResult:
             satd_citation_ratio=data.get("satd_citation_ratio", 0.0),
             exemplar_checked_count=data.get("exemplar_checked_count", 0),
             exemplar_verbatim_ratio=data.get("exemplar_verbatim_ratio", 0.0),
+            probed_rule_count=data.get("probed_rule_count", 0),
+            probe_discriminated_count=data.get("probe_discriminated_count", 0),
         )
 
 
@@ -149,6 +158,12 @@ def calc_session_metrics(
         else 0.0
     )
 
+    probed_rules = [r for r in rules if r.probe is not None]
+    probed_rule_count = len(probed_rules)
+    probe_discriminated_count = sum(
+        1 for r in probed_rules if r.probe.verdict == "discriminated"
+    )
+
     return MeasurementResult(
         session_id=session.session_id,
         cited_ratio=cited_ratio,
@@ -162,6 +177,8 @@ def calc_session_metrics(
         satd_citation_ratio=satd_citation_ratio,
         exemplar_checked_count=exemplar_checked_count,
         exemplar_verbatim_ratio=exemplar_verbatim_ratio,
+        probed_rule_count=probed_rule_count,
+        probe_discriminated_count=probe_discriminated_count,
     )
 
 
@@ -206,6 +223,10 @@ def diff_sessions(
         "satd_citation_ratio_delta": round(m2.satd_citation_ratio - m1.satd_citation_ratio, 10),
         "exemplar_verbatim_ratio_delta": round(
             m2.exemplar_verbatim_ratio - m1.exemplar_verbatim_ratio, 10
+        ),
+        "probed_rule_count_delta": m2.probed_rule_count - m1.probed_rule_count,
+        "probe_discriminated_count_delta": (
+            m2.probe_discriminated_count - m1.probe_discriminated_count
         ),
     }
 
@@ -287,6 +308,9 @@ def format_measurement_summary(result: MeasurementResult) -> str:
     lines.append(
         f"  exemplar_verbatim_ratio: {result.exemplar_verbatim_ratio:.1%} "
         f"({result.exemplar_checked_count} checked)"
+    )
+    lines.append(
+        f"  probes: {result.probe_discriminated_count}/{result.probed_rule_count} discriminated"
     )
     if result.foresight_scores:
         lines.append(f"  foresight scores: {len(result.foresight_scores)} cards")

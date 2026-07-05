@@ -521,7 +521,31 @@ print(f'[DONE] {Path(OUTPUT) / session.session_id}')
 
 `write_output` 이 자동으로: evidence 없는 MUST 강등 → MUST 비율 lint → exemplars.md / 레이어별 invariants / foresight.md 렌더링까지 수행한다.
 
-### 5. 자체 Critic 재평가 (권장 — 품질 향상)
+### 5. 행동 probe (선택)
+
+evidence 만으로는 "규칙이 그럴듯하다"까지만 보장된다. probe 는 "규칙이 실제로 약모델의 행동을 바꾼다"를 재현 가능하게 확인하는 단계다. **엔진(models.py/generator.py/measure.py)은 기록+렌더만 담당** — 설계/실행은 이 세션의 일이다.
+
+1. **대상 선정**: incident/rejection evidence 가 있는 MUST/SHOULD 규칙 중, **오용/경계 경로**(재진입, 잘못된 입력, 수명주기 위반)에서 행동이 갈릴 수 있는 것만 골라라. happy-path 규칙이나 상식 수준 함정은 probe 하지 마라 — 실측상 판별이 안 된다.
+2. **프로토콜**:
+   - 규칙을 모르는 상태로 풀 수 있는 중립 태스크를 설계한다 (함정 힌트 금지 — "재진입 주의" 같은 문구를 태스크에 넣지 말 것).
+   - Agent tool 로 약모델(`haiku`) 2팔을 돌린다: control(규칙 미주입) / treatment(규칙 주입).
+   - 결정론 하네스로 오용 경로를 자극해 채점한다 (예: 이중 enter, `float('inf')` 입력, 잘못된 타입).
+   - 두 팔의 행동이 실제로 갈리면 `verdict="discriminated"`, 안 갈리면 `"not_discriminated"`.
+3. **기록**: 해당 규칙의 `probe` 필드에 다음 구조의 dict 를 채우고 `SessionResult` 를 재저장 + `write_output` 을 재실행한다:
+
+```json
+{
+  "task": "probe 태스크 한 줄 요약",
+  "verdict": "discriminated",
+  "control_behavior": "control 팔에서 관측된 행동 (짧게)",
+  "treatment_behavior": "treatment 팔에서 관측된 행동",
+  "model": "haiku"
+}
+```
+
+4. **정직 가드**: 하네스 출력을 그대로 기록하라 — 요약을 각색하지 말 것. 판별 실패(`not_discriminated`)도 있는 그대로 기록해 "probe 를 안 돌림"과 구분되게 하라.
+
+### 6. 자체 Critic 재평가 (권장 — 품질 향상)
 
 모든 카테고리 규칙 생성이 끝난 뒤(= step 4 전에), 스스로 다시 훑어라:
 
@@ -538,7 +562,7 @@ print(f'[DONE] {Path(OUTPUT) / session.session_id}')
 
 **KEEP as-is**: 고품질 규칙은 그대로.
 
-### 6. 완료 안내
+### 7. 완료 안내
 
 ```
 [DONE] 분석 완료

@@ -21,6 +21,7 @@ from hijack.core.models import (
     CategoryResult,
     Evidence,
     ForesightCard,
+    ProbeRecord,
     SessionResult,
 )
 from hijack.core.satd import SatdItem, SatdItems
@@ -36,6 +37,7 @@ def _make_rule(
     layer: str = "shared",
     evidence: list[Evidence] | None = None,
     exemplar_verbatim: bool | None = None,
+    probe: ProbeRecord | None = None,
 ) -> AnalysisRule:
     return AnalysisRule(
         rule=rule,
@@ -49,6 +51,7 @@ def _make_rule(
         rationale_tier=rationale_tier,
         evidence=evidence or [],
         exemplar_verbatim=exemplar_verbatim,
+        probe=probe,
     )
 
 
@@ -129,6 +132,7 @@ class TestMeasurementResultSerialization:
             "satd_supplied_count", "comment_cited_rule_count",
             "comment_cited_ref_count", "satd_citation_ratio",
             "exemplar_checked_count", "exemplar_verbatim_ratio",
+            "probed_rule_count", "probe_discriminated_count",
         }
 
     def test_from_json_backward_compat_missing_satd_fields(self) -> None:
@@ -160,6 +164,35 @@ class TestMeasurementResultSerialization:
         restored = MeasurementResult.from_json(data)
         assert restored.exemplar_checked_count == 0
         assert restored.exemplar_verbatim_ratio == 0.0
+
+    def test_from_json_backward_compat_missing_probe_fields(self) -> None:
+        # Pre-probe-slice measurement.json lacks the new keys.
+        data = {
+            "session_id": "old",
+            "cited_ratio": 0.5,
+            "must_ratio": 0.5,
+            "tier_distribution": {},
+            "intent_kind_distribution": {},
+            "foresight_scores": [],
+        }
+        restored = MeasurementResult.from_json(data)
+        assert restored.probed_rule_count == 0
+        assert restored.probe_discriminated_count == 0
+
+    def test_probe_fields_roundtrip(self) -> None:
+        m = MeasurementResult(
+            session_id="s",
+            cited_ratio=0.0,
+            must_ratio=0.0,
+            tier_distribution={},
+            intent_kind_distribution={},
+            foresight_scores=[],
+            probed_rule_count=3,
+            probe_discriminated_count=2,
+        )
+        restored = MeasurementResult.from_json(m.to_json())
+        assert restored.probed_rule_count == 3
+        assert restored.probe_discriminated_count == 2
 
     def test_exemplar_fields_roundtrip(self) -> None:
         m = MeasurementResult(
@@ -391,6 +424,49 @@ class TestExemplarVerbatimMetrics:
 
 
 # ---------------------------------------------------------------------------
+# calc_session_metrics — behavioral probe metrics
+# ---------------------------------------------------------------------------
+
+class TestProbeMetrics:
+    def _probe(self, verdict: str = "discriminated", model: str = "haiku") -> ProbeRecord:
+        return ProbeRecord(
+            task="t",
+            verdict=verdict,
+            control_behavior="c",
+            treatment_behavior="t",
+            model=model,
+        )
+
+    def test_no_probes_gives_zero_counts(self) -> None:
+        rules = [_make_rule("R1"), _make_rule("R2")]
+        session = _make_session("p0", [_make_category("c", rules)])
+        m = calc_session_metrics(session)
+        assert m.probed_rule_count == 0
+        assert m.probe_discriminated_count == 0
+
+    def test_mixed_verdicts_counted(self) -> None:
+        rules = [
+            _make_rule("R1", probe=self._probe(verdict="discriminated")),
+            _make_rule("R2", probe=self._probe(verdict="not_discriminated")),
+            _make_rule("R3", probe=None),
+        ]
+        session = _make_session("p1", [_make_category("c", rules)])
+        m = calc_session_metrics(session)
+        assert m.probed_rule_count == 2
+        assert m.probe_discriminated_count == 1
+
+    def test_all_discriminated(self) -> None:
+        rules = [
+            _make_rule("R1", probe=self._probe(verdict="discriminated")),
+            _make_rule("R2", probe=self._probe(verdict="discriminated")),
+        ]
+        session = _make_session("p2", [_make_category("c", rules)])
+        m = calc_session_metrics(session)
+        assert m.probed_rule_count == 2
+        assert m.probe_discriminated_count == 2
+
+
+# ---------------------------------------------------------------------------
 # diff_sessions — pure function tests
 # ---------------------------------------------------------------------------
 
@@ -461,6 +537,17 @@ class TestDiffSessions:
         m2.exemplar_verbatim_ratio = 0.8
         result = diff_sessions(m1, m2)
         assert result["exemplar_verbatim_ratio_delta"] == pytest.approx(0.5)
+
+    def test_probe_counts_delta(self) -> None:
+        m1 = self._make_m()
+        m1.probed_rule_count = 2
+        m1.probe_discriminated_count = 1
+        m2 = self._make_m()
+        m2.probed_rule_count = 5
+        m2.probe_discriminated_count = 4
+        result = diff_sessions(m1, m2)
+        assert result["probed_rule_count_delta"] == 3
+        assert result["probe_discriminated_count_delta"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -682,6 +769,20 @@ class TestFormatMeasurementSummary:
         result = format_measurement_summary(m)
         assert "exemplar_verbatim_ratio" in result
         assert "4 checked" in result
+
+    def test_includes_probe_counts(self) -> None:
+        m = MeasurementResult(
+            session_id="s",
+            cited_ratio=0.0,
+            must_ratio=0.0,
+            tier_distribution={"cited": 0, "corroborated": 0, "speculative": 0},
+            intent_kind_distribution={"rejection": 0, "incident": 0, "preference": 0},
+            foresight_scores=[],
+            probed_rule_count=3,
+            probe_discriminated_count=2,
+        )
+        result = format_measurement_summary(m)
+        assert "2/3 discriminated" in result
 
 
 class TestIntentKindFromSessionPrDecisions:

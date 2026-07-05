@@ -354,6 +354,8 @@ def _render_rule_compact(rule: AnalysisRule) -> list[str]:
     because_line = _because_line(rule)
     if because_line:
         out.append(because_line)
+    if rule.probe is not None and rule.probe.verdict == "discriminated":
+        out.append(f"  probe: behavior-confirmed ({rule.probe.model})")
     return out
 
 
@@ -630,6 +632,12 @@ def _render_rule(rule: AnalysisRule) -> list[str]:
         lines += ["**❌ Bad**:", "```", rule.bad_example, "```", ""]
     if rule.evidence:
         lines += render_evidence_chain(rule.evidence)
+    if rule.probe is not None and rule.probe.verdict == "discriminated":
+        lines += [
+            f"**Probe**: behavior-confirmed — control: {rule.probe.control_behavior}"
+            f" / treatment: {rule.probe.treatment_behavior}",
+            "",
+        ]
     return lines
 
 

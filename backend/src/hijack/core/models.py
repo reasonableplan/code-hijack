@@ -32,6 +32,14 @@ INTENT_KIND_VALUES = ("rejection", "constraint", "incident", "preference")
 EVIDENCE_HEADLINE_MAX = 120
 EVIDENCE_QUOTE_MAX = 500
 
+# Behavioral-probe verdict. A probe pits a weak model's control arm (no rule
+# injected) against its treatment arm (rule injected) on a misuse/boundary-path
+# task, scored by a deterministic harness. "discriminated" = the two arms
+# behaved differently; "not_discriminated" = no behavioral difference observed
+# (this does NOT mean the rule is wrong — only that this probe didn't detect
+# a difference).
+PROBE_VERDICT_VALUES = ("discriminated", "not_discriminated")
+
 
 @dataclass
 class Evidence:
@@ -78,6 +86,46 @@ class Evidence:
 
 
 @dataclass
+class ProbeRecord:
+    """Behavioral-probe result for a single rule (skill-session authored).
+
+    The engine only records + renders this — probe design and execution
+    (weak-model control/treatment arms + deterministic harness) happen in the
+    skill session, same division of labor as Evidence.
+    """
+
+    task: str                # probe 태스크 한 줄 요약
+    verdict: str             # one of PROBE_VERDICT_VALUES
+    control_behavior: str    # control 팔 관측 행동 (짧게)
+    treatment_behavior: str  # treatment 팔 관측 행동
+    model: str                # 약모델 이름 (예: "haiku")
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "task": self.task,
+            "verdict": self.verdict,
+            "control_behavior": self.control_behavior,
+            "treatment_behavior": self.treatment_behavior,
+            "model": self.model,
+        }
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> ProbeRecord:
+        # Out-of-range verdicts are demoted to "not_discriminated" (conservative
+        # direction, same as MUST demotion elsewhere) rather than dropped.
+        verdict = data["verdict"]
+        if verdict not in PROBE_VERDICT_VALUES:
+            verdict = "not_discriminated"
+        return cls(
+            task=data["task"],
+            verdict=verdict,
+            control_behavior=data["control_behavior"],
+            treatment_behavior=data["treatment_behavior"],
+            model=data["model"],
+        )
+
+
+@dataclass
 class AnalysisRule:
     rule: str
     priority: str
@@ -102,6 +150,9 @@ class AnalysisRule:
     # computed (e.g. no good_example, or older session.json). Observational
     # only — does not affect priority or rationale_tier.
     exemplar_verbatim: bool | None = None
+    # Behavioral-probe result (skill-session authored, optional). None = no
+    # probe run for this rule. See ProbeRecord for field semantics.
+    probe: ProbeRecord | None = None
 
     def to_json(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -119,10 +170,13 @@ class AnalysisRule:
         }
         if self.exemplar_verbatim is not None:
             result["exemplar_verbatim"] = self.exemplar_verbatim
+        if self.probe is not None:
+            result["probe"] = self.probe.to_json()
         return result
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> AnalysisRule:
+        probe_data = data.get("probe")
         return cls(
             rule=data["rule"],
             priority=data["priority"],
@@ -136,6 +190,7 @@ class AnalysisRule:
             evidence=[Evidence.from_json(e) for e in data.get("evidence", [])],
             rationale_tier=data.get("rationale_tier", "speculative"),
             exemplar_verbatim=data.get("exemplar_verbatim"),
+            probe=ProbeRecord.from_json(probe_data) if probe_data is not None else None,
         )
 
 
