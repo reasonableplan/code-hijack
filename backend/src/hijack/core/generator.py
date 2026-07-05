@@ -274,6 +274,9 @@ def render_system_prompt_md(result: SessionResult) -> str:
         "`[framework_internal]` rules describe THIS codebase only — skip when reusing.",
         "`[domain_specific]` rules need re-evaluation in a different domain.",
         "",
+        "긴 세션 주의: 규칙 준수율은 세션 내 산출물이 쌓일수록 감쇠한다 (함수당 -5.6%,",
+        "arxiv 2605.10039). 함수 여러 개를 연속 생성했다면 MUST 규칙을 재확인하고 작성하라.",
+        "",
         "## MUST Rules",
         "",
     ]
