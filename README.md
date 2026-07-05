@@ -63,6 +63,8 @@ Who actually benefits, per the first downstream A/B (2026-07-04):
 1. **Weak/cheap models get rescued from known anti-patterns.** With rules injected, Haiku avoided the full-body-buffering approach the senior repo had explicitly rejected; without rules it fell straight into it (and its own rationale admitted "must accumulate first"). Frontier models already reproduce senior structure without rules — the tool does not buy them correctness.
 2. **Human learners get traceable WHY-provenance.** Rule-injected sessions cite the specific commits/incidents behind each decision; control sessions produce generic reasoning with no sources. This axis holds regardless of model strength, and is the larger measured benefit (learning reader > code-quality reader).
 
+Refinement after 3 A/B rounds (6 tasks, starlette + anyio): **rules change misuse-path behavior, not the happy path.** Every task that discriminated (rejected buffering pattern, deprecation lifecycle, context-manager re-entry guard) diverged on boundary/misuse handling — the part seniors learned from incidents; tasks whose trap was common knowledge or naturally avoided did not discriminate. Efficiency (tokens/turns) showed no consistent gain on self-contained generation tasks.
+
 Context against the 2026 literature:
 
 - LLM-**generated** design rationale reaches precision ~0.27 with 1.6–3.2% actively misleading claims ([arxiv 2504.20781](https://arxiv.org/abs/2504.20781)). This is why code-hijack never asks the LLM to author the WHY — it surfaces the senior's **verbatim** evidence (commits, rejected PRs, SATD comments) and mechanically demotes any MUST without a verified citation.
