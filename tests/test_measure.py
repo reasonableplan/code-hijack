@@ -682,3 +682,35 @@ class TestFormatMeasurementSummary:
         result = format_measurement_summary(m)
         assert "exemplar_verbatim_ratio" in result
         assert "4 checked" in result
+
+
+class TestIntentKindFromSessionPrDecisions:
+    """calc_session_metrics 는 인자 미전달 시 session.pr_decisions 를 쓴다 (measure CLI 자급)."""
+
+    class _Decision:
+        def __init__(self, intent_kind: str) -> None:
+            self.intent_kind = intent_kind
+
+    class _PRDecisions:
+        def __init__(self, kinds: list[str]) -> None:
+            self.decisions = [TestIntentKindFromSessionPrDecisions._Decision(k) for k in kinds]
+
+    def test_session_pr_decisions_used_when_arg_omitted(self) -> None:
+        session = _make_session("2026-01-01_a", [])
+        session.pr_decisions = self._PRDecisions(["rejection", "rejection", "incident"])
+        m = calc_session_metrics(session)
+        assert m.intent_kind_distribution == {"rejection": 2, "incident": 1, "preference": 0}
+
+    def test_explicit_arg_wins_over_session(self) -> None:
+        session = _make_session("2026-01-01_a", [])
+        session.pr_decisions = self._PRDecisions(["rejection"])
+        m = calc_session_metrics(session, pr_decisions=self._PRDecisions(["preference"]))
+        assert m.intent_kind_distribution == {"rejection": 0, "incident": 0, "preference": 1}
+
+    def test_dict_form_session_pr_decisions(self) -> None:
+        session = _make_session("2026-01-01_a", [])
+        session.pr_decisions = {
+            "decisions": [{"intent_kind": "incident"}, {"intent_kind": "bogus"}]
+        }
+        m = calc_session_metrics(session)
+        assert m.intent_kind_distribution == {"rejection": 0, "incident": 1, "preference": 0}

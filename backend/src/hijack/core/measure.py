@@ -105,9 +105,22 @@ def calc_session_metrics(
         "incident": 0,
         "preference": 0,
     }
+    # 969e3d2 이후 세션이 pr_decisions 를 직접 들고 있다 — 인자 미전달 시
+    # 세션 것을 쓴다 (measure CLI 가 세션만으로 자급하도록).
+    if pr_decisions is None:
+        pr_decisions = session.pr_decisions
     if pr_decisions is not None:
-        for decision in getattr(pr_decisions, "decisions", []):
-            kind = getattr(decision, "intent_kind", "")
+        raw_decisions = (
+            pr_decisions.get("decisions", [])
+            if isinstance(pr_decisions, dict)
+            else getattr(pr_decisions, "decisions", [])
+        )
+        for decision in raw_decisions:
+            kind = (
+                decision.get("intent_kind", "")
+                if isinstance(decision, dict)
+                else getattr(decision, "intent_kind", "")
+            )
             if kind in intent_kind_distribution:
                 intent_kind_distribution[kind] += 1
 
