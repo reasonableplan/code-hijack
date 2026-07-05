@@ -25,8 +25,7 @@ from hijack.core.prompts import MVP_CATEGORIES
 from hijack.core.session import SessionDiff
 from hijack.core.target_stack import TargetStack, normalize_pkg_name
 from hijack.errors import LLM_001, OUTPUT_001, LLMError, OutputError
-from hijack.llm.api import DEFAULT_MODEL, ClaudeAPIClient
-from hijack.llm.base import BaseLLM
+from hijack.llm.base import DEFAULT_MODEL, BaseLLM
 from hijack.llm.local import LocalLLM
 
 _COST_PER_TOKEN = 3e-6
@@ -434,6 +433,9 @@ def _run(
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise LLMError(LLM_001, "ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+        # lazy import: measure/diff 등 API 불필요 커맨드가 anthropic 없이 돌도록
+        from hijack.llm.api import ClaudeAPIClient
+
         llm = ClaudeAPIClient(api_key=api_key)
 
     if not quiet:

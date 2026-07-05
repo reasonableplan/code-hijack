@@ -29,8 +29,7 @@ from hijack.core.preprocessor import (
 from hijack.core.prompts import MVP_CATEGORIES, build_category_prompt
 from hijack.core.session import create_session_id
 from hijack.errors import LLM_002, LLM_003, LLMError
-from hijack.llm.api import DEFAULT_MODEL
-from hijack.llm.base import BaseLLM
+from hijack.llm.base import DEFAULT_MODEL, BaseLLM
 
 logger = logging.getLogger(__name__)
 

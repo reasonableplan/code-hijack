@@ -246,7 +246,7 @@ class TestAnalyzeFullRun:
         (repo / "main.py").write_text("def main(): pass")
         mock_result = _make_session(target=str(repo))
 
-        with patch("hijack.cli.ClaudeAPIClient") as mock_client_cls, \
+        with patch("hijack.llm.api.ClaudeAPIClient") as mock_client_cls, \
              patch("hijack.cli.run_full_analysis", new_callable=AsyncMock) as mock_analyze, \
              patch("hijack.cli.write_output") as mock_write:
             mock_client_cls.return_value = MagicMock()
@@ -275,7 +275,7 @@ class TestAnalyzeFullRun:
             captured.append(categories)
             return _make_session()
 
-        with patch("hijack.cli.ClaudeAPIClient"), \
+        with patch("hijack.llm.api.ClaudeAPIClient"), \
              patch("hijack.cli.run_full_analysis", side_effect=fake_analyze), \
              patch("hijack.cli.write_output"):
             runner = CliRunner()
@@ -292,7 +292,7 @@ class TestAnalyzeFullRun:
         repo = tmp_path / "repo"
         repo.mkdir()
         (repo / "main.py").write_text("x = 1")
-        with patch("hijack.cli.ClaudeAPIClient"), \
+        with patch("hijack.llm.api.ClaudeAPIClient"), \
              patch("hijack.cli.run_full_analysis", new_callable=AsyncMock) as mock_analyze:
             runner = CliRunner()
             runner.invoke(cli, ["analyze", str(repo)], input="n\n")
@@ -331,7 +331,7 @@ class TestAnalyzeResume:
             captured.append(categories)
             return _make_session(categories=categories)
 
-        with patch("hijack.cli.ClaudeAPIClient"), \
+        with patch("hijack.llm.api.ClaudeAPIClient"), \
              patch("hijack.cli.run_full_analysis", side_effect=fake_analyze), \
              patch("hijack.cli.write_output"):
             runner = CliRunner()
@@ -389,7 +389,7 @@ class TestAnalyzeResume:
             captured.append(categories)
             return _make_session(categories=categories)
 
-        with patch("hijack.cli.ClaudeAPIClient"), \
+        with patch("hijack.llm.api.ClaudeAPIClient"), \
              patch("hijack.cli.run_full_analysis", side_effect=fake_analyze), \
              patch("hijack.cli.write_output"):
             runner = CliRunner()
@@ -422,7 +422,7 @@ class TestAnalyzeResume:
             captured.append(categories)
             return _make_session(categories=categories)
 
-        with patch("hijack.cli.ClaudeAPIClient"), \
+        with patch("hijack.llm.api.ClaudeAPIClient"), \
              patch("hijack.cli.run_full_analysis", side_effect=fake_analyze), \
              patch("hijack.cli.write_output"):
             runner = CliRunner()
@@ -836,3 +836,29 @@ class TestMeasureCommand:
         result = runner.invoke(cli, ["measure", "--help"])
         assert result.exit_code == 0
         assert "SESSION" in result.output
+
+
+class TestCliImportWithoutAnthropic:
+    """cli.py 는 anthropic([api] extra) 없이 import 가능해야 한다 (measure/diff 경로)."""
+
+    def test_cli_imports_with_anthropic_blocked(self) -> None:
+        import subprocess
+        import sys
+
+        code = (
+            "import sys\n"
+            "class _Block:\n"
+            "    def find_module(self, name, path=None):\n"
+            "        if name == 'anthropic' or name.startswith('anthropic.'):\n"
+            "            return self\n"
+            "    def load_module(self, name):\n"
+            "        raise ImportError('anthropic blocked for test')\n"
+            "sys.meta_path.insert(0, _Block())\n"
+            "import hijack.cli\n"
+            "print('OK')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "OK" in result.stdout

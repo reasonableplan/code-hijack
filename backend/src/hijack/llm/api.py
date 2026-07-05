@@ -6,9 +6,8 @@ import os
 import anthropic
 
 from hijack.errors import LLM_001, LLM_002, LLMError
-from hijack.llm.base import BaseLLM
+from hijack.llm.base import DEFAULT_MODEL, BaseLLM
 
-DEFAULT_MODEL = "claude-sonnet-5"
 MAX_TOKENS = 8192
 
 
