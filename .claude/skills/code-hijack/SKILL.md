@@ -137,6 +137,8 @@ for f in files:
 
 각 카테고리마다 `backend/src/hijack/core/prompts.py` 의 `_CATEGORY_INSTRUCTIONS[<cat>]` 지시문을 참고해 규칙을 추출한다.
 
+**출력 언어**: 생성하는 prose 필드 전부 — `rule`, `reason`, `design_intent`, `anti_patterns`, `file_type_guides`, `checklist`, foresight 카드, probe 기록 — 는 **영어로** 쓴다. 산출물은 examples/ 로 공개되는 글로벌 자산이다 (세션 대화 언어와 무관). evidence 의 headline/quote 와 코드 발췌는 언어 불문 원문 verbatim 유지.
+
 각 **AnalysisRule** 은 다음 필드를 반드시 가진다:
 
 - `rule`: 구체적 규칙 (1문장). **원리 수준으로** — 이 레포 내부 심볼명(클래스/센티널/헬퍼 이름)을 규칙 본문에 넣지 말 것. 심볼은 good_example 에서 인용하고, 규칙 본문은 "그 심볼이 만족시키는 설계 제약"을 기술한다. (다른 프로젝트로 전이 가능해야 함)

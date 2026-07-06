@@ -350,8 +350,8 @@ class TestRenderClaudeMdEntrypoint:
 
     def test_contains_provenance_split(self) -> None:
         md = render_claude_md_entrypoint(_session())
-        assert "규칙 근거: 시니어 인용(commit/PR/SATD)" in md
-        assert "코드 앵커" in md
+        assert "Rule grounding: senior-quoted (commit/PR/SATD)" in md
+        assert "code-anchored" in md
 
 
 # ---------------------------------------------------------------------------
@@ -787,7 +787,7 @@ class TestMustCalibrationLint:
         ])
         write_output(s, tmp_path)
         err = capsys.readouterr().err
-        assert "MUST 비율" not in err
+        assert "MUST ratio" not in err
 
     def test_warn_when_overall_ratio_exceeds_40_percent(
         self, tmp_path: Path, capsys
@@ -798,7 +798,7 @@ class TestMustCalibrationLint:
         ])
         write_output(s, tmp_path)
         err = capsys.readouterr().err
-        assert "MUST 비율" in err
+        assert "MUST ratio" in err
         assert "50%" in err
 
     def test_no_warn_when_total_rules_below_min(
@@ -810,7 +810,7 @@ class TestMustCalibrationLint:
         ])
         write_output(s, tmp_path)
         err = capsys.readouterr().err
-        assert "MUST 비율" not in err
+        assert "MUST ratio" not in err
 
     def test_warn_when_category_ratio_exceeds_50_percent_even_if_overall_ok(
         self, tmp_path: Path, capsys
@@ -825,7 +825,7 @@ class TestMustCalibrationLint:
         ])
         write_output(s, tmp_path)
         err = capsys.readouterr().err
-        assert "MUST 비율" in err
+        assert "MUST ratio" in err
         assert "architecture" in err
 
     def test_no_warn_for_small_category_even_if_100_percent(
@@ -840,7 +840,7 @@ class TestMustCalibrationLint:
         ])
         write_output(s, tmp_path)
         err = capsys.readouterr().err
-        assert "MUST 비율" not in err
+        assert "MUST ratio" not in err
 
     def test_warning_includes_target_range_hint(
         self, tmp_path: Path, capsys
@@ -851,7 +851,7 @@ class TestMustCalibrationLint:
         write_output(s, tmp_path)
         err = capsys.readouterr().err
         assert "target 30-40%" in err
-        assert "PR 거부" in err  # 액션 힌트
+        assert "PR-blocking" in err  # 액션 힌트
 
 
 # ---------------------------------------------------------------------------
@@ -879,13 +879,13 @@ class TestRenderForesightMd:
         cards = [_foresight_card(tier="corroborated")]
         md = render_foresight_md(cards, "library")
         assert "[corroborated]" in md
-        assert "강제 아님" not in md
+        assert "not enforced" not in md
 
     def test_speculative_card_has_forced_note(self) -> None:
         cards = [_foresight_card(tier="speculative")]
         md = render_foresight_md(cards, "app")
         assert "speculative" in md
-        assert "강제 아님" in md
+        assert "not enforced" in md
 
     def test_card_contains_hypothesis(self) -> None:
         cards = [_foresight_card()]
@@ -909,15 +909,15 @@ class TestRenderForesightMd:
         ]
         md = render_foresight_md(cards, "app/cli")
         assert "[corroborated]" in md
-        assert "강제 아님" in md
-        # corroborated section 에는 "강제 아님" 없음 — 순서로 검증
+        assert "not enforced" in md
+        # corroborated section 에는 "not enforced" 없음 — 순서로 검증
         lines = md.splitlines()
         corroborated_idx = next(
             i for i, line in enumerate(lines) if "[corroborated]" in line
         )
         speculative_idx = next(
             i for i, line in enumerate(lines)
-            if "speculative" in line and "강제 아님" in line
+            if "speculative" in line and "not enforced" in line
         )
         assert corroborated_idx < speculative_idx
 
@@ -946,7 +946,7 @@ class TestWriteOutputForesight:
         s.foresight_cards = [_foresight_card(tier="speculative")]
         write_output(s, tmp_path)
         content = (tmp_path / "integrated" / "foresight.md").read_text(encoding="utf-8")
-        assert "강제 아님" in content
+        assert "not enforced" in content
         assert "성능 최적화를 최우선" in content
 
 
@@ -1057,11 +1057,11 @@ class TestSystemPromptTone:
         md = render_system_prompt_md(_session())
         assert "MUST" in md
         # 맥락 조건부 톤 문구 포함
-        assert "맥락" in md
+        assert "extraction context" in md
 
     def test_foresight_consideration_phrase(self) -> None:
         md = render_system_prompt_md(_session())
-        assert "고려" in md
+        assert "considerations, not mandates" in md
 
     def test_system_prompt_contains_repo_nature(self) -> None:
         s = _session()
