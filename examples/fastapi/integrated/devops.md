@@ -1,6 +1,6 @@
 # Devops Layer Rules
 
-> CI/인프라 작업 (.github/, Dockerfile) → 이 파일 + shared.md
+> CI/infra files (.github/, Dockerfile) → this file + shared.md
 
 **Total rules**: 0
 

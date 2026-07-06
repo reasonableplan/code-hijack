@@ -38,10 +38,10 @@
   "categories": [
     {
       "category": "architecture",
-      "design_intent": "실행 파이프라인(등록 → 정렬 → multicall → teardown)은 플러그인 콜백이 무엇을 하든 — 예외를 던지든, 실행 중 새 플러그인을 등록하든, StopIteration 같은 제어흐름 예외를 쓰든 — 호출 계약이 유지되도록 방어적으로 설계됐다. 비용은 콜드 경로(등록)에 배치하고 핫 경로(호출)는 사전 정렬된 단일 리스트 순회로 유지한다.",
+      "design_intent": "The execution pipeline (register → sort → multicall → teardown) is defensively designed so the call contract holds no matter what a plugin callback does — raises an exception, registers a new plugin mid-run, or uses a control-flow exception like StopIteration. Cost is pushed onto the cold path (registration), keeping the hot path (calling) a single pre-sorted list traversal.",
       "rules": [
         {
-          "rule": "제너레이터 경계를 넘어 예외를 전달할 때는 언어 런타임의 예외 변형을 명시적으로 복원한다 — StopIteration 을 제너레이터에 throw 하면 RuntimeError 로 바뀌므로, cause 체인을 검사해 원래 예외로 재개한다",
+          "rule": "When passing an exception across a generator boundary, explicitly undo the language runtime's exception transformation — throwing StopIteration into a generator turns it into a RuntimeError, so inspect the cause chain and resume with the original exception",
           "priority": "MUST",
           "confidence": "high",
           "ref_files": [
@@ -49,7 +49,7 @@
           ],
           "good_example": "try:\n    teardown.throw(exception)\nexcept RuntimeError as re:\n    # StopIteration from generator causes RuntimeError\n    # even for coroutine usage - see #544\n    if (\n        isinstance(exception, StopIteration)\n        and re.__cause__ is exception\n    ):\n        teardown.close()\n        continue\n    else:\n        raise",
           "bad_example": "for teardown in reversed(teardowns):\n    if exception is not None:\n        teardown.throw(exception)\n    else:\n        teardown.send(result)",
-          "reason": "래퍼 체인 통과 중 StopIteration 이 RuntimeError 로 둔갑하면 호출자가 원래 제어흐름 예외를 받지 못한다",
+          "reason": "If StopIteration turns into a RuntimeError while passing through the wrapper chain, the caller never receives the original control-flow exception",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -66,7 +66,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "저장했다가 나중에 재발생시킬 수 있는 예외는 포착 시점의 __traceback__ 을 별도 필드에 보관하고, 재raise 는 항상 raise exc.with_traceback(saved_tb) 로 한다 — 예외 객체의 traceback 은 raise 될 때마다 변이·누적된다",
+          "rule": "For exceptions that may be stored and re-raised later, save their __traceback__ in a separate field at capture time, and always re-raise via raise exc.with_traceback(saved_tb) — an exception object's traceback mutates and accumulates every time it is raised",
           "priority": "MUST",
           "confidence": "high",
           "ref_files": [
@@ -75,7 +75,7 @@
           ],
           "good_example": "# Exception __traceback__ is mutable, this keeps the original.\nself._traceback = exception.__traceback__ if exception is not None else None\n...\nexc = self._exception\ntb = self._traceback\nif exc is None:\n    return cast(ResultType, self._result)\nelse:\n    raise exc.with_traceback(tb)",
           "bad_example": "def get_result(self):\n    if self._exception is not None:\n        raise self._exception\n    return self._result",
-          "reason": "같은 예외를 여러 번 raise 하면 traceback 이 매번 길어지는 무증상 오염 — 1.1.0 에서 실제 회귀",
+          "reason": "Raising the same exception multiple times silently pollutes it as the traceback grows longer each time — an actual regression in 1.1.0",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -91,15 +91,15 @@
           "rationale_tier": "cited",
           "exemplar_verbatim": true,
           "probe": {
-            "task": "Outcome 캡처 클래스 구현 — get_result 다회 재raise 경계 (Haiku C/T)",
+            "task": "Implement an Outcome capture class — get_result re-raise-multiple-times boundary (Haiku C/T)",
             "verdict": "discriminated",
-            "control_behavior": "naive `raise self._exception` — 3회 재raise 시 traceback 4->6->8 프레임 누적 성장 (무증상 오염)",
-            "treatment_behavior": "포착 시 __traceback__ 별도 저장 + `raise exc.with_traceback(tb)` — 3회 재raise 후 4 프레임 불변 (_result.py 93ac1e9 패턴 재현)",
+            "control_behavior": "naive `raise self._exception` — traceback grows 4->6->8 frames across 3 re-raises (silent pollution)",
+            "treatment_behavior": "saves __traceback__ separately at capture + `raise exc.with_traceback(tb)` — stays at 4 frames after 3 re-raises (reproduces the _result.py 93ac1e9 pattern)",
             "model": "haiku"
           }
         },
         {
-          "rule": "컬렉션에서 소유자 단위 제거는 첫 매치에서 멈추지 말고 매치 전부를 단일 연산으로 제거하며(없으면 명시적 에러), 소유자 기준 조회 API 는 같은 컨테이너를 중복 반환하지 않는다 — 한 소유자가 같은 키에 여러 항목을 등록할 수 있다",
+          "rule": "Owner-scoped removal from a collection must not stop at the first match — remove every match in a single operation (raise an explicit error if none match), and owner-scoped lookup APIs must not return the same container as a duplicate — one owner can register multiple entries under the same key",
           "priority": "MUST",
           "confidence": "high",
           "ref_files": [
@@ -108,7 +108,7 @@
           ],
           "good_example": "def _remove_plugin(self, plugin: _Plugin) -> None:\n    \"\"\"Remove all hook implementations registered by the given plugin.\"\"\"\n    remaining = [impl for impl in self._hookimpls if impl.plugin != plugin]\n    if len(remaining) == len(self._hookimpls):\n        raise ValueError(f\"plugin {plugin!r} not found\")\n    self._hookimpls[:] = remaining",
           "bad_example": "def _remove_plugin(self, plugin):\n    for i, method in enumerate(self._hookimpls):\n        if method.plugin == plugin:\n            del self._hookimpls[i]\n            return\n    raise ValueError(f\"plugin {plugin!r} not found\")",
-          "reason": "첫 매치 제거는 다중 등록 시 잔존 항목을 남기고, 중복 반환 조회와 결합하면 우연히만 동작하는 취약 구조가 된다",
+          "reason": "First-match removal leaves stale entries behind under multiple registrations, and combined with a duplicate-returning lookup it becomes a fragile structure that only works by accident",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -124,15 +124,15 @@
           "rationale_tier": "cited",
           "exemplar_verbatim": true,
           "probe": {
-            "task": "specname 다중 등록 레지스트리 구현 — unregister 완전성 (Haiku C/T)",
+            "task": "Implement a specname multi-registration registry — unregister completeness (Haiku C/T)",
             "verdict": "not_discriminated",
-            "control_behavior": "기본 구현이 이미 견고: plugin->hooks dict + 컴프리헨션 전량 제거 — 잔존 0, 조회 중복 0",
-            "treatment_behavior": "동일하게 깨끗 — 규칙 준수 자가보고했으나 관측 행동 차이 없음",
+            "control_behavior": "the default implementation is already robust: plugin->hooks dict + comprehension removes all entries — 0 stale entries, 0 duplicate lookups",
+            "treatment_behavior": "equally clean — self-reported rule compliance, but no observed behavioral difference",
             "model": "haiku"
           }
         },
         {
-          "rule": "콜백 실행 루프는 예외가 발생해도 이미 셋업된 teardown 전부를 역순으로 실행해야 한다 — 예외는 변수에 저장해 finally 의 teardown 순회를 마친 뒤 마지막에 재발생시키고, 각 teardown 은 결과나 예외를 대체할 수 있다",
+          "rule": "The callback execution loop must run every already-set-up teardown in reverse order even if an exception occurs — store the exception in a variable, run through all teardowns in finally, then re-raise it last; each teardown may replace the result or the exception",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -141,7 +141,7 @@
           ],
           "good_example": "except BaseException as exc:\n    exception = exc\nfinally:\n    if firstresult:  # first result hooks return a single value\n        result = results[0] if results else None\n    else:\n        result = results\n\n    # run all wrapper post-yield blocks\n    for teardown in reversed(teardowns):",
           "bad_example": "results = []\nfor hook_impl in reversed(hook_impls):\n    results.append(hook_impl.function(*args))\nfor teardown in reversed(teardowns):\n    teardown.send(results)",
-          "reason": "예외 시 teardown 스킵은 래퍼 자원 정리를 GC 시점으로 미뤄 실행 순서 보장이 깨진다",
+          "reason": "Skipping teardown on exception defers wrapper resource cleanup to GC time, breaking the execution-order guarantee",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [],
@@ -149,7 +149,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "실행 중 콜백이 컬렉션을 변이할 수 있으므로(콜백이 새 항목을 등록), 실행은 컬렉션의 스냅샷 복사본 위에서 수행한다",
+          "rule": "Since a callback can mutate the collection during execution (by registering a new entry), execution must run over a snapshot copy of the collection",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -158,7 +158,7 @@
           ],
           "good_example": "# Copy because plugins may register other plugins during iteration (#438).\nreturn self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)",
           "bad_example": "return self._hookexec(self.name, self._hookimpls, kwargs, firstresult)",
-          "reason": "호출 도중 등록이 일어나면 라이브 리스트 순회는 항목 스킵/중복 실행을 일으킨다",
+          "reason": "If registration happens mid-call, iterating the live list causes entries to be skipped or executed twice",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [],
@@ -166,7 +166,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "핫 경로(호출)와 콜드 경로(등록)의 비용을 명시적으로 교환한다 — 호출 시점에 컬렉션을 조립·연결하지 말고, 등록 시점에 실행 순서로 정렬된 단일 컬렉션을 유지한다",
+          "rule": "Explicitly trade cost between the hot path (calling) and the cold path (registration) — don't assemble/concatenate the collection at call time; maintain a single collection sorted in execution order at registration time",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -175,7 +175,7 @@
           ],
           "good_example": "# The hookimpls list. The caller iterates it *in reverse*. Format:\n# 1. trylast nonwrappers\n# 2. nonwrappers\n# 3. tryfirst nonwrappers\n# 4. trylast wrappers\n# 5. wrappers\n# 6. tryfirst wrappers\nself._hookimpls: Final[list[HookImpl]] = []",
           "bad_example": "def __call__(self, **kwargs):\n    impls = self._nonwrappers + self._wrappers\n    return self._hookexec(self.name, impls, kwargs, firstresult)",
-          "reason": "등록은 호출보다 훨씬 드물다 — 리스트 연결을 핫 콜 경로에서 제거하는 대신 등록을 약간 느리게 하는 교환",
+          "reason": "Registration is far rarer than calling — a tradeoff that makes registration a bit slower in exchange for removing list concatenation from the hot call path",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -192,7 +192,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "핫 경로의 런타임 introspection 은 inspect.signature 대신 코드 객체 속성(co_varnames, co_argcount, __defaults__)을 직접 사용한다 — signature 는 annotation 해석을 트리거해 느리고, 미정의 타입 참조 시 실패한다",
+          "rule": "For runtime introspection on the hot path, use code object attributes (co_varnames, co_argcount, __defaults__) directly instead of inspect.signature — signature triggers annotation resolution, which is slow and fails on references to undefined types",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -200,7 +200,7 @@
           ],
           "good_example": "code: types.CodeType = func.__code__  # type: ignore[attr-defined]\ndefaults: tuple[object, ...] | None = func.__defaults__  # type: ignore[attr-defined]\n...\nargs: tuple[str, ...] = code.co_varnames[: code.co_argcount]",
           "bad_example": "sig = inspect.signature(func)\nargs = [p.name for p in sig.parameters.values()\n        if p.kind is p.POSITIONAL_OR_KEYWORD]",
-          "reason": "annotation 해석 회피 — 단순·고속이며 PEP 649 지연 평가 환경에서 미정의 참조 실패까지 차단",
+          "reason": "Avoids annotation resolution — simple and fast, and it also prevents failures on undefined references under PEP 649 deferred evaluation",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -225,7 +225,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "원본 컬렉션의 필터링된 뷰가 필요할 때 데이터를 복사한 새 객체를 만들지 말고, 데이터 접근을 프로퍼티로 원본에 위임하는 프록시로 구현한다",
+          "rule": "When a filtered view of the original collection is needed, don't build a new object with copied data — implement a proxy that delegates data access to the original via a property",
           "priority": "SHOULD",
           "confidence": "medium",
           "ref_files": [
@@ -234,7 +234,7 @@
           ],
           "good_example": "@property  # type: ignore[misc]\ndef _hookimpls(self) -> list[HookImpl]:\n    return [\n        impl\n        for impl in self._orig._hookimpls\n        if impl.plugin not in self._remove_plugins\n    ]",
           "bad_example": "subset = HookCaller(orig.name, orig._hookexec)\nfor impl in orig._hookimpls:\n    if impl.plugin not in remove_plugins:\n        subset._add_hookimpl(impl)\nreturn subset",
-          "reason": "복사본은 원본의 이후 변이(등록/역사적 호출)를 반영 못하고 수명이 얽혀 메모리 누수를 만든다",
+          "reason": "A copy can't reflect later mutations to the original (registration/historic calls), and its entangled lifetime creates a memory leak",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [],
@@ -244,32 +244,32 @@
       ],
       "anti_patterns": [
         {
-          "pattern": "예외 발생 시 teardown 루프를 건너뛰고 즉시 전파",
-          "reason": "이미 셋업된 래퍼들의 post-yield 블록이 실행되지 않아 자원 정리가 GC 시점으로 밀린다",
-          "alternative": "예외를 저장하고 finally 에서 teardown 전원 역순 실행 후 재발생 (_callers.py:131-172)"
+          "pattern": "Skipping the teardown loop and propagating immediately on exception",
+          "reason": "The post-yield blocks of already-set-up wrappers never run, pushing resource cleanup to GC time",
+          "alternative": "Store the exception, run all teardowns in reverse order in finally, then re-raise (_callers.py:131-172)"
         },
         {
-          "pattern": "호출 경로에서 리스트 연결/정렬 수행",
-          "reason": "훅 호출은 등록보다 압도적으로 빈번한 핫 경로",
-          "alternative": "등록 시점에 splitpoint 삽입으로 사전 정렬된 단일 리스트 유지 (_hooks.py:482-504)"
+          "pattern": "Doing list concatenation/sorting on the call path",
+          "reason": "Hook calling is the hot path, overwhelmingly more frequent than registration",
+          "alternative": "Maintain a single pre-sorted list via splitpoint insertion at registration time (_hooks.py:482-504)"
         }
       ],
       "file_type_guides": {},
       "checklist": [
-        "저장된 예외를 재raise 하는 코드가 with_traceback(saved_tb) 을 쓰는가?",
-        "제너레이터에 throw 하는 코드가 StopIteration→RuntimeError 변형을 복원하는가?",
-        "실행 루프가 컬렉션 스냅샷 복사본을 사용하는가?",
-        "소유자 단위 제거가 전체 매치를 제거하는가 (첫 매치 아님)?"
+        "Does code that re-raises a stored exception use with_traceback(saved_tb)?",
+        "Does code that throws into a generator undo the StopIteration→RuntimeError transformation?",
+        "Does the execution loop use a snapshot copy of the collection?",
+        "Does owner-scoped removal remove every match (not just the first)?"
       ],
       "raw_llm_output": "(skill-mode)",
       "error": null
     },
     {
       "category": "coding_style",
-      "design_intent": "테스트가 행동 계약의 단일 진실이다 — 동작 수정은 그 회귀를 고정하는 테스트와 함께만 받아들여지고, 테스트 없는 동작 변경 PR 은 닫힌다. 타입 힌트는 최소 지원 버전(3.10+)의 모던 문법으로 통일하고, 경고·순서 같은 미세 계약도 테스트에서 정밀하게 고정한다.",
+      "design_intent": "Tests are the single source of truth for behavioral contracts — a behavior fix is only accepted alongside a test that pins the regression, and behavior-changing PRs without tests get closed. Type hints are unified on the modern syntax of the minimum supported version (3.10+), and fine-grained contracts like warnings and ordering are pinned precisely in tests too.",
       "rules": [
         {
-          "rule": "동작을 바꾸는 변경은 그 동작을 고정하는 테스트를 동반해야 한다 — 회귀 수정이면 회귀를 노출하는 테스트를 먼저 추가한다",
+          "rule": "A change that alters behavior must come with a test that pins that behavior — for a regression fix, add a test that exposes the regression first",
           "priority": "MUST",
           "confidence": "high",
           "ref_files": [
@@ -277,8 +277,8 @@
             "testing/test_invocations.py:1"
           ],
           "good_example": "with pytest.warns(\n    PluggyTeardownRaisedWarning,\n    match=r\"\\bplugin2\\b.*\\bmy_hook\\b.*\\n.*ZeroDivisionError\",\n) as wc:\n    with pytest.raises(ZeroDivisionError):\n        pm.hook.my_hook()\nassert len(wc.list) == 1",
-          "bad_example": "--- src/pluggy/_manager.py\n-        if self._name2plugin.get(name):\n+        if self._name2plugin.get(name) is not None:\n(메인테이너가 실제로 닫은 PR#648 의 diff — 동작 수정이나 테스트 없음)",
-          "reason": "테스트 없는 동작 수정 PR 은 리뷰 없이 닫힌다 — 이 레포의 실제 게이트",
+          "bad_example": "--- src/pluggy/_manager.py\n-        if self._name2plugin.get(name):\n+        if self._name2plugin.get(name) is not None:\n(the diff from PR#648, which the maintainer actually closed — a behavior fix with no tests)",
+          "reason": "Behavior-fix PRs without tests get closed without review — an actual gate in this repo",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -303,7 +303,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "타입 힌트는 최소 지원 파이썬 버전의 모던 문법으로 통일한다 — X | None (Optional 금지), collections.abc 제네릭, 타입 별칭에는 명시적 TypeAlias, 파일 상단 from __future__ import annotations",
+          "rule": "Unify type hints on the modern syntax of the minimum supported Python version — X | None (no Optional), collections.abc generics, explicit TypeAlias for type aliases, and from __future__ import annotations at the top of the file",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -312,7 +312,7 @@
           ],
           "good_example": "from __future__ import annotations\n\nfrom collections.abc import Generator\nfrom collections.abc import Mapping\nfrom collections.abc import Sequence\n...\nTeardown: TypeAlias = Generator[None, object, object]",
           "bad_example": "from typing import Generator, Mapping, Optional, Union\n\nTeardown = Generator[None, object, object]\ndef exec(self, res: Optional[Union[int, str]]) -> None: ...",
-          "reason": "버전 하한을 올릴 때 문법도 일괄 이주 — 별칭과 일반 대입의 구분, IDE/타입체커 정확도",
+          "reason": "When raising the minimum version, migrate the syntax in bulk too — it distinguishes aliases from plain assignments and improves IDE/type-checker accuracy",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -337,7 +337,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "import 는 심볼당 한 줄로 쓴다 — from X import (A, B, C) 묶음 대신 from X import A 를 반복하고 알파벳 정렬한다",
+          "rule": "Write one import per symbol per line — repeat from X import A instead of grouping with from X import (A, B, C), and sort alphabetically",
           "priority": "SHOULD",
           "confidence": "medium",
           "ref_files": [
@@ -347,7 +347,7 @@
           ],
           "good_example": "from ._hooks import HookCaller\nfrom ._hooks import HookImpl\nfrom ._hooks import HookimplMarker\nfrom ._hooks import HookimplOpts",
           "bad_example": "from ._hooks import (HookCaller, HookImpl, HookimplMarker,\n                     HookimplOpts, HookRelay, HookspecMarker)",
-          "reason": "한 줄 한 심볼은 diff/충돌 단위를 최소화 — 레포 전체에서 일관 적용된 형태",
+          "reason": "One symbol per line minimizes the diff/conflict unit — applied consistently across the whole repo",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [],
@@ -355,7 +355,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "경고를 검증하는 테스트는 경고 타입만이 아니라 메시지 정규식(match), 발생 횟수, 발생 위치(filename)까지 고정한다",
+          "rule": "A test that verifies a warning pins not just the warning type but also the message regex (match), the occurrence count, and the emission location (filename)",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -364,7 +364,7 @@
           ],
           "good_example": "with pytest.warns(\n    DeprecationWarning,\n    match=r\"is a method but its first parameter 'item' is not 'self'\",\n):\n    pm.add_hookspecs(Api)",
           "bad_example": "with pytest.warns(DeprecationWarning):\n    pm.add_hookspecs(Api)",
-          "reason": "타입만 검사하면 무관한 경고가 테스트를 통과시켜 메시지 품질·발생 지점 회귀를 놓친다",
+          "reason": "Checking only the type lets an unrelated warning pass the test, missing regressions in message quality or emission site",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [],
@@ -372,7 +372,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "경고가 나지 않아야 하는 경로는 통과를 암묵에 맡기지 말고 simplefilter(\"error\") 로 경고를 에러로 승격해 명시적으로 고정한다",
+          "rule": "For a path that must not emit a warning, don't let it pass implicitly — promote warnings to errors with simplefilter(\"error\") and pin it explicitly",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -381,7 +381,7 @@
           ],
           "good_example": "with warnings.catch_warnings():\n    warnings.simplefilter(\"error\")\n    pm.add_hookspecs(Api)",
           "bad_example": "def test_hookspec_with_self_no_warning(pm):\n    class Api:\n        @hookspec\n        def my_hook(self, item, extra):\n            pass\n\n    pm.add_hookspecs(Api)",
-          "reason": "부정 케이스(경고 없음)는 기본 필터에선 침묵 통과 — 에러 승격 없이는 회귀를 못 잡는다",
+          "reason": "A negative case (no warning) passes silently under the default filter — without promoting to an error, you can't catch the regression",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [],
@@ -389,7 +389,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "순서가 계약인 컬렉션의 테스트는 부분 포함(in)이 아니라 기대 시퀀스 전체를 순서 포함해 일치 비교한다",
+          "rule": "For a collection whose order is part of the contract, tests must compare the full expected sequence in order, not just partial containment (in)",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -398,7 +398,7 @@
           ],
           "good_example": "assert funcs(hc.get_hookimpls()) == [\n    he_method1_d,\n    he_method1_b,\n    he_method1_a,\n    he_method1_c,\n]",
           "bad_example": "impls = funcs(hc.get_hookimpls())\nassert he_method1_d in impls\nassert len(impls) == 4",
-          "reason": "실행 순서(trylast/tryfirst/wrapper 배치)가 이 라이브러리의 핵심 계약 — 포함 검사로는 순서 회귀를 못 잡는다",
+          "reason": "Execution order (trylast/tryfirst/wrapper placement) is this library's core contract — a containment check can't catch an ordering regression",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [],
@@ -408,32 +408,32 @@
       ],
       "anti_patterns": [
         {
-          "pattern": "동작 수정 PR 에 테스트 미동반",
-          "reason": "메인테이너가 리뷰 없이 닫는다 (PR#648 실례)",
-          "alternative": "수정이 고치는 동작을 노출하는 테스트를 같은 PR 에 포함"
+          "pattern": "A behavior-fix PR without an accompanying test",
+          "reason": "The maintainer closes it without review (as in PR#648)",
+          "alternative": "Include, in the same PR, a test that exposes the behavior the fix addresses"
         },
         {
-          "pattern": "pytest.warns 를 타입만으로 사용",
-          "reason": "무관한 경고로도 통과해 메시지·횟수 회귀를 놓침",
-          "alternative": "match 정규식 + len(wc.list) 검증 (test_warnings.py:43-50)"
+          "pattern": "Using pytest.warns with only the type",
+          "reason": "Passes even on an unrelated warning, missing message/count regressions",
+          "alternative": "Verify with a match regex + len(wc.list) (test_warnings.py:43-50)"
         }
       ],
       "file_type_guides": {},
       "checklist": [
-        "동작 변경에 그 동작을 고정하는 테스트가 동반되는가?",
-        "Optional/Union 대신 | 문법을 쓰는가? 타입 별칭에 TypeAlias 를 붙였는가?",
-        "경고 테스트가 match·횟수까지 고정하는가? 무경고 경로는 simplefilter('error')?",
-        "순서 계약 테스트가 전체 시퀀스 일치 비교인가?"
+        "Does a behavior change come with a test that pins that behavior?",
+        "Does it use | syntax instead of Optional/Union? Are type aliases marked with TypeAlias?",
+        "Do warning tests pin the match and the count too? Does the no-warning path use simplefilter('error')?",
+        "Do ordering-contract tests compare the full sequence for equality?"
       ],
       "raw_llm_output": "(skill-mode)",
       "error": null
     },
     {
       "category": "api_design",
-      "design_intent": "pytest/tox/devpi 생태계의 최하부 라이브러리로서 하위호환이 최우선이다 — 레거시 패턴은 깨는 대신 지원을 유지한 채 DeprecationWarning 으로 이주를 안내하고, 옛 공개 이름은 alias 로 남긴다. 반대로 잘못된 사용은 가능한 가장 이른 시점(선언/등록)에 명시적 에러로 거부해 런타임 무증상 오동작을 차단한다.",
+      "design_intent": "As the bottommost library in the pytest/tox/devpi ecosystem, backward compatibility comes first — instead of breaking legacy patterns, support is kept while DeprecationWarning guides migration, and old public names remain as aliases. Conversely, invalid usage is rejected with an explicit error at the earliest possible point (declaration/registration), to block silent runtime misbehavior.",
       "rules": [
         {
-          "rule": "레거시 사용 패턴은 즉시 깨지 말고 지원을 유지한 채 DeprecationWarning 으로 이주를 안내한다 — 경고 메시지에 구체적 대안과 '미래 버전에서 에러가 된다'는 예고를 포함하고, 업스트림 픽스가 아직 릴리스되지 않은 서드파티는 만료 조건을 주석으로 명시한 suppress 목록으로 예외 처리한다",
+          "rule": "Don't break a legacy usage pattern immediately — keep support while guiding migration with a DeprecationWarning. Include a concrete alternative and a notice that 'this will become an error in a future version' in the warning message, and for third parties whose upstream fix hasn't shipped yet, exempt them via a suppress list with the expiry condition documented in a comment",
           "priority": "MUST",
           "confidence": "high",
           "ref_files": [
@@ -442,7 +442,7 @@
           ],
           "good_example": "warnings.warn(\n    f\"{qualname} is a method but its first parameter\"\n    f\" {args[0]!r} is not 'self'.\"\n    f\" Add 'self' as the first parameter or use @staticmethod.\"\n    f\" This will become an error in a future version of pluggy.\",\n    DeprecationWarning,\n    stacklevel=2,\n)",
           "bad_example": "if _is_class_method and args[0] not in _IMPLICIT_NAMES:\n    raise TypeError(f\"{qualname} must declare 'self' as first parameter\")",
-          "reason": "수천 개 하위 플러그인이 의존 — 하드 브레이크 대신 경고로 이주 시간을 주는 게 이 레포의 반복 결정",
+          "reason": "Thousands of downstream plugins depend on it — giving migration time via a warning instead of a hard break is this repo's recurring decision",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -467,7 +467,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "양립 불가능한 옵션 조합은 문서가 아니라 코드로 거부한다 — 선언 시점(ValueError) 또는 등록 시점(전용 ValidationError)에 즉시 실패시키고, 런타임 깊숙한 곳에서 조용히 오동작하게 두지 않는다",
+          "rule": "Reject incompatible option combinations in code, not just documentation — fail immediately at declaration time (ValueError) or registration time (a dedicated ValidationError), rather than letting it silently misbehave deep in runtime",
           "priority": "MUST",
           "confidence": "high",
           "ref_files": [
@@ -476,7 +476,7 @@
           ],
           "good_example": "def setattr_hookspec_opts(func: _F) -> _F:\n    if historic and firstresult:\n        raise ValueError(\"cannot have a historic firstresult hook\")",
           "bad_example": "opts: HookspecOpts = {\n    \"firstresult\": firstresult,\n    \"historic\": historic,\n}\nsetattr(func, self.project_name + \"_spec\", opts)",
-          "reason": "비호환 조합(historic×firstresult, wrapper×hookwrapper 등)을 통과시키면 훅 실행 깊숙한 곳에서 무증상 오동작",
+          "reason": "Letting an incompatible combination through (historic×firstresult, wrapper×hookwrapper, etc.) causes silent misbehavior deep inside hook execution",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -492,15 +492,15 @@
           "rationale_tier": "cited",
           "exemplar_verbatim": true,
           "probe": {
-            "task": "hookspec 마커 구현 — firstresult+historic 비호환 조합 선언 (Haiku C/T)",
+            "task": "Implement a hookspec marker — declaring the firstresult+historic incompatible combination (Haiku C/T)",
             "verdict": "discriminated",
-            "control_behavior": "비호환 조합 무증상 수용 — opts 저장 후 그대로 통과",
-            "treatment_behavior": "선언 시점 ValueError 거부 — pluggy 원문 메시지 'cannot have a historic firstresult hook' verbatim 재현",
+            "control_behavior": "silently accepts the incompatible combination — stores opts and passes it straight through",
+            "treatment_behavior": "rejects with a ValueError at declaration time — reproduces pluggy's original message 'cannot have a historic firstresult hook' verbatim",
             "model": "haiku"
           }
         },
         {
-          "rule": "공개 이름을 리네임할 때 옛 이름을 모듈 말미의 alias 로 유지하고, 어느 버전까지의 호환인지 주석으로 못박는다",
+          "rule": "When renaming a public name, keep the old name as an alias at the end of the module, and pin down in a comment which version it stays compatible through",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -509,8 +509,8 @@
             "src/pluggy/_hooks.py:618-619"
           ],
           "good_example": "# Historical name (pluggy<=1.2), kept for backward compatibility.\n_Result = Result",
-          "bad_example": "class Result(Generic[ResultType]):\n    ...\n\n# (_Result alias 제거 — 옛 이름 import 하던 하위 사용자 즉시 파손)",
-          "reason": "내부 심볼도 생태계가 이미 import 하고 있다 — 리네임의 비용을 라이브러리가 부담",
+          "bad_example": "class Result(Generic[ResultType]):\n    ...\n\n# (the _Result alias removed — immediately breaks downstream users importing the old name)",
+          "reason": "Even internal symbols are already imported by the ecosystem — the library absorbs the cost of the rename",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [],
@@ -518,7 +518,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "패키지 공개 표면은 __all__ 로 선언하고 구현은 전부 underscore 접두 모듈에 숨긴 뒤 패키지 루트에서 재노출한다; 모듈 __getattr__ 로 동적 속성을 제공할 때는 알 수 없는 이름에 명시적 AttributeError 를 raise 한다",
+          "rule": "Declare the package's public surface via __all__, hide all implementation in underscore-prefixed modules, and re-export from the package root; when providing dynamic attributes via module __getattr__, raise an explicit AttributeError for unknown names",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -527,7 +527,7 @@
           ],
           "good_example": "def __getattr__(name: str) -> str:\n    if name == \"__version__\":\n        from importlib.metadata import version\n\n        return version(\"pluggy\")\n\n    raise AttributeError(f\"module {__name__} has no attribute {name!r}\")",
           "bad_example": "def __getattr__(name):\n    from importlib.metadata import version\n    return version(\"pluggy\")",
-          "reason": "임포트 시점 비용(메타데이터 조회)은 지연 로딩으로 미루되, 오탈자 접근이 조용히 엉뚱한 값을 반환하지 않게 한다",
+          "reason": "Defer the import-time cost (metadata lookup) via lazy loading, while making sure a typo'd access doesn't silently return the wrong value",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -544,7 +544,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "매핑 값에 None 을 '차단됨' 같은 의미 있는 상태로 저장할 때, '항목 없음'과 구분하는 검사는 truthiness 가 아니라 별도 sentinel 기본값과 is None 비교로 한다",
+          "rule": "When storing None in a mapping value to mean a meaningful state like 'blocked', distinguish it from 'no entry' using a separate sentinel default and an is None comparison, not truthiness",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -553,7 +553,7 @@
           ],
           "good_example": "if plugin_name in self._name2plugin:\n    if self._name2plugin.get(plugin_name, -1) is None:\n        return None  # blocked plugin, return None to indicate no registration",
           "bad_example": "if self._name2plugin.get(name):\n    del self._name2plugin[name]",
-          "reason": "falsy 한 값 객체가 '차단' sentinel 과 충돌하면 무증상 상태 누수 — 레포의 unregister 경로에 실제로 잔존하는 결함 유형",
+          "reason": "If a falsy value object collides with the 'blocked' sentinel, state silently leaks — a defect type that actually persists in this repo's unregister path",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [],
@@ -561,7 +561,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "프레임워크가 사용자 코드를 발견·해석하는 지점은 서브클래스가 오버라이드할 수 있는 명시적 parse_* 메서드로 분리하고, 옵션 스키마는 TypedDict 로 문서화하며 누락 키는 normalize 함수의 setdefault 로 보장한다",
+          "rule": "Separate the point where the framework discovers and interprets user code into an explicit parse_* method that subclasses can override; document the option schema with a TypedDict, and guarantee missing keys via setdefault in a normalize function",
           "priority": "SHOULD",
           "confidence": "medium",
           "ref_files": [
@@ -571,7 +571,7 @@
           ],
           "good_example": "def normalize_hookimpl_opts(opts: HookimplOpts) -> None:\n    opts.setdefault(\"tryfirst\", False)\n    opts.setdefault(\"trylast\", False)\n    opts.setdefault(\"wrapper\", False)\n    opts.setdefault(\"hookwrapper\", False)\n    opts.setdefault(\"optionalhook\", False)\n    opts.setdefault(\"specname\", None)",
           "bad_example": "opts = getattr(method, \"myproj_impl\", {})\ntryfirst = opts[\"tryfirst\"] if \"tryfirst\" in opts else False\ntrylast = opts.get(\"trylast\") or False",
-          "reason": "발견 로직을 메서드로 노출해 pytest 등 호스트가 관례를 커스텀 — 옵션 기본값은 한 곳에서 보장",
+          "reason": "Exposing the discovery logic as a method lets hosts like pytest customize the convention — option defaults are guaranteed in one place",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [],
@@ -579,7 +579,7 @@
           "exemplar_verbatim": true
         },
         {
-          "rule": "호출 계약 위반은 가능한 가장 이른 시점에 진단한다 — 호출은 키워드 인자만 허용하고, 스펙 선언 인자가 빠지면 실행 전에 경고하며, 구현이 스펙에 없는 인자를 요구하면 등록 시점에 검증 에러를 낸다",
+          "rule": "Diagnose call-contract violations as early as possible — allow only keyword arguments in calls, warn before execution if a spec-declared argument is missing, and raise a validation error at registration time if an implementation requires an argument not in the spec",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -589,7 +589,7 @@
           ],
           "good_example": "notinspec = set(hookimpl.argnames) - set(hook.spec.argnames)\nif notinspec:\n    raise PluginValidationError(\n        hookimpl.plugin,\n        f\"Plugin {hookimpl.plugin_name!r} for hook {hook.name!r}\\n\"\n        f\"hookimpl definition: {_formatdef(hookimpl.function)}\\n\"\n        f\"Argument(s) {notinspec} are declared in the hookimpl but \"\n        \"can not be found in the hookspec\",\n    )",
           "bad_example": "def __call__(self, *args, **kwargs):\n    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, False)",
-          "reason": "인자 불일치를 훅 실행 시점의 KeyError 로 미루면 어느 플러그인·어느 선언이 문제인지 추적 불가",
+          "reason": "Deferring an argument mismatch to a KeyError at hook-execution time makes it impossible to trace which plugin or declaration is at fault",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [],
@@ -599,22 +599,22 @@
       ],
       "anti_patterns": [
         {
-          "pattern": "레거시 패턴 즉시 제거 (경고 없는 하드 브레이크)",
-          "reason": "수천 개 하위 플러그인 파손 — 이 레포는 예외 없이 warn-then-error 경로를 쓴다",
-          "alternative": "지원 유지 + DeprecationWarning(대안·예고 포함) + 만료 조건 명시 suppress 목록"
+          "pattern": "Removing a legacy pattern immediately (a hard break with no warning)",
+          "reason": "Breaks thousands of downstream plugins — this repo uses the warn-then-error path without exception",
+          "alternative": "Keep support + DeprecationWarning (with alternative and notice) + a suppress list with an explicit expiry condition"
         },
         {
-          "pattern": "잘못된 옵션 조합을 받아들이고 런타임에서 조용히 오동작",
-          "reason": "훅 실행 깊숙한 곳의 무증상 오류는 플러그인 작성자가 추적 불가",
-          "alternative": "선언/등록 시점 ValueError·PluginValidationError (plugin 객체 첨부)"
+          "pattern": "Accepting an invalid option combination and silently misbehaving at runtime",
+          "reason": "A silent error deep inside hook execution is untraceable for plugin authors",
+          "alternative": "A ValueError/PluginValidationError at declaration/registration time (with the plugin object attached)"
         }
       ],
       "file_type_guides": {},
       "checklist": [
-        "공개 표면 변경에 deprecation 경로(경고+대안+예고)가 있는가?",
-        "비호환 옵션 조합이 선언/등록 시점에 거부되는가?",
-        "리네임에 historical alias + 버전 주석이 남는가?",
-        "None-sentinel 상태 구분에 truthiness 를 쓰지 않았는가?"
+        "Does a public-surface change have a deprecation path (warning + alternative + notice)?",
+        "Is an incompatible option combination rejected at declaration/registration time?",
+        "Does a rename leave a historical alias + a version comment?",
+        "Does distinguishing a None-sentinel state avoid using truthiness?"
       ],
       "raw_llm_output": "(skill-mode)",
       "error": null
@@ -1019,37 +1019,37 @@
   },
   "foresight_cards": [
     {
-      "hypothesis": "pluggy 는 pytest/tox/devpi 생태계 전체의 최하부 의존성이므로 런타임 의존성 0 을 의도적으로 유지한다 — 여기서의 의존성 하나가 생태계 전체에 전이되기 때문",
+      "hypothesis": "pluggy is the bottommost dependency of the entire pytest/tox/devpi ecosystem, so it deliberately maintains zero runtime dependencies — because a single dependency here propagates to the whole ecosystem",
       "signals": [
-        "negative_space dep_count=0 — pyproject.toml [project.dependencies] 비어 있음",
-        "src/pluggy/_result.py, _tracing.py, _warnings.py — stdlib 만으로 직접 구현 (direct_impl_hints)",
+        "negative_space dep_count=0 — pyproject.toml [project.dependencies] is empty",
+        "src/pluggy/_result.py, _tracing.py, _warnings.py — implemented directly with stdlib only (direct_impl_hints)",
         "README.rst — 'This is the core framework used by the pytest, tox, and devpi projects.'"
       ],
-      "falsification": "런타임 의존성을 추가하는 커밋/PR 이 머지되면 기각",
+      "falsification": "Rejected if a commit/PR adding a runtime dependency gets merged",
       "tier": "corroborated",
       "layer": "shared",
       "verdict": "confirmed"
     },
     {
-      "hypothesis": "훅 호출 핫 경로의 성능이 명시적 설계 우선순위다 — pytest 가 훅을 수만 번 호출하므로, 등록(콜드) 비용을 올려서라도 호출(핫) 비용을 낮추는 교환을 반복한다",
+      "hypothesis": "Performance of the hook-call hot path is an explicit design priority — since pytest calls hooks tens of thousands of times, the tradeoff of raising registration (cold) cost to lower call (hot) cost is repeated",
       "signals": [
         "63b7e90 — 'avoid the list concatenation in the hot call path... it is much colder than calling so the tradeoff makes sense'",
-        "1288091 — 런타임 cast() 호출 제거: 'It actually adds measurable overhead here -- ~15% according to testing/benchmark.py'",
-        "testing/benchmark.py — varnames __code__ vs inspect.signature 비교 벤치마크 상주 (fd62ef8)"
+        "1288091 — removes a runtime cast() call: 'It actually adds measurable overhead here -- ~15% according to testing/benchmark.py'",
+        "testing/benchmark.py — a benchmark comparing varnames __code__ vs inspect.signature lives here (fd62ef8)"
       ],
-      "falsification": "핫 콜 경로에 벤치마크 근거 없이 편의성 오버헤드를 추가하는 변경이 머지되면 기각",
+      "falsification": "Rejected if a change adding convenience overhead to the hot call path without benchmark evidence gets merged",
       "tier": "corroborated",
       "layer": "shared",
       "verdict": "confirmed"
     },
     {
-      "hypothesis": "하위호환 유지가 아키텍처 결정까지 지배한다 — 구식 hookwrapper 실행기를 별도 함수로 상주시키고, 서드파티 픽스 릴리스를 기다리는 suppress 목록까지 두는 것은 '생태계가 이주할 때까지 라이브러리가 비용을 부담한다'는 원칙",
+      "hypothesis": "Maintaining backward compatibility dictates even architectural decisions — keeping a separate resident function for the old-style hookwrapper executor, and even maintaining a suppress list waiting for third-party fix releases, reflects the principle that 'the library bears the cost until the ecosystem migrates'",
       "signals": [
-        "src/pluggy/_callers.py:27-57 — old-style hookwrapper 전용 실행기 함수 유지",
+        "src/pluggy/_callers.py:27-57 — keeps a dedicated executor function for old-style hookwrapper",
         "src/pluggy/_hooks.py:294-303 — _NOSELF_WARN_SUPPRESS: 'pytest-timeout >=2.3.2 has the fix, but is unreleased as of 2026-05'",
-        "src/pluggy/_result.py:106-107 외 3곳 — 'Historical name (pluggy<=1.2), kept for backward compatibility.'"
+        "src/pluggy/_result.py:106-107 and 3 other places — 'Historical name (pluggy<=1.2), kept for backward compatibility.'"
       ],
-      "falsification": "deprecation 기간 없이 레거시 지원을 즉시 제거하는 릴리스가 반복되면 기각",
+      "falsification": "Rejected if releases repeatedly remove legacy support immediately with no deprecation period",
       "tier": "corroborated",
       "layer": "shared",
       "verdict": "confirmed"

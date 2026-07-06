@@ -182,9 +182,11 @@ tests/
 
 How many rules cite real artifacts (commit SHA / PR# / quoted revert / ADR)
 versus generic justifications. Higher cited-ratio = less LLM opinion.
+Cited splits into history-anchored (a decision record) and code-anchored
+(only a ref_files path:line) — history is the stronger WHY signal.
 Fake citations are commit SHAs the LLM invented — they were not in the input.
 
-- **Cited**: 6 (37%)
+- **Cited**: 6 (37%) — history 6 (37%), code 0 (0%)
 - **No-evidence (flagged)**: 10 (62%)
 - **Fake citation (hallucinated SHA)**: 0 (0%)
 - **Generic justification**: 0 (0%)

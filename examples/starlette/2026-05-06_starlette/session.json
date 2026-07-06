@@ -75,24 +75,25 @@
   "categories": [
     {
       "category": "architecture",
-      "design_intent": "starlette 는 ASGI middleware stack 을 framework-internal 로 잠그고 (error/exception handler 위치 강제) 사용자 미들웨어를 그 사이에 끼우는 sandwich 모델을 채택한다. 모든 sync/async 차이는 anyio + run_in_threadpool 한 곳에서 추상화되고, 모든 cross-cutting 정책 (CORS, body caching) 은 middleware 한 클래스로 좁게 분리된다.",
+      "design_intent": "Starlette locks the ASGI middleware stack as framework-internal (forcing the error/exception handler position) and adopts a sandwich model where user middleware is inserted in between. All sync/async differences are abstracted in one place (anyio + run_in_threadpool), and every cross-cutting policy (CORS, body caching) is narrowly isolated into a single middleware class.",
       "rules": [
         {
-          "rule": "ASGI app 의 middleware stack 은 outermost(서버 오류 핸들러)와 innermost(예외 → 응답 변환) 의 두 위치를 framework-internal 로 잠그고, 사용자 등록 middleware 는 그 사이에만 들어간다. user_middleware 가 error/exception 핸들러를 우회/대체 불가.",
+          "rule": "The ASGI app's middleware stack locks two positions — outermost (server error handler) and innermost (exception → response conversion) — as framework-internal; user-registered middleware only goes in between. user_middleware cannot bypass or replace the error/exception handlers.",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
             "starlette/applications.py:57-77"
           ],
           "good_example": "def build_middleware_stack(self) -> ASGIApp:\n    debug = self.debug\n    error_handler = None\n    exception_handlers: dict[Any, ExceptionHandler] = {}\n    for key, value in self.exception_handlers.items():\n        if key in (500, Exception):\n            error_handler = value\n        else:\n            exception_handlers[key] = value\n    middleware = (\n        [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]\n        + self.user_middleware\n        + [Middleware(ExceptionMiddleware, handlers=exception_handlers, debug=debug)]\n    )\n    app = self.router\n    for cls, args, kwargs in reversed(middleware):\n        app = cls(app, *args, **kwargs)\n    return app",
-          "bad_example": "self.middleware_stack = list(user_middleware)  # error/exception handler 가 사용자 middleware 에 의해 우회될 수 있음\nfor cls in self.middleware_stack:\n    app = cls(app)",
-          "reason": "[no-evidence] 사용자 middleware 가 잘못 짜이면 5xx 응답이 새거나 trace 가 노출. error/exception 위치가 강제돼야 framework 가 fault 격리를 책임진다.",
+          "bad_example": "self.middleware_stack = list(user_middleware)  # error/exception handler can be bypassed by user middleware\nfor cls in self.middleware_stack:\n    app = cls(app)",
+          "reason": "[no-evidence] A poorly written user middleware can leak 5xx responses or expose tracebacks. The error/exception position must be enforced so the framework can own fault isolation.",
           "layer": "shared",
           "scope": "cross_project",
-          "evidence": []
+          "evidence": [],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "Sync/async 전환은 한 곳 (런타임 추상화 계층) 에서만 일어난다. 사용자 endpoint 가 sync 함수면 자동으로 thread pool 로 dispatch 하고, async 함수면 그대로 호출. 사용자 코드에서 asyncio/anyio 직접 import 하지 않는다.",
+          "rule": "Sync/async conversion happens in exactly one place (the runtime abstraction layer). If the user endpoint is a sync function, it's automatically dispatched to a thread pool; if async, it's called directly. User code never imports asyncio/anyio directly.",
           "priority": "MUST",
           "confidence": "high",
           "ref_files": [
@@ -101,8 +102,8 @@
             "starlette/concurrency.py"
           ],
           "good_example": "def request_response(\n    func: Callable[[Request], Awaitable[Response] | Response],\n) -> ASGIApp:\n    f: Callable[[Request], Awaitable[Response]] = (\n        func if is_async_callable(func) else functools.partial(run_in_threadpool, func)\n    )\n\n    async def app(scope: Scope, receive: Receive, send: Send) -> None:\n        request = Request(scope, receive, send)\n        async def app(scope, receive, send):\n            response = await f(request)\n            await response(scope, receive, send)\n        await wrap_app_handling_exceptions(app, request)(scope, receive, send)\n    return app",
-          "bad_example": "async def app(scope, receive, send):\n    if asyncio.iscoroutinefunction(func):  # 사용자 코드가 매번 분기 — async runtime 에 결합\n        response = await func(request)\n    else:\n        response = await asyncio.get_event_loop().run_in_executor(None, func, request)",
-          "reason": "Async runtime 추상화 한 곳에 모이지 않으면 endpoint 마다 sync/async 분기 + runtime 라이브러리 직접 import 가 새어 나간다.",
+          "bad_example": "async def app(scope, receive, send):\n    if asyncio.iscoroutinefunction(func):  # user code branches every time — coupled to the async runtime\n        response = await func(request)\n    else:\n        response = await asyncio.get_event_loop().run_in_executor(None, func, request)",
+          "reason": "Without a single async runtime abstraction, sync/async branching and direct runtime-library imports leak into every endpoint.",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -114,10 +115,11 @@
               "intent_kind": "preference",
               "date": null
             }
-          ]
+          ],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "CORS 같은 cross-cutting 정책은 단일 middleware 클래스로 좁게 격리하고, 그 클래스가 preflight (OPTIONS + Access-Control-Request-Method) vs simple 요청을 명시적으로 분기 처리한다. wildcard `*` + credentials 충돌 같은 보안 가드도 같은 위치에서 처리.",
+          "rule": "Cross-cutting policies like CORS are narrowly isolated into a single middleware class, and that class explicitly branches preflight (OPTIONS + Access-Control-Request-Method) vs simple requests. Security guards such as the wildcard `*` + credentials conflict are also handled in the same place.",
           "priority": "MUST",
           "confidence": "high",
           "ref_files": [
@@ -125,8 +127,8 @@
             "starlette/middleware/cors.py:78-96"
           ],
           "good_example": "preflight_explicit_allow_origin = not allow_all_origins or allow_credentials\n\nif preflight_explicit_allow_origin:\n    # The origin value will be set in preflight_response() if it is allowed.\n    preflight_headers[\"Vary\"] = \"Origin\"\nelse:\n    preflight_headers[\"Access-Control-Allow-Origin\"] = \"*\"\n\nasync def __call__(self, scope, receive, send):\n    method = scope[\"method\"]\n    headers = Headers(scope=scope)\n    origin = headers.get(\"origin\")\n    if origin is None:\n        await self.app(scope, receive, send)\n        return\n    if method == \"OPTIONS\" and \"access-control-request-method\" in headers:\n        response = self.preflight_response(request_headers=headers)\n        await response(scope, receive, send)\n        return\n    await self.simple_response(scope, receive, send, request_headers=headers)",
-          "bad_example": "if request.headers.get('origin'):\n    response.headers['Access-Control-Allow-Origin'] = '*'\n    response.headers['Access-Control-Allow-Credentials'] = 'true'  # wildcard + credentials 충돌 — 브라우저가 거부",
-          "reason": "preflight 와 simple 요청 처리 분리 + wildcard/credentials 충돌 가드가 한 곳에 없으면 endpoint 별 보안 구멍이 생긴다.",
+          "bad_example": "if request.headers.get('origin'):\n    response.headers['Access-Control-Allow-Origin'] = '*'\n    response.headers['Access-Control-Allow-Credentials'] = 'true'  # wildcard + credentials conflict — browsers reject this",
+          "reason": "Without separating preflight from simple request handling and centralizing the wildcard/credentials conflict guard, security holes appear per endpoint.",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -138,18 +140,19 @@
               "intent_kind": "preference",
               "date": null
             }
-          ]
+          ],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "Middleware 가 request body 에 접근할 때, body() (전체 메모리 캐시) 와 stream() (한 번 소비) 를 명시적으로 분기 처리해 downstream app 으로 안전히 전달. 둘을 모두 호출하면 stream consumed 또는 disconnect 처리.",
+          "rule": "When middleware accesses the request body, explicitly branch between body() (caches the entire thing in memory) and stream() (consumed once) to pass it safely to the downstream app. If both are called, handle it as stream-consumed or disconnect.",
           "priority": "MUST",
           "confidence": "high",
           "ref_files": [
             "starlette/middleware/base.py:20-93"
           ],
           "good_example": "class _CachedRequest(Request):\n    \"\"\"\n    If the user calls Request.body() from their dispatch function\n    we cache the entire request body in memory and pass that to downstream middlewares,\n    but if they call Request.stream() then all we do is send an\n    empty body so that downstream things don't hang forever.\n    \"\"\"\n\n    async def wrapped_receive(self) -> Message:\n        if self._wrapped_rcv_disconnected:\n            return {\"type\": \"http.disconnect\"}\n        if self._wrapped_rcv_consumed:\n            ...\n        if getattr(self, \"_body\", None) is not None:\n            return {\"type\": \"http.request\", \"body\": self._body, \"more_body\": False}\n        elif self._stream_consumed:\n            return {\"type\": \"http.request\", \"body\": b\"\", \"more_body\": False}",
-          "bad_example": "async def dispatch(self, request, call_next):\n    body = await request.body()  # 전체 메모리에 caching, 큰 upload 면 메모리 폭발\n    ...\n    return await call_next(request)  # downstream 는 body 가 이미 소비된 상태",
-          "reason": "Body access 의 cache/stream 분기 가드 없으면 큰 request 업로드 시 메모리 폭발 또는 downstream hang.",
+          "bad_example": "async def dispatch(self, request, call_next):\n    body = await request.body()  # caches everything in memory, blows up on large uploads\n    ...\n    return await call_next(request)  # downstream sees the body already consumed",
+          "reason": "Without a cache/stream branch guard on body access, large request uploads cause a memory blowup or a downstream hang.",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -161,45 +164,46 @@
               "intent_kind": "incident",
               "date": null
             }
-          ]
+          ],
+          "rationale_tier": "speculative"
         }
       ],
       "anti_patterns": [
         {
-          "pattern": "사용자 middleware 가 error/exception handler 와 같은 layer 에 등록",
-          "reason": "잘못된 사용자 middleware 가 fault 격리를 깰 수 있음",
-          "alternative": "framework 가 outermost/innermost 위치를 잠그고 사용자 middleware 는 그 사이에만"
+          "pattern": "User middleware registered at the same layer as the error/exception handler",
+          "reason": "A broken user middleware can break fault isolation",
+          "alternative": "Framework locks the outermost/innermost positions; user middleware only goes in between"
         },
         {
-          "pattern": "endpoint 마다 sync/async 분기 코드",
-          "reason": "async runtime 에 결합도 폭발",
-          "alternative": "framework 의 단일 추상화 (anyio/run_in_threadpool) 한 곳에서만"
+          "pattern": "Sync/async branching code in every endpoint",
+          "reason": "Coupling to the async runtime explodes",
+          "alternative": "Only through the framework's single abstraction (anyio/run_in_threadpool)"
         },
         {
-          "pattern": "wildcard `*` Allow-Origin 과 credentials 동시 사용",
-          "reason": "브라우저 CORS spec 위반",
-          "alternative": "credentials 일 때 explicit origin echo"
+          "pattern": "Using wildcard `*` Allow-Origin together with credentials",
+          "reason": "Violates the browser CORS spec",
+          "alternative": "Echo the explicit origin when credentials are used"
         }
       ],
       "file_type_guides": {
-        "middleware": "단일 클래스가 cross-cutting 정책 1개를 책임. __call__(scope, receive, send) 시그니처 + 정책별 분기.",
-        "applications": "build_middleware_stack 으로 stack 조립. 사용자 등록은 user_middleware 리스트에만."
+        "middleware": "A single class owns one cross-cutting policy. __call__(scope, receive, send) signature + per-policy branching.",
+        "applications": "Stack assembled via build_middleware_stack. User registration only goes into the user_middleware list."
       },
       "checklist": [
-        "새 middleware 가 error/exception handler 위치를 우회하지 않는가?",
-        "endpoint 등록 시 sync/async 분기를 endpoint 코드 안에 두지 않았는가?",
-        "cross-cutting 정책이 단일 middleware 클래스로 격리됐는가?",
-        "Middleware 가 body 를 소비할 때 cache/stream 분기 가드가 있는가?"
+        "Does the new middleware avoid bypassing the error/exception handler position?",
+        "Does endpoint registration avoid putting sync/async branching inside endpoint code?",
+        "Is the cross-cutting policy isolated into a single middleware class?",
+        "Is there a cache/stream branch guard when middleware consumes the body?"
       ],
       "raw_llm_output": "(skill-mode v10: + testing category)",
       "error": null
     },
     {
       "category": "coding_style",
-      "design_intent": "모든 모듈이 `from __future__ import annotations` + 모듈 상단 import 정렬을 따른다. ASGI 타입은 단일 모듈 (types.py) 에서 정의하고 다른 모듈은 거기서 import. Optional 의존성은 try/import + None fallback + 사용 시 assert 패턴. Typing 정밀도가 필요한 곳 (async 감지, Config callable 등) 은 `@overload` 로 표현.",
+      "design_intent": "Every module follows `from __future__ import annotations` plus sorted imports at the top of the module. ASGI types are defined in a single module (types.py) and other modules import from there. Optional dependencies follow the try/import + None fallback + assert-on-use pattern. Wherever typing precision is needed (async detection, Config callable, etc.), it's expressed with `@overload`.",
       "rules": [
         {
-          "rule": "모든 공개 모듈은 `from __future__ import annotations` 를 모듈 상단에 두고, ASGI 타입은 별도 단일 모듈 (types.py) 에서 정의해 다른 모듈에서 import 한다. type alias 를 두 곳에 정의하지 않는다.",
+          "rule": "Every public module puts `from __future__ import annotations` at the top, and ASGI types are defined in a separate single module (types.py) for other modules to import. Never define a type alias in two places.",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -208,14 +212,15 @@
             "starlette/middleware/base.py:1-11"
           ],
           "good_example": "# starlette/types.py\nfrom collections.abc import Awaitable, Callable, Mapping, MutableMapping\nfrom contextlib import AbstractAsyncContextManager\nfrom typing import TYPE_CHECKING, Any, TypeVar\n\nif TYPE_CHECKING:\n    from starlette.requests import Request\n    from starlette.responses import Response\n\nScope = MutableMapping[str, Any]\nMessage = MutableMapping[str, Any]\nReceive = Callable[[], Awaitable[Message]]\nSend = Callable[[Message], Awaitable[None]]\nASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]\n\n# starlette/applications.py\nfrom starlette.types import ASGIApp, ExceptionHandler, Lifespan, Receive, Scope, Send",
-          "bad_example": "# starlette/applications.py\nScope = dict  # 같은 alias 를 모듈마다 정의 — drift 위험\nReceive = Callable[[], Awaitable[dict]]\n\n# starlette/middleware/base.py\nScope = MutableMapping[str, Any]  # 다른 정의 — 사용자 코드가 어느 import 에 결합됐냐에 따라 깨짐",
-          "reason": "[no-evidence] 같은 type alias 가 두 모듈에 정의되면 import path 따라 동작이 갈리고, 새 ASGI 스펙 변경 시 한 곳만 갱신되는 silent drift 발생.",
+          "bad_example": "# starlette/applications.py\nScope = dict  # same alias defined per module — drift risk\nReceive = Callable[[], Awaitable[dict]]\n\n# starlette/middleware/base.py\nScope = MutableMapping[str, Any]  # different definition — user code breaks depending on which import it's coupled to",
+          "reason": "[no-evidence] If the same type alias is defined in two modules, behavior diverges depending on import path, and a new ASGI spec change updating only one location causes silent drift.",
           "layer": "shared",
           "scope": "cross_project",
-          "evidence": []
+          "evidence": [],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "Optional dependency 는 모듈 import 시점에 try/except ModuleNotFoundError → None fallback, 사용 시점에 assert 로 명시적으로 검증. import-time 에 의존성 강제하지 않는다.",
+          "rule": "Optional dependencies use try/except ModuleNotFoundError → None fallback at module import time, and are explicitly verified with assert at point of use. Never force the dependency at import time.",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -223,14 +228,15 @@
             "starlette/_utils.py:11-23"
           ],
           "good_example": "try:\n    import yaml\nexcept ModuleNotFoundError:  # pragma: no cover\n    yaml = None  # type: ignore[assignment]\n\n\nclass OpenAPIResponse(Response):\n    media_type = \"application/vnd.oai.openapi\"\n\n    def render(self, content: Any) -> bytes:\n        assert yaml is not None, \"`pyyaml` must be installed to use OpenAPIResponse.\"\n        assert isinstance(content, dict), \"The schema passed to OpenAPIResponse should be a dictionary.\"\n        return yaml.dump(content, default_flow_style=False).encode(\"utf-8\")",
-          "bad_example": "import yaml  # import-time 에 강제 — 사용자가 OpenAPI 안 써도 yaml 설치 필요\n\nclass OpenAPIResponse(Response):\n    def render(self, content):\n        return yaml.dump(content).encode()",
-          "reason": "[no-evidence] Import-time 강제 의존성은 사용자가 안 쓰는 기능 때문에 패키지 설치 비용 부담. lazy + assert 가 비용을 사용자 의도와 일치시킴.",
+          "bad_example": "import yaml  # forced at import time — yaml must be installed even if the user never uses OpenAPI\n\nclass OpenAPIResponse(Response):\n    def render(self, content):\n        return yaml.dump(content).encode()",
+          "reason": "[no-evidence] Forcing the dependency at import time burdens the user with install cost for a feature they don't use. Lazy + assert aligns the cost with user intent.",
           "layer": "shared",
           "scope": "cross_project",
-          "evidence": []
+          "evidence": [],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "Typing 정밀도가 필요한 callable (sync/async 분기, multi-signature factory) 은 `typing.overload` 로 시그니처를 분리해 호출 시 타입 추론이 정확하게 narrow 되도록 한다.",
+          "rule": "Callables that need typing precision (sync/async branching, multi-signature factories) split their signatures with `typing.overload` so type inference narrows correctly at the call site.",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -238,8 +244,8 @@
             "starlette/config.py"
           ],
           "good_example": "@overload\ndef is_async_callable(obj: AwaitableCallable[T]) -> TypeIs[AwaitableCallable[T]]: ...\n\n\n@overload\ndef is_async_callable(obj: Any) -> TypeIs[AwaitableCallable[Any]]: ...\n\n\ndef is_async_callable(obj: Any) -> Any:\n    while isinstance(obj, functools.partial):\n        obj = obj.func\n    return iscoroutinefunction(obj) or (callable(obj) and iscoroutinefunction(obj.__call__))",
-          "bad_example": "def is_async_callable(obj):  # 호출자가 Any 받아 후속 코드의 타입 추론 망가짐\n    return iscoroutinefunction(obj) or ...",
-          "reason": "Static analyzer 가 sync/async 분기 후 narrow 된 타입 알아야 await 누락 같은 버그 잡음 — overload 가 그 hint.",
+          "bad_example": "def is_async_callable(obj):  # caller gets Any, wrecking type inference in downstream code\n    return iscoroutinefunction(obj) or ...",
+          "reason": "The static analyzer needs to know the narrowed type after sync/async branching to catch bugs like a missing await — overload provides that hint.",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -251,54 +257,56 @@
               "intent_kind": "preference",
               "date": null
             }
-          ]
+          ],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "예외/dataclass-like wrapper 클래스는 `__init__` 에서 status code/code 를 positional, detail/reason 을 keyword optional 로 받고, `__str__`/`__repr__` 를 명시적으로 정의해 디버깅 출력을 일관되게 만든다.",
+          "rule": "Exception / dataclass-like wrapper classes take status code/code as positional in `__init__`, detail/reason as keyword optional, and explicitly define `__str__`/`__repr__` to make debugging output consistent.",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
             "starlette/exceptions.py:7-33"
           ],
           "good_example": "class HTTPException(Exception):\n    def __init__(self, status_code: int, detail: str | None = None, headers: Mapping[str, str] | None = None) -> None:\n        if detail is None:\n            detail = http.HTTPStatus(status_code).phrase\n        self.status_code = status_code\n        self.detail = detail\n        self.headers = headers\n\n    def __str__(self) -> str:\n        return f\"{self.status_code}: {self.detail}\"\n\n    def __repr__(self) -> str:\n        class_name = self.__class__.__name__\n        return f\"{class_name}(status_code={self.status_code!r}, detail={self.detail!r})\"",
-          "bad_example": "class HTTPException(Exception):\n    def __init__(self, *args, **kwargs):\n        super().__init__(*args, **kwargs)  # status_code/detail 접근 못 함, 에러 메시지 일관성 없음",
-          "reason": "[no-evidence] Exception 의 __str__/__repr__ 명시 없으면 로그 출력이 \"HTTPException(...)\" 같은 default repr 로 깨짐. 명시적 정의가 디버깅 표면을 일관되게.",
+          "bad_example": "class HTTPException(Exception):\n    def __init__(self, *args, **kwargs):\n        super().__init__(*args, **kwargs)  # no access to status_code/detail, inconsistent error messages",
+          "reason": "[no-evidence] Without explicit __str__/__repr__ on the exception, log output degrades to a default repr like \"HTTPException(...)\". Explicit definitions keep the debugging surface consistent.",
           "layer": "shared",
           "scope": "cross_project",
-          "evidence": []
+          "evidence": [],
+          "rationale_tier": "speculative"
         }
       ],
       "anti_patterns": [
         {
-          "pattern": "type alias 를 여러 모듈에 정의",
-          "reason": "import path 따른 silent drift",
-          "alternative": "단일 types.py 모듈"
+          "pattern": "Defining a type alias across multiple modules",
+          "reason": "Silent drift depending on import path",
+          "alternative": "A single types.py module"
         },
         {
-          "pattern": "Optional dependency 의 import-time 강제 import",
-          "reason": "사용자가 안 쓰는 기능에 강제 의존",
-          "alternative": "try/import + None + 사용 시 assert"
+          "pattern": "Import-time forced import of an optional dependency",
+          "reason": "Forces a dependency for a feature the user doesn't use",
+          "alternative": "try/import + None + assert at point of use"
         }
       ],
       "file_type_guides": {
-        "types.py": "ASGI/도메인 타입 alias 단일 source. 다른 모듈은 import 만.",
-        "module 상단": "from __future__ import annotations + import 정렬 (stdlib → third-party → local)"
+        "types.py": "Single source for ASGI/domain type aliases. Other modules only import.",
+        "top of module": "from __future__ import annotations + sorted imports (stdlib → third-party → local)"
       },
       "checklist": [
-        "모든 새 모듈에 `from __future__ import annotations` 가 있는가?",
-        "새 type alias 가 types.py (또는 동치) 에 정의됐는가?",
-        "Optional dependency 가 import-time 에 강제되지 않는가?",
-        "Sync/async 분기 callable 에 @overload 가 적절한가?"
+        "Does every new module have `from __future__ import annotations`?",
+        "Is the new type alias defined in types.py (or equivalent)?",
+        "Is the optional dependency not forced at import time?",
+        "Is @overload appropriate for the sync/async branching callable?"
       ],
       "raw_llm_output": "(skill-mode v10: + testing category)",
       "error": null
     },
     {
       "category": "api_design",
-      "design_intent": "Public API 는 keyword-only optional + 명시적 default 로 시그니처를 안정화하고, 내부 framework 결정 (middleware 위치, runtime 추상화) 은 사용자에게 노출하지 않는다. 확장 hook 은 generic TypeVar (`AppType`) 으로 subclassing 을 1급으로 지원하고, 변경할 수 없는 시점 (middleware 등록 후 start) 은 RuntimeError 로 명시적으로 거절한다.",
+      "design_intent": "Public APIs stabilize their signatures with keyword-only optionals + explicit defaults, and never expose internal framework decisions (middleware position, runtime abstraction) to the user. Extension hooks support subclassing as a first-class citizen via a generic TypeVar (`AppType`), and mutation at a point where it's no longer valid (start after middleware registration) is explicitly rejected with RuntimeError.",
       "rules": [
         {
-          "rule": "Public configuration 객체 (Application, Middleware) 는 모든 옵션을 keyword-only optional 로 받고, default 는 가장 보수적/안전한 값으로 설정 (debug=False, allow_origins=()).",
+          "rule": "Public configuration objects (Application, Middleware) take all options as keyword-only optionals, with defaults set to the most conservative/safe value (debug=False, allow_origins=()).",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -306,14 +314,15 @@
             "starlette/middleware/cors.py:16-27"
           ],
           "good_example": "class Starlette:\n    def __init__(\n        self: AppType,\n        debug: bool = False,\n        routes: Sequence[BaseRoute] | None = None,\n        middleware: Sequence[Middleware] | None = None,\n        exception_handlers: Mapping[Any, ExceptionHandler] | None = None,\n        lifespan: Lifespan[AppType] | None = None,\n    ) -> None: ...\n\nclass CORSMiddleware:\n    def __init__(\n        self,\n        app: ASGIApp,\n        allow_origins: Sequence[str] = (),\n        allow_methods: Sequence[str] = (\"GET\",),\n        allow_headers: Sequence[str] = (),\n        allow_credentials: bool = False,\n        max_age: int = 600,\n    ) -> None: ...",
-          "bad_example": "class Starlette:\n    def __init__(self, *args, **kwargs):  # 시그니처 모호, default 알 수 없음\n        self.debug = kwargs.get('debug', True)  # 위험한 default",
-          "reason": "[no-evidence] Public 옵션이 명시적 default 가지지 않으면 사용자 코드가 default 변경 시 silent breakage. 또 *args/**kwargs 시그니처는 type checker 가 안 잡음.",
+          "bad_example": "class Starlette:\n    def __init__(self, *args, **kwargs):  # ambiguous signature, defaults unknowable\n        self.debug = kwargs.get('debug', True)  # dangerous default",
+          "reason": "[no-evidence] If a public option lacks an explicit default, user code silently breaks whenever the default changes. Also, a *args/**kwargs signature isn't caught by the type checker.",
           "layer": "shared",
           "scope": "cross_project",
-          "evidence": []
+          "evidence": [],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "Application 확장 (subclassing) 을 명시적으로 1급 지원하기 위해 generic TypeVar (`AppType = TypeVar('AppType', bound='Starlette')`) 를 두고, 그 generic 을 Lifespan 같은 callback 시그니처에 흘려보낸다.",
+          "rule": "To explicitly support Application extension (subclassing) as a first-class citizen, a generic TypeVar (`AppType = TypeVar('AppType', bound='Starlette')`) is defined and threaded through callback signatures like Lifespan.",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
@@ -321,72 +330,75 @@
             "starlette/types.py:10-22"
           ],
           "good_example": "AppType = TypeVar(\"AppType\", bound=\"Starlette\")\n\nclass Starlette:\n    def __init__(\n        self: AppType,\n        ...\n        lifespan: Lifespan[AppType] | None = None,\n    ) -> None: ...\n\n# types.py\nStatelessLifespan = Callable[[AppType], AbstractAsyncContextManager[None]]\nStatefulLifespan = Callable[[AppType], AbstractAsyncContextManager[Mapping[str, Any]]]\nLifespan = StatelessLifespan[AppType] | StatefulLifespan[AppType]",
-          "bad_example": "class Starlette:\n    def __init__(self, lifespan=None):  # subclass 의 lifespan 콜백이 Starlette 자체만 받음 — 추가 메서드 접근 못 함\n        ...",
-          "reason": "[no-evidence] Generic TypeVar 없이 subclass 하면 subclass 의 추가 메서드/속성을 lifespan 콜백에서 type-safe 하게 못 씀. AppType 으로 subclass-friendly.",
+          "bad_example": "class Starlette:\n    def __init__(self, lifespan=None):  # subclass's lifespan callback only receives Starlette itself — no access to extra methods\n        ...",
+          "reason": "[no-evidence] Without a generic TypeVar, subclassing means the subclass's extra methods/attributes can't be used type-safely in the lifespan callback. AppType makes it subclass-friendly.",
           "layer": "shared",
           "scope": "cross_project",
-          "evidence": []
+          "evidence": [],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "변경할 수 없는 시점 (이미 시작된 application, 이미 닫힌 client) 의 mutating API 호출은 RuntimeError 로 명시적으로 거절한다. silent no-op 또는 lazy reset 금지.",
+          "rule": "Calling a mutating API at a point where change is no longer valid (an application that's already started, a client that's already closed) is explicitly rejected with RuntimeError. No silent no-op or lazy reset.",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
             "starlette/applications.py:98-101"
           ],
           "good_example": "def add_middleware(self, middleware_class: _MiddlewareFactory[P], *args: P.args, **kwargs: P.kwargs) -> None:\n    if self.middleware_stack is not None:  # pragma: no cover\n        raise RuntimeError(\"Cannot add middleware after an application has started\")\n    self.user_middleware.insert(0, Middleware(middleware_class, *args, **kwargs))",
-          "bad_example": "def add_middleware(self, middleware_class, *args, **kwargs):\n    self.user_middleware.append(Middleware(middleware_class, *args, **kwargs))\n    self.middleware_stack = None  # silent reset — 이미 받은 요청들은 어느 stack 으로 처리됐는지 모호",
-          "reason": "[no-evidence] post-start mutation 을 silent 으로 받으면 첫 요청과 두 번째 요청이 다른 stack 으로 처리됨. RuntimeError 가 사용자에게 의도를 명확히.",
+          "bad_example": "def add_middleware(self, middleware_class, *args, **kwargs):\n    self.user_middleware.append(Middleware(middleware_class, *args, **kwargs))\n    self.middleware_stack = None  # silent reset — unclear which stack handled requests already received",
+          "reason": "[no-evidence] Silently accepting a post-start mutation means the first and second requests get processed by different stacks. RuntimeError makes the intent clear to the user.",
           "layer": "shared",
           "scope": "cross_project",
-          "evidence": []
+          "evidence": [],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "Domain-specific exception (HTTPException, WebSocketException) 은 `__init__` 에서 status code/code 를 positional, detail/reason 을 optional 로 받고, detail 미제공 시 status code 의 standard phrase 를 자동 채운다.",
+          "rule": "Domain-specific exceptions (HTTPException, WebSocketException) take status code/code as positional in `__init__` and detail/reason as optional, auto-filling the standard phrase for the status code when detail isn't provided.",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
             "starlette/exceptions.py:7-13"
           ],
-          "good_example": "class HTTPException(Exception):\n    def __init__(self, status_code: int, detail: str | None = None, headers: Mapping[str, str] | None = None) -> None:\n        if detail is None:\n            detail = http.HTTPStatus(status_code).phrase  # 401 → 'Unauthorized' 자동\n        self.status_code = status_code\n        self.detail = detail\n        self.headers = headers",
-          "bad_example": "raise HTTPException(\"unauthorized\")  # status code 가 부수적이거나 누락\n# 또는\nraise HTTPException(401)  # detail 항상 사용자가 채워야 — boilerplate",
-          "reason": "[no-evidence] Status code 우선 + standard phrase auto-fill 이 사용자 boilerplate 줄이고 응답 일관성 보장.",
+          "good_example": "class HTTPException(Exception):\n    def __init__(self, status_code: int, detail: str | None = None, headers: Mapping[str, str] | None = None) -> None:\n        if detail is None:\n            detail = http.HTTPStatus(status_code).phrase  # 401 → 'Unauthorized' automatically\n        self.status_code = status_code\n        self.detail = detail\n        self.headers = headers",
+          "bad_example": "raise HTTPException(\"unauthorized\")  # status code incidental or missing\n# or\nraise HTTPException(401)  # user must always fill in detail — boilerplate",
+          "reason": "[no-evidence] Status-code-first + standard phrase auto-fill reduces user boilerplate and guarantees response consistency.",
           "layer": "shared",
           "scope": "cross_project",
-          "evidence": []
+          "evidence": [],
+          "rationale_tier": "speculative"
         }
       ],
       "anti_patterns": [
         {
-          "pattern": "Public __init__ 가 *args/**kwargs",
-          "reason": "type checker 회피, default 모호",
-          "alternative": "명시적 keyword-only optional + 보수적 default"
+          "pattern": "Public __init__ taking *args/**kwargs",
+          "reason": "Evades the type checker, defaults are ambiguous",
+          "alternative": "Explicit keyword-only optional + conservative default"
         },
         {
-          "pattern": "post-start mutation silent 처리",
-          "reason": "first vs second request stack 일관성 깨짐",
-          "alternative": "RuntimeError 로 거절"
+          "pattern": "Silently handling post-start mutation",
+          "reason": "Breaks consistency between the first and second request's stack",
+          "alternative": "Reject with RuntimeError"
         }
       ],
       "file_type_guides": {
-        "applications.py": "최상위 Application 클래스. Public init 옵션은 보수적 default + AppType generic.",
-        "exceptions.py": "Domain exception 계층. status code positional + detail optional + auto-phrase."
+        "applications.py": "Top-level Application class. Public init options use conservative defaults + AppType generic.",
+        "exceptions.py": "Domain exception hierarchy. status code positional + detail optional + auto-phrase."
       },
       "checklist": [
-        "새 public API 가 명시적 default 가진 keyword-only optional 인가?",
-        "Subclass 친화적 generic TypeVar 가 콜백 시그니처에 흐르는가?",
-        "post-start mutation 은 RuntimeError 로 거절되는가?",
-        "Domain exception 이 status code positional + auto-phrase 패턴인가?"
+        "Does the new public API use keyword-only optionals with explicit defaults?",
+        "Does a subclass-friendly generic TypeVar flow through callback signatures?",
+        "Is post-start mutation rejected with RuntimeError?",
+        "Does the domain exception follow the status-code-positional + auto-phrase pattern?"
       ],
       "raw_llm_output": "(skill-mode v10: + testing category)",
       "error": null
     },
     {
       "category": "testing",
-      "design_intent": "테스트 fixtures 가 production 코드와 같은 정밀도로 관리된다 — `tests/types.py` 같은 단일 fixture-types 모듈에 TestClientFactory 등 테스트-specific 타입을 모으고, TestClient 가 backend/option arg 를 constructor 로 받아 multi-runtime (asyncio + trio) 검증을 1급으로 지원한다. Optional test-only 의존성 (httpx) 은 module-import time 에 명시적 RuntimeError + install hint 로 처리.",
+      "design_intent": "Test fixtures are managed with the same rigor as production code — test-specific types like TestClientFactory are collected in a single fixture-types module (`tests/types.py`), and TestClient takes backend/option args in its constructor to support multi-runtime (asyncio + trio) verification as a first-class citizen. Optional test-only dependencies (httpx) are handled with an explicit RuntimeError + install hint at module-import time.",
       "rules": [
         {
-          "rule": "테스트 fixtures 의 공통 타입 (TestClientFactory, ASGI app stub 등) 은 별도 단일 모듈 (`tests/types.py`) 에 모으고, 다른 테스트 모듈은 거기서 import 한다. 테스트 모듈마다 같은 타입을 재정의하지 않는다.",
+          "rule": "Common types for test fixtures (TestClientFactory, ASGI app stub, etc.) are collected in a separate single module (`tests/types.py`), and other test modules import from there. Never redefine the same type in every test module.",
           "priority": "MUST",
           "confidence": "high",
           "ref_files": [
@@ -394,8 +406,8 @@
             "tests/test_applications.py:25"
           ],
           "good_example": "# tests/types.py\nfrom typing import Protocol\n\n\nclass TestClientFactory(Protocol):\n    def __call__(self, app: ASGIApp, *, backend: str = ...) -> TestClient: ...\n\n\n# tests/middleware/test_base.py\nfrom tests.types import TestClientFactory\n\ndef test_middleware(test_client_factory: TestClientFactory) -> None:\n    client = test_client_factory(app)",
-          "bad_example": "# tests/middleware/test_base.py\nTestClientFactory = Callable[[ASGIApp], TestClient]  # 이 모듈에만\n\n# tests/test_routing.py\nTestClientFactory = Callable[[ASGIApp], TestClient]  # 또 정의 — drift",
-          "reason": "테스트 타입을 모듈마다 재정의하면 fixture signature 가 silent drift — 한 군데 통과해도 다른 곳 type 불일치.",
+          "bad_example": "# tests/middleware/test_base.py\nTestClientFactory = Callable[[ASGIApp], TestClient]  # only in this module\n\n# tests/test_routing.py\nTestClientFactory = Callable[[ASGIApp], TestClient]  # defined again — drift",
+          "reason": "Redefining test types per module lets the fixture signature silently drift — passing in one place doesn't guarantee type consistency elsewhere.",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -407,18 +419,19 @@
               "intent_kind": "preference",
               "date": null
             }
-          ]
+          ],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "TestClient 같은 sync-test wrapper 는 async runtime backend (asyncio/trio) 와 그 옵션을 constructor 인자로 받는다. ClassVar 또는 module-global 로 backend 를 박지 않는다.",
+          "rule": "A sync-test wrapper like TestClient takes the async runtime backend (asyncio/trio) and its options as constructor arguments. Never hardcode the backend as a ClassVar or module-global.",
           "priority": "MUST",
           "confidence": "high",
           "ref_files": [
             "starlette/testclient.py:1-50"
           ],
           "good_example": "class TestClient(httpx.Client):\n    def __init__(\n        self,\n        app: ASGIApp,\n        base_url: str = \"http://testserver\",\n        backend: Literal[\"asyncio\", \"trio\"] = \"asyncio\",\n        backend_options: dict[str, Any] | None = None,\n    ) -> None:\n        self.async_backend = _AsyncBackend(\n            backend=backend,\n            backend_options=backend_options or {},\n        )",
-          "bad_example": "class TestClient(httpx.Client):\n    backend: ClassVar[str] = \"asyncio\"  # 모든 인스턴스 공유 — trio 격리 불가\n\n    def __init__(self, app):\n        super().__init__()",
-          "reason": "ClassVar backend 는 trio + asyncio 동시 테스트 격리 깨짐 + 사용자가 backend 별 동작 못 검증.",
+          "bad_example": "class TestClient(httpx.Client):\n    backend: ClassVar[str] = \"asyncio\"  # shared by all instances — no trio isolation\n\n    def __init__(self, app):\n        super().__init__()",
+          "reason": "A ClassVar backend breaks isolation between concurrent trio + asyncio tests, and prevents the user from verifying backend-specific behavior.",
           "layer": "shared",
           "scope": "cross_project",
           "evidence": [
@@ -430,58 +443,61 @@
               "intent_kind": "preference",
               "date": null
             }
-          ]
+          ],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "Optional test-only 의존성 (httpx for TestClient 등) 은 `try: import` + `except ModuleNotFoundError: raise RuntimeError(...설치 가이드...)` 로 처리. 일반 코드의 lazy + None + assert 패턴과 달리 module-import time 에 즉시 명시적 에러.",
+          "rule": "Optional test-only dependencies (httpx for TestClient, etc.) are handled with `try: import` + `except ModuleNotFoundError: raise RuntimeError(...install guide...)`. Unlike the lazy + None + assert pattern used in regular code, this raises an immediate, explicit error at module-import time.",
           "priority": "SHOULD",
           "confidence": "high",
           "ref_files": [
             "starlette/testclient.py:37-44"
           ],
           "good_example": "try:\n    import httpx\nexcept ModuleNotFoundError:  # pragma: no cover\n    raise RuntimeError(\n        \"The starlette.testclient module requires the httpx package to be installed.\\n\"\n        \"You can install this with:\\n\"\n        \"    $ pip install httpx\\n\"\n    )",
-          "bad_example": "import httpx  # cryptic ImportError traceback\n\n# 또는\ntry:\n    import httpx\nexcept ModuleNotFoundError:\n    httpx = None\n\nclass TestClient:\n    def __init__(self):\n        assert httpx is not None  # install hint 없는 AssertionError",
-          "reason": "[no-evidence] 사용자가 명시적으로 import 한 testclient 모듈은 의존성 없으면 즉시 RuntimeError + install hint 가 명확. lazy/None 은 production runtime 용.",
+          "bad_example": "import httpx  # cryptic ImportError traceback\n\n# or\ntry:\n    import httpx\nexcept ModuleNotFoundError:\n    httpx = None\n\nclass TestClient:\n    def __init__(self):\n        assert httpx is not None  # AssertionError with no install hint",
+          "reason": "[no-evidence] For a testclient module the user explicitly imported, an immediate RuntimeError + install hint is clear when the dependency is missing. lazy/None is for the production runtime.",
           "layer": "shared",
           "scope": "cross_project",
-          "evidence": []
+          "evidence": [],
+          "rationale_tier": "speculative"
         },
         {
-          "rule": "Endpoint 가 sync/async 자동 dispatch 라면, 테스트도 두 형태 모두 fixture 로 두고 같은 응답을 검증한다. 한쪽만 테스트하면 transparent dispatch regression 못 잡음.",
+          "rule": "If an endpoint auto-dispatches sync/async, the test also keeps both forms as fixtures and verifies the same response. Testing only one form misses transparent-dispatch regressions.",
           "priority": "SHOULD",
           "confidence": "medium",
           "ref_files": [
             "tests/test_applications.py:40-50"
           ],
           "good_example": "def func_homepage(request: Request) -> PlainTextResponse:\n    return PlainTextResponse(\"Hello, world!\")\n\n\nasync def async_homepage(request: Request) -> PlainTextResponse:\n    return PlainTextResponse(\"Hello, world!\")\n\n\nclass Homepage(HTTPEndpoint):\n    def get(self, request: Request) -> PlainTextResponse:\n        return PlainTextResponse(\"Hello, world!\")\n\n\n@pytest.fixture(params=[func_homepage, async_homepage, Homepage])\ndef homepage_endpoint(request):\n    return request.param",
-          "bad_example": "async def homepage(request):  # async only — sync dispatch regression 못 잡음\n    return PlainTextResponse(\"Hello\")\n\ndef test_homepage(test_client_factory):\n    client = test_client_factory(Starlette(routes=[Route('/', homepage)]))\n    assert client.get('/').text == 'Hello'",
-          "reason": "[no-evidence] Framework 의 transparent dispatch 가 broken 되면 한쪽만 테스트로는 못 잡음. fixture parametrize 로 둘 다 강제.",
+          "bad_example": "async def homepage(request):  # async only — misses sync dispatch regressions\n    return PlainTextResponse(\"Hello\")\n\ndef test_homepage(test_client_factory):\n    client = test_client_factory(Starlette(routes=[Route('/', homepage)]))\n    assert client.get('/').text == 'Hello'",
+          "reason": "[no-evidence] If the framework's transparent dispatch breaks, testing only one side won't catch it. Fixture parametrization forces both.",
           "layer": "shared",
           "scope": "cross_project",
-          "evidence": []
+          "evidence": [],
+          "rationale_tier": "speculative"
         }
       ],
       "anti_patterns": [
         {
-          "pattern": "테스트 타입을 모듈마다 재정의",
+          "pattern": "Redefining test types per module",
           "reason": "fixture signature drift",
-          "alternative": "tests/types.py 단일 source"
+          "alternative": "Single source in tests/types.py"
         },
         {
-          "pattern": "TestClient backend 를 ClassVar 로 고정",
-          "reason": "multi-backend 격리 깨짐",
+          "pattern": "Pinning TestClient backend as a ClassVar",
+          "reason": "Breaks multi-backend isolation",
           "alternative": "constructor arg + per-instance"
         }
       ],
       "file_type_guides": {
-        "tests/types.py": "테스트 fixture 의 공통 Protocol/TypeAlias 단일 source",
-        "testclient.py": "Optional test-only deps 는 module-import time RuntimeError + install hint"
+        "tests/types.py": "Single source for common Protocol/TypeAlias used by test fixtures",
+        "testclient.py": "Optional test-only deps raise RuntimeError + install hint at module-import time"
       },
       "checklist": [
-        "새 fixture 의 타입이 tests/types.py 에 있는가?",
-        "TestClient/runner 의 backend/option 이 constructor arg 인가?",
-        "Optional test-only 의존성이 명시적 RuntimeError 로 가이드되는가?",
-        "sync/async transparent dispatch 두 형태 모두 fixture 로 검증하는가?"
+        "Is the new fixture's type in tests/types.py?",
+        "Is the TestClient/runner's backend/option a constructor arg?",
+        "Is the optional test-only dependency guided by an explicit RuntimeError?",
+        "Are both forms of sync/async transparent dispatch verified via fixtures?"
       ],
       "raw_llm_output": "(skill-mode v10: + testing category)",
       "error": null
@@ -494,5 +510,7 @@
   },
   "historic_shas": [],
   "repo_doc_paths": [],
-  "exemplars": []
+  "exemplars": [],
+  "foresight_cards": [],
+  "repo_nature": "library"
 }

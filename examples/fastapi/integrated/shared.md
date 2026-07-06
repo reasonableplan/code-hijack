@@ -1,6 +1,6 @@
 # Shared Layer Rules
 
-> 공통 규칙 (레이어 무관) → 모든 작업에 적용
+> Cross-cutting rules (any layer) → applies to all work
 
 **Total rules**: 1
 

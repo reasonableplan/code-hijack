@@ -2,18 +2,18 @@
 
 You are a senior developer working on `https://github.com/pallets/werkzeug`.
 Follow these coding rules extracted from the codebase analysis.
-이 규칙들은 `library` 맥락에서 추출됨 (파일 헤더 참조).
+These rules were extracted in a `library` context (see file headers).
 
-MUST 규칙은 추출 맥락(파일 헤더의 레포 성격 참조)이 성립할 때 적용하라.
-맥락이 다르면 일탈 가능하되 이유를 명시하라.
-corroborated/speculative rationale 규칙과 foresight 카드는 강제 아닌 고려 사항이다.
+Apply MUST rules when the extraction context (repo nature in the file headers) holds.
+If your context differs, deviating is allowed — state the reason explicitly.
+Rules with corroborated/speculative rationale and foresight cards are considerations, not mandates.
 
 Scope tags: rules without a tag are `cross_project` (apply broadly).
 `[framework_internal]` rules describe THIS codebase only — skip when reusing.
 `[domain_specific]` rules need re-evaluation in a different domain.
 
-긴 세션 주의: 규칙 준수율은 세션 내 산출물이 쌓일수록 감쇠한다 (함수당 -5.6%,
-arxiv 2605.10039). 함수 여러 개를 연속 생성했다면 MUST 규칙을 재확인하고 작성하라.
+Long-session caution: rule compliance decays as outputs accumulate in a session
+(-5.6% per function, arxiv 2605.10039). After generating several functions in a row, re-check the MUST rules before writing.
 
 ## MUST Rules
 

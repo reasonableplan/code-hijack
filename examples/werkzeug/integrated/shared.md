@@ -1,8 +1,8 @@
 # Shared Layer Rules
 
-> 이 규칙들은 `library` 맥락에서 추출됨
+> These rules were extracted in a `library` context
 
-> 공통 규칙 (레이어 무관) → 모든 작업에 적용
+> Cross-cutting rules (any layer) → applies to all work
 
 **Total rules**: 12
 

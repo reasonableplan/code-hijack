@@ -1,8 +1,8 @@
 # Frontend Layer Rules
 
-> 이 규칙들은 `library` 맥락에서 추출됨
+> These rules were extracted in a `library` context
 
-> 프론트엔드 파일 작업 (.tsx/.jsx, frontend/) → 이 파일 + shared.md
+> Frontend files (.tsx/.jsx, frontend/) → this file + shared.md
 
 **Total rules**: 0
 

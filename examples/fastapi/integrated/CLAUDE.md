@@ -7,11 +7,11 @@
 
 Load the relevant layer file based on what you're working on:
 
-- **frontend**: 프론트엔드 파일 작업 (.tsx/.jsx, frontend/) → 이 파일 + shared.md ([frontend.md](frontend.md))
-- **backend**: 백엔드 파일 작업 (.py, backend/) → 이 파일 + shared.md ([backend.md](backend.md))
-- **db**: DB 파일 작업 (migrations/, models/) → 이 파일 + shared.md ([database.md](database.md))
-- **devops**: CI/인프라 작업 (.github/, Dockerfile) → 이 파일 + shared.md ([devops.md](devops.md))
-- **shared**: 공통 규칙 (레이어 무관) → 모든 작업에 적용 ([shared.md](shared.md))
+- **frontend**: Frontend files (.tsx/.jsx, frontend/) → this file + shared.md ([frontend.md](frontend.md))
+- **backend**: Backend files (.py, backend/) → this file + shared.md ([backend.md](backend.md))
+- **db**: DB files (migrations/, models/) → this file + shared.md ([database.md](database.md))
+- **devops**: CI/infra files (.github/, Dockerfile) → this file + shared.md ([devops.md](devops.md))
+- **shared**: Cross-cutting rules (any layer) → applies to all work ([shared.md](shared.md))
 
 ## Top MUST Rules (All Layers)
 

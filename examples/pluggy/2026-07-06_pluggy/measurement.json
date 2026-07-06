@@ -14,15 +14,15 @@
   },
   "foresight_scores": [
     {
-      "hypothesis": "pluggy 는 pytest/tox/devpi 생태계 전체의 최하부 의존성이므로 런타임 의존성 0 을 의도적으로 유지한다 — 여기서의 의존성 하나가 생태계 전체에 전이되기 때문",
+      "hypothesis": "pluggy is the bottommost dependency of the entire pytest/tox/devpi ecosystem, so it deliberately maintains zero runtime dependencies — because a single dependency here propagates to the whole ecosystem",
       "verdict": "confirmed"
     },
     {
-      "hypothesis": "훅 호출 핫 경로의 성능이 명시적 설계 우선순위다 — pytest 가 훅을 수만 번 호출하므로, 등록(콜드) 비용을 올려서라도 호출(핫) 비용을 낮추는 교환을 반복한다",
+      "hypothesis": "Performance of the hook-call hot path is an explicit design priority — since pytest calls hooks tens of thousands of times, the tradeoff of raising registration (cold) cost to lower call (hot) cost is repeated",
       "verdict": "confirmed"
     },
     {
-      "hypothesis": "하위호환 유지가 아키텍처 결정까지 지배한다 — 구식 hookwrapper 실행기를 별도 함수로 상주시키고, 서드파티 픽스 릴리스를 기다리는 suppress 목록까지 두는 것은 '생태계가 이주할 때까지 라이브러리가 비용을 부담한다'는 원칙",
+      "hypothesis": "Maintaining backward compatibility dictates even architectural decisions — keeping a separate resident function for the old-style hookwrapper executor, and even maintaining a suppress list waiting for third-party fix releases, reflects the principle that 'the library bears the cost until the ecosystem migrates'",
       "verdict": "confirmed"
     }
   ],

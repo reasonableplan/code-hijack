@@ -2,15 +2,15 @@
 
 ## Design Intent
 
-테스트가 행동 계약의 단일 진실이다 — 동작 수정은 그 회귀를 고정하는 테스트와 함께만 받아들여지고, 테스트 없는 동작 변경 PR 은 닫힌다. 타입 힌트는 최소 지원 버전(3.10+)의 모던 문법으로 통일하고, 경고·순서 같은 미세 계약도 테스트에서 정밀하게 고정한다.
+Tests are the single source of truth for behavioral contracts — a behavior fix is only accepted alongside a test that pins the regression, and behavior-changing PRs without tests get closed. Type hints are unified on the modern syntax of the minimum supported version (3.10+), and fine-grained contracts like warnings and ordering are pinned precisely in tests too.
 
 ## Rules (6)
 
-### 동작을 바꾸는 변경은 그 동작을 고정하는 테스트를 동반해야 한다 — 회귀 수정이면 회귀를 노출하는 테스트를 먼저 추가한다
+### A change that alters behavior must come with a test that pins that behavior — for a regression fix, add a test that exposes the regression first
 
 **Priority**: `MUST` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 테스트 없는 동작 수정 PR 은 리뷰 없이 닫힌다 — 이 레포의 실제 게이트
+**Why**: Behavior-fix PRs without tests get closed without review — an actual gate in this repo
 
 **Reference**: `testing/test_warnings.py:16-50`, `testing/test_invocations.py:1`
 
@@ -30,7 +30,7 @@ assert len(wc.list) == 1
 --- src/pluggy/_manager.py
 -        if self._name2plugin.get(name):
 +        if self._name2plugin.get(name) is not None:
-(메인테이너가 실제로 닫은 PR#648 의 diff — 동작 수정이나 테스트 없음)
+(the diff from PR#648, which the maintainer actually closed — a behavior fix with no tests)
 ```
 
 **Evidence**:
@@ -41,11 +41,11 @@ assert len(wc.list) == 1
 2. [REJECTION] · PR `PR#648` — Fix unregister skipping cleanup for falsy plugin objects
    > this looks like a fully agentic pr without tests, i'm jsut going to close it
 
-### 타입 힌트는 최소 지원 파이썬 버전의 모던 문법으로 통일한다 — X | None (Optional 금지), collections.abc 제네릭, 타입 별칭에는 명시적 TypeAlias, 파일 상단 from __future__ import annotations
+### Unify type hints on the modern syntax of the minimum supported Python version — X | None (no Optional), collections.abc generics, explicit TypeAlias for type aliases, and from __future__ import annotations at the top of the file
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 버전 하한을 올릴 때 문법도 일괄 이주 — 별칭과 일반 대입의 구분, IDE/타입체커 정확도
+**Why**: When raising the minimum version, migrate the syntax in bulk too — it distinguishes aliases from plain assignments and improves IDE/type-checker accuracy
 
 **Reference**: `src/pluggy/_callers.py:5-24`, `src/pluggy/_manager.py:36-39`
 
@@ -76,11 +76,11 @@ def exec(self, res: Optional[Union[int, str]]) -> None: ...
 2. [PREFERENCE] · COMMIT `009bdc3` — Add TypeAlias annotations for improved type clarity
    > Leverage TypeAlias (available in Python 3.10+) to explicitly mark type aliases throughout the codebase... This improves IDE support, type checker accuracy, and makes the distinction between type aliases and regular assignments clear.
 
-### import 는 심볼당 한 줄로 쓴다 — from X import (A, B, C) 묶음 대신 from X import A 를 반복하고 알파벳 정렬한다
+### Write one import per symbol per line — repeat from X import A instead of grouping with from X import (A, B, C), and sort alphabetically
 
 **Priority**: `SHOULD` | **Confidence**: `medium` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 한 줄 한 심볼은 diff/충돌 단위를 최소화 — 레포 전체에서 일관 적용된 형태
+**Why**: One symbol per line minimizes the diff/conflict unit — applied consistently across the whole repo
 
 **Reference**: `src/pluggy/__init__.py:17-29`, `src/pluggy/_manager.py:16-28`, `src/pluggy/_callers.py:7-19`
 
@@ -98,11 +98,11 @@ from ._hooks import (HookCaller, HookImpl, HookimplMarker,
                      HookimplOpts, HookRelay, HookspecMarker)
 ```
 
-### 경고를 검증하는 테스트는 경고 타입만이 아니라 메시지 정규식(match), 발생 횟수, 발생 위치(filename)까지 고정한다
+### A test that verifies a warning pins not just the warning type but also the message regex (match), the occurrence count, and the emission location (filename)
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 타입만 검사하면 무관한 경고가 테스트를 통과시켜 메시지 품질·발생 지점 회귀를 놓친다
+**Why**: Checking only the type lets an unrelated warning pass the test, missing regressions in message quality or emission site
 
 **Reference**: `testing/test_warnings.py:43-50`, `testing/test_warnings.py:61-65`
 
@@ -121,11 +121,11 @@ with pytest.warns(DeprecationWarning):
     pm.add_hookspecs(Api)
 ```
 
-### 경고가 나지 않아야 하는 경로는 통과를 암묵에 맡기지 말고 simplefilter("error") 로 경고를 에러로 승격해 명시적으로 고정한다
+### For a path that must not emit a warning, don't let it pass implicitly — promote warnings to errors with simplefilter("error") and pin it explicitly
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 부정 케이스(경고 없음)는 기본 필터에선 침묵 통과 — 에러 승격 없이는 회귀를 못 잡는다
+**Why**: A negative case (no warning) passes silently under the default filter — without promoting to an error, you can't catch the regression
 
 **Reference**: `testing/test_warnings.py:76-78`, `testing/test_warnings.py:90-92`
 
@@ -147,11 +147,11 @@ def test_hookspec_with_self_no_warning(pm):
     pm.add_hookspecs(Api)
 ```
 
-### 순서가 계약인 컬렉션의 테스트는 부분 포함(in)이 아니라 기대 시퀀스 전체를 순서 포함해 일치 비교한다
+### For a collection whose order is part of the contract, tests must compare the full expected sequence in order, not just partial containment (in)
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 실행 순서(trylast/tryfirst/wrapper 배치)가 이 라이브러리의 핵심 계약 — 포함 검사로는 순서 회귀를 못 잡는다
+**Why**: Execution order (trylast/tryfirst/wrapper placement) is this library's core contract — a containment check can't catch an ordering regression
 
 **Reference**: `testing/test_hookcaller.py:82`, `testing/test_hookcaller.py:118-123`
 
@@ -174,21 +174,21 @@ assert len(impls) == 4
 
 ## Anti-Patterns
 
-### 동작 수정 PR 에 테스트 미동반
+### A behavior-fix PR without an accompanying test
 
-**Why**: 메인테이너가 리뷰 없이 닫는다 (PR#648 실례)
+**Why**: The maintainer closes it without review (as in PR#648)
 
-**Alternative**: 수정이 고치는 동작을 노출하는 테스트를 같은 PR 에 포함
+**Alternative**: Include, in the same PR, a test that exposes the behavior the fix addresses
 
-### pytest.warns 를 타입만으로 사용
+### Using pytest.warns with only the type
 
-**Why**: 무관한 경고로도 통과해 메시지·횟수 회귀를 놓침
+**Why**: Passes even on an unrelated warning, missing message/count regressions
 
-**Alternative**: match 정규식 + len(wc.list) 검증 (test_warnings.py:43-50)
+**Alternative**: Verify with a match regex + len(wc.list) (test_warnings.py:43-50)
 
 ## Checklist
 
-- [ ] 동작 변경에 그 동작을 고정하는 테스트가 동반되는가?
-- [ ] Optional/Union 대신 | 문법을 쓰는가? 타입 별칭에 TypeAlias 를 붙였는가?
-- [ ] 경고 테스트가 match·횟수까지 고정하는가? 무경고 경로는 simplefilter('error')?
-- [ ] 순서 계약 테스트가 전체 시퀀스 일치 비교인가?
+- [ ] Does a behavior change come with a test that pins that behavior?
+- [ ] Does it use | syntax instead of Optional/Union? Are type aliases marked with TypeAlias?
+- [ ] Do warning tests pin the match and the count too? Does the no-warning path use simplefilter('error')?
+- [ ] Do ordering-contract tests compare the full sequence for equality?

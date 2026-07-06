@@ -2,15 +2,15 @@
 
 ## Design Intent
 
-Public API 는 keyword-only optional + 명시적 default 로 시그니처를 안정화하고, 내부 framework 결정 (middleware 위치, runtime 추상화) 은 사용자에게 노출하지 않는다. 확장 hook 은 generic TypeVar (`AppType`) 으로 subclassing 을 1급으로 지원하고, 변경할 수 없는 시점 (middleware 등록 후 start) 은 RuntimeError 로 명시적으로 거절한다.
+Public APIs stabilize their signatures with keyword-only optionals + explicit defaults, and never expose internal framework decisions (middleware position, runtime abstraction) to the user. Extension hooks support subclassing as a first-class citizen via a generic TypeVar (`AppType`), and mutation at a point where it's no longer valid (start after middleware registration) is explicitly rejected with RuntimeError.
 
 ## Rules (4)
 
-### Public configuration 객체 (Application, Middleware) 는 모든 옵션을 keyword-only optional 로 받고, default 는 가장 보수적/안전한 값으로 설정 (debug=False, allow_origins=()).
+### Public configuration objects (Application, Middleware) take all options as keyword-only optionals, with defaults set to the most conservative/safe value (debug=False, allow_origins=()).
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: [no-evidence] Public 옵션이 명시적 default 가지지 않으면 사용자 코드가 default 변경 시 silent breakage. 또 *args/**kwargs 시그니처는 type checker 가 안 잡음.
+**Why**: [no-evidence] If a public option lacks an explicit default, user code silently breaks whenever the default changes. Also, a *args/**kwargs signature isn't caught by the type checker.
 
 **Reference**: `starlette/applications.py:22-29`, `starlette/middleware/cors.py:16-27`
 
@@ -41,15 +41,15 @@ class CORSMiddleware:
 **❌ Bad**:
 ```
 class Starlette:
-    def __init__(self, *args, **kwargs):  # 시그니처 모호, default 알 수 없음
-        self.debug = kwargs.get('debug', True)  # 위험한 default
+    def __init__(self, *args, **kwargs):  # ambiguous signature, defaults unknowable
+        self.debug = kwargs.get('debug', True)  # dangerous default
 ```
 
-### Application 확장 (subclassing) 을 명시적으로 1급 지원하기 위해 generic TypeVar (`AppType = TypeVar('AppType', bound='Starlette')`) 를 두고, 그 generic 을 Lifespan 같은 callback 시그니처에 흘려보낸다.
+### To explicitly support Application extension (subclassing) as a first-class citizen, a generic TypeVar (`AppType = TypeVar('AppType', bound='Starlette')`) is defined and threaded through callback signatures like Lifespan.
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: [no-evidence] Generic TypeVar 없이 subclass 하면 subclass 의 추가 메서드/속성을 lifespan 콜백에서 type-safe 하게 못 씀. AppType 으로 subclass-friendly.
+**Why**: [no-evidence] Without a generic TypeVar, subclassing means the subclass's extra methods/attributes can't be used type-safely in the lifespan callback. AppType makes it subclass-friendly.
 
 **Reference**: `starlette/applications.py:15-22`, `starlette/types.py:10-22`
 
@@ -73,15 +73,15 @@ Lifespan = StatelessLifespan[AppType] | StatefulLifespan[AppType]
 **❌ Bad**:
 ```
 class Starlette:
-    def __init__(self, lifespan=None):  # subclass 의 lifespan 콜백이 Starlette 자체만 받음 — 추가 메서드 접근 못 함
+    def __init__(self, lifespan=None):  # subclass's lifespan callback only receives Starlette itself — no access to extra methods
         ...
 ```
 
-### 변경할 수 없는 시점 (이미 시작된 application, 이미 닫힌 client) 의 mutating API 호출은 RuntimeError 로 명시적으로 거절한다. silent no-op 또는 lazy reset 금지.
+### Calling a mutating API at a point where change is no longer valid (an application that's already started, a client that's already closed) is explicitly rejected with RuntimeError. No silent no-op or lazy reset.
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: [no-evidence] post-start mutation 을 silent 으로 받으면 첫 요청과 두 번째 요청이 다른 stack 으로 처리됨. RuntimeError 가 사용자에게 의도를 명확히.
+**Why**: [no-evidence] Silently accepting a post-start mutation means the first and second requests get processed by different stacks. RuntimeError makes the intent clear to the user.
 
 **Reference**: `starlette/applications.py:98-101`
 
@@ -97,14 +97,14 @@ def add_middleware(self, middleware_class: _MiddlewareFactory[P], *args: P.args,
 ```
 def add_middleware(self, middleware_class, *args, **kwargs):
     self.user_middleware.append(Middleware(middleware_class, *args, **kwargs))
-    self.middleware_stack = None  # silent reset — 이미 받은 요청들은 어느 stack 으로 처리됐는지 모호
+    self.middleware_stack = None  # silent reset — unclear which stack handled requests already received
 ```
 
-### Domain-specific exception (HTTPException, WebSocketException) 은 `__init__` 에서 status code/code 를 positional, detail/reason 을 optional 로 받고, detail 미제공 시 status code 의 standard phrase 를 자동 채운다.
+### Domain-specific exceptions (HTTPException, WebSocketException) take status code/code as positional in `__init__` and detail/reason as optional, auto-filling the standard phrase for the status code when detail isn't provided.
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: [no-evidence] Status code 우선 + standard phrase auto-fill 이 사용자 boilerplate 줄이고 응답 일관성 보장.
+**Why**: [no-evidence] Status-code-first + standard phrase auto-fill reduces user boilerplate and guarantees response consistency.
 
 **Reference**: `starlette/exceptions.py:7-13`
 
@@ -113,7 +113,7 @@ def add_middleware(self, middleware_class, *args, **kwargs):
 class HTTPException(Exception):
     def __init__(self, status_code: int, detail: str | None = None, headers: Mapping[str, str] | None = None) -> None:
         if detail is None:
-            detail = http.HTTPStatus(status_code).phrase  # 401 → 'Unauthorized' 자동
+            detail = http.HTTPStatus(status_code).phrase  # 401 → 'Unauthorized' automatically
         self.status_code = status_code
         self.detail = detail
         self.headers = headers
@@ -121,38 +121,38 @@ class HTTPException(Exception):
 
 **❌ Bad**:
 ```
-raise HTTPException("unauthorized")  # status code 가 부수적이거나 누락
-# 또는
-raise HTTPException(401)  # detail 항상 사용자가 채워야 — boilerplate
+raise HTTPException("unauthorized")  # status code incidental or missing
+# or
+raise HTTPException(401)  # user must always fill in detail — boilerplate
 ```
 
 ## Anti-Patterns
 
-### Public __init__ 가 *args/**kwargs
+### Public __init__ taking *args/**kwargs
 
-**Why**: type checker 회피, default 모호
+**Why**: Evades the type checker, defaults are ambiguous
 
-**Alternative**: 명시적 keyword-only optional + 보수적 default
+**Alternative**: Explicit keyword-only optional + conservative default
 
-### post-start mutation silent 처리
+### Silently handling post-start mutation
 
-**Why**: first vs second request stack 일관성 깨짐
+**Why**: Breaks consistency between the first and second request's stack
 
-**Alternative**: RuntimeError 로 거절
+**Alternative**: Reject with RuntimeError
 
 ## File-Type Guides
 
 ### applications.py
 
-최상위 Application 클래스. Public init 옵션은 보수적 default + AppType generic.
+Top-level Application class. Public init options use conservative defaults + AppType generic.
 
 ### exceptions.py
 
-Domain exception 계층. status code positional + detail optional + auto-phrase.
+Domain exception hierarchy. status code positional + detail optional + auto-phrase.
 
 ## Checklist
 
-- [ ] 새 public API 가 명시적 default 가진 keyword-only optional 인가?
-- [ ] Subclass 친화적 generic TypeVar 가 콜백 시그니처에 흐르는가?
-- [ ] post-start mutation 은 RuntimeError 로 거절되는가?
-- [ ] Domain exception 이 status code positional + auto-phrase 패턴인가?
+- [ ] Does the new public API use keyword-only optionals with explicit defaults?
+- [ ] Does a subclass-friendly generic TypeVar flow through callback signatures?
+- [ ] Is post-start mutation rejected with RuntimeError?
+- [ ] Does the domain exception follow the status-code-positional + auto-phrase pattern?

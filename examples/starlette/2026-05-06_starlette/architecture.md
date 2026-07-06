@@ -2,15 +2,15 @@
 
 ## Design Intent
 
-starlette 는 ASGI middleware stack 을 framework-internal 로 잠그고 (error/exception handler 위치 강제) 사용자 미들웨어를 그 사이에 끼우는 sandwich 모델을 채택한다. 모든 sync/async 차이는 anyio + run_in_threadpool 한 곳에서 추상화되고, 모든 cross-cutting 정책 (CORS, body caching) 은 middleware 한 클래스로 좁게 분리된다.
+Starlette locks the ASGI middleware stack as framework-internal (forcing the error/exception handler position) and adopts a sandwich model where user middleware is inserted in between. All sync/async differences are abstracted in one place (anyio + run_in_threadpool), and every cross-cutting policy (CORS, body caching) is narrowly isolated into a single middleware class.
 
 ## Rules (4)
 
-### ASGI app 의 middleware stack 은 outermost(서버 오류 핸들러)와 innermost(예외 → 응답 변환) 의 두 위치를 framework-internal 로 잠그고, 사용자 등록 middleware 는 그 사이에만 들어간다. user_middleware 가 error/exception 핸들러를 우회/대체 불가.
+### The ASGI app's middleware stack locks two positions — outermost (server error handler) and innermost (exception → response conversion) — as framework-internal; user-registered middleware only goes in between. user_middleware cannot bypass or replace the error/exception handlers.
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: [no-evidence] 사용자 middleware 가 잘못 짜이면 5xx 응답이 새거나 trace 가 노출. error/exception 위치가 강제돼야 framework 가 fault 격리를 책임진다.
+**Why**: [no-evidence] A poorly written user middleware can leak 5xx responses or expose tracebacks. The error/exception position must be enforced so the framework can own fault isolation.
 
 **Reference**: `starlette/applications.py:57-77`
 
@@ -38,16 +38,16 @@ def build_middleware_stack(self) -> ASGIApp:
 
 **❌ Bad**:
 ```
-self.middleware_stack = list(user_middleware)  # error/exception handler 가 사용자 middleware 에 의해 우회될 수 있음
+self.middleware_stack = list(user_middleware)  # error/exception handler can be bypassed by user middleware
 for cls in self.middleware_stack:
     app = cls(app)
 ```
 
-### Sync/async 전환은 한 곳 (런타임 추상화 계층) 에서만 일어난다. 사용자 endpoint 가 sync 함수면 자동으로 thread pool 로 dispatch 하고, async 함수면 그대로 호출. 사용자 코드에서 asyncio/anyio 직접 import 하지 않는다.
+### Sync/async conversion happens in exactly one place (the runtime abstraction layer). If the user endpoint is a sync function, it's automatically dispatched to a thread pool; if async, it's called directly. User code never imports asyncio/anyio directly.
 
 **Priority**: `MUST` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: Async runtime 추상화 한 곳에 모이지 않으면 endpoint 마다 sync/async 분기 + runtime 라이브러리 직접 import 가 새어 나간다.
+**Why**: Without a single async runtime abstraction, sync/async branching and direct runtime-library imports leak into every endpoint.
 
 **Reference**: `starlette/routing.py:46-66`, `starlette/_utils.py:38-42`, `starlette/concurrency.py`
 
@@ -72,7 +72,7 @@ def request_response(
 **❌ Bad**:
 ```
 async def app(scope, receive, send):
-    if asyncio.iscoroutinefunction(func):  # 사용자 코드가 매번 분기 — async runtime 에 결합
+    if asyncio.iscoroutinefunction(func):  # user code branches every time — coupled to the async runtime
         response = await func(request)
     else:
         response = await asyncio.get_event_loop().run_in_executor(None, func, request)
@@ -83,11 +83,11 @@ async def app(scope, receive, send):
 1. [PREFERENCE] · COMMIT `42592d6` — anyio integration (#1157)
    > anyio integration — switched concurrency primitives so the framework supports both asyncio and trio backends through a single shim, instead of importing asyncio directly throughout the codebase.
 
-### CORS 같은 cross-cutting 정책은 단일 middleware 클래스로 좁게 격리하고, 그 클래스가 preflight (OPTIONS + Access-Control-Request-Method) vs simple 요청을 명시적으로 분기 처리한다. wildcard `*` + credentials 충돌 같은 보안 가드도 같은 위치에서 처리.
+### Cross-cutting policies like CORS are narrowly isolated into a single middleware class, and that class explicitly branches preflight (OPTIONS + Access-Control-Request-Method) vs simple requests. Security guards such as the wildcard `*` + credentials conflict are also handled in the same place.
 
 **Priority**: `MUST` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: preflight 와 simple 요청 처리 분리 + wildcard/credentials 충돌 가드가 한 곳에 없으면 endpoint 별 보안 구멍이 생긴다.
+**Why**: Without separating preflight from simple request handling and centralizing the wildcard/credentials conflict guard, security holes appear per endpoint.
 
 **Reference**: `starlette/middleware/cors.py:35-76`, `starlette/middleware/cors.py:78-96`
 
@@ -119,7 +119,7 @@ async def __call__(self, scope, receive, send):
 ```
 if request.headers.get('origin'):
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Credentials'] = 'true'  # wildcard + credentials 충돌 — 브라우저가 거부
+    response.headers['Access-Control-Allow-Credentials'] = 'true'  # wildcard + credentials conflict — browsers reject this
 ```
 
 **Evidence**:
@@ -127,11 +127,11 @@ if request.headers.get('origin'):
 1. [PREFERENCE] · COMMIT `7a0f89a` — Respond to credentialed requests with specific origin (#1402)
    > Respond to credentialed requests with specific origin instead of wildcard — the spec forbids `Access-Control-Allow-Origin: *` together with `Access-Control-Allow-Credentials: true`, browsers will reject the response.
 
-### Middleware 가 request body 에 접근할 때, body() (전체 메모리 캐시) 와 stream() (한 번 소비) 를 명시적으로 분기 처리해 downstream app 으로 안전히 전달. 둘을 모두 호출하면 stream consumed 또는 disconnect 처리.
+### When middleware accesses the request body, explicitly branch between body() (caches the entire thing in memory) and stream() (consumed once) to pass it safely to the downstream app. If both are called, handle it as stream-consumed or disconnect.
 
 **Priority**: `MUST` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: Body access 의 cache/stream 분기 가드 없으면 큰 request 업로드 시 메모리 폭발 또는 downstream hang.
+**Why**: Without a cache/stream branch guard on body access, large request uploads cause a memory blowup or a downstream hang.
 
 **Reference**: `starlette/middleware/base.py:20-93`
 
@@ -159,9 +159,9 @@ class _CachedRequest(Request):
 **❌ Bad**:
 ```
 async def dispatch(self, request, call_next):
-    body = await request.body()  # 전체 메모리에 caching, 큰 upload 면 메모리 폭발
+    body = await request.body()  # caches everything in memory, blows up on large uploads
     ...
-    return await call_next(request)  # downstream 는 body 가 이미 소비된 상태
+    return await call_next(request)  # downstream sees the body already consumed
 ```
 
 **Evidence**:
@@ -171,37 +171,37 @@ async def dispatch(self, request, call_next):
 
 ## Anti-Patterns
 
-### 사용자 middleware 가 error/exception handler 와 같은 layer 에 등록
+### User middleware registered at the same layer as the error/exception handler
 
-**Why**: 잘못된 사용자 middleware 가 fault 격리를 깰 수 있음
+**Why**: A broken user middleware can break fault isolation
 
-**Alternative**: framework 가 outermost/innermost 위치를 잠그고 사용자 middleware 는 그 사이에만
+**Alternative**: Framework locks the outermost/innermost positions; user middleware only goes in between
 
-### endpoint 마다 sync/async 분기 코드
+### Sync/async branching code in every endpoint
 
-**Why**: async runtime 에 결합도 폭발
+**Why**: Coupling to the async runtime explodes
 
-**Alternative**: framework 의 단일 추상화 (anyio/run_in_threadpool) 한 곳에서만
+**Alternative**: Only through the framework's single abstraction (anyio/run_in_threadpool)
 
-### wildcard `*` Allow-Origin 과 credentials 동시 사용
+### Using wildcard `*` Allow-Origin together with credentials
 
-**Why**: 브라우저 CORS spec 위반
+**Why**: Violates the browser CORS spec
 
-**Alternative**: credentials 일 때 explicit origin echo
+**Alternative**: Echo the explicit origin when credentials are used
 
 ## File-Type Guides
 
 ### middleware
 
-단일 클래스가 cross-cutting 정책 1개를 책임. __call__(scope, receive, send) 시그니처 + 정책별 분기.
+A single class owns one cross-cutting policy. __call__(scope, receive, send) signature + per-policy branching.
 
 ### applications
 
-build_middleware_stack 으로 stack 조립. 사용자 등록은 user_middleware 리스트에만.
+Stack assembled via build_middleware_stack. User registration only goes into the user_middleware list.
 
 ## Checklist
 
-- [ ] 새 middleware 가 error/exception handler 위치를 우회하지 않는가?
-- [ ] endpoint 등록 시 sync/async 분기를 endpoint 코드 안에 두지 않았는가?
-- [ ] cross-cutting 정책이 단일 middleware 클래스로 격리됐는가?
-- [ ] Middleware 가 body 를 소비할 때 cache/stream 분기 가드가 있는가?
+- [ ] Does the new middleware avoid bypassing the error/exception handler position?
+- [ ] Does endpoint registration avoid putting sync/async branching inside endpoint code?
+- [ ] Is the cross-cutting policy isolated into a single middleware class?
+- [ ] Is there a cache/stream branch guard when middleware consumes the body?

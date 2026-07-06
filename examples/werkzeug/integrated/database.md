@@ -1,8 +1,8 @@
 # Db Layer Rules
 
-> 이 규칙들은 `library` 맥락에서 추출됨
+> These rules were extracted in a `library` context
 
-> DB 파일 작업 (migrations/, models/) → 이 파일 + shared.md
+> DB files (migrations/, models/) → this file + shared.md
 
 **Total rules**: 0
 

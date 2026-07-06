@@ -2,15 +2,15 @@
 
 ## Design Intent
 
-테스트 fixtures 가 production 코드와 같은 정밀도로 관리된다 — `tests/types.py` 같은 단일 fixture-types 모듈에 TestClientFactory 등 테스트-specific 타입을 모으고, TestClient 가 backend/option arg 를 constructor 로 받아 multi-runtime (asyncio + trio) 검증을 1급으로 지원한다. Optional test-only 의존성 (httpx) 은 module-import time 에 명시적 RuntimeError + install hint 로 처리.
+Test fixtures are managed with the same rigor as production code — test-specific types like TestClientFactory are collected in a single fixture-types module (`tests/types.py`), and TestClient takes backend/option args in its constructor to support multi-runtime (asyncio + trio) verification as a first-class citizen. Optional test-only dependencies (httpx) are handled with an explicit RuntimeError + install hint at module-import time.
 
 ## Rules (4)
 
-### 테스트 fixtures 의 공통 타입 (TestClientFactory, ASGI app stub 등) 은 별도 단일 모듈 (`tests/types.py`) 에 모으고, 다른 테스트 모듈은 거기서 import 한다. 테스트 모듈마다 같은 타입을 재정의하지 않는다.
+### Common types for test fixtures (TestClientFactory, ASGI app stub, etc.) are collected in a separate single module (`tests/types.py`), and other test modules import from there. Never redefine the same type in every test module.
 
 **Priority**: `MUST` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 테스트 타입을 모듈마다 재정의하면 fixture signature 가 silent drift — 한 군데 통과해도 다른 곳 type 불일치.
+**Why**: Redefining test types per module lets the fixture signature silently drift — passing in one place doesn't guarantee type consistency elsewhere.
 
 **Reference**: `tests/middleware/test_base.py:23`, `tests/test_applications.py:25`
 
@@ -34,10 +34,10 @@ def test_middleware(test_client_factory: TestClientFactory) -> None:
 **❌ Bad**:
 ```
 # tests/middleware/test_base.py
-TestClientFactory = Callable[[ASGIApp], TestClient]  # 이 모듈에만
+TestClientFactory = Callable[[ASGIApp], TestClient]  # only in this module
 
 # tests/test_routing.py
-TestClientFactory = Callable[[ASGIApp], TestClient]  # 또 정의 — drift
+TestClientFactory = Callable[[ASGIApp], TestClient]  # defined again — drift
 ```
 
 **Evidence**:
@@ -45,11 +45,11 @@ TestClientFactory = Callable[[ASGIApp], TestClient]  # 또 정의 — drift
 1. [PREFERENCE] · COMMIT `78fcd54` — Create types module inside tests (#2502)
    > Create types module inside tests * Apply suggestions from code review * Apply suggestions from code review * Fix check errors * Change testclientfactory due to autotest * No cover fix * Apply suggestions from code review * Skip code coverage for TestClientFactory protocol
 
-### TestClient 같은 sync-test wrapper 는 async runtime backend (asyncio/trio) 와 그 옵션을 constructor 인자로 받는다. ClassVar 또는 module-global 로 backend 를 박지 않는다.
+### A sync-test wrapper like TestClient takes the async runtime backend (asyncio/trio) and its options as constructor arguments. Never hardcode the backend as a ClassVar or module-global.
 
 **Priority**: `MUST` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: ClassVar backend 는 trio + asyncio 동시 테스트 격리 깨짐 + 사용자가 backend 별 동작 못 검증.
+**Why**: A ClassVar backend breaks isolation between concurrent trio + asyncio tests, and prevents the user from verifying backend-specific behavior.
 
 **Reference**: `starlette/testclient.py:1-50`
 
@@ -72,7 +72,7 @@ class TestClient(httpx.Client):
 **❌ Bad**:
 ```
 class TestClient(httpx.Client):
-    backend: ClassVar[str] = "asyncio"  # 모든 인스턴스 공유 — trio 격리 불가
+    backend: ClassVar[str] = "asyncio"  # shared by all instances — no trio isolation
 
     def __init__(self, app):
         super().__init__()
@@ -83,11 +83,11 @@ class TestClient(httpx.Client):
 1. [PREFERENCE] · COMMIT `d222b87` — TestClient accepts backend and backend_options as arguments to constructor (#1211)
    > as opposed to ClassVar assignment
 
-### Optional test-only 의존성 (httpx for TestClient 등) 은 `try: import` + `except ModuleNotFoundError: raise RuntimeError(...설치 가이드...)` 로 처리. 일반 코드의 lazy + None + assert 패턴과 달리 module-import time 에 즉시 명시적 에러.
+### Optional test-only dependencies (httpx for TestClient, etc.) are handled with `try: import` + `except ModuleNotFoundError: raise RuntimeError(...install guide...)`. Unlike the lazy + None + assert pattern used in regular code, this raises an immediate, explicit error at module-import time.
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: [no-evidence] 사용자가 명시적으로 import 한 testclient 모듈은 의존성 없으면 즉시 RuntimeError + install hint 가 명확. lazy/None 은 production runtime 용.
+**Why**: [no-evidence] For a testclient module the user explicitly imported, an immediate RuntimeError + install hint is clear when the dependency is missing. lazy/None is for the production runtime.
 
 **Reference**: `starlette/testclient.py:37-44`
 
@@ -107,7 +107,7 @@ except ModuleNotFoundError:  # pragma: no cover
 ```
 import httpx  # cryptic ImportError traceback
 
-# 또는
+# or
 try:
     import httpx
 except ModuleNotFoundError:
@@ -115,14 +115,14 @@ except ModuleNotFoundError:
 
 class TestClient:
     def __init__(self):
-        assert httpx is not None  # install hint 없는 AssertionError
+        assert httpx is not None  # AssertionError with no install hint
 ```
 
-### Endpoint 가 sync/async 자동 dispatch 라면, 테스트도 두 형태 모두 fixture 로 두고 같은 응답을 검증한다. 한쪽만 테스트하면 transparent dispatch regression 못 잡음.
+### If an endpoint auto-dispatches sync/async, the test also keeps both forms as fixtures and verifies the same response. Testing only one form misses transparent-dispatch regressions.
 
 **Priority**: `SHOULD` | **Confidence**: `medium` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: [no-evidence] Framework 의 transparent dispatch 가 broken 되면 한쪽만 테스트로는 못 잡음. fixture parametrize 로 둘 다 강제.
+**Why**: [no-evidence] If the framework's transparent dispatch breaks, testing only one side won't catch it. Fixture parametrization forces both.
 
 **Reference**: `tests/test_applications.py:40-50`
 
@@ -148,7 +148,7 @@ def homepage_endpoint(request):
 
 **❌ Bad**:
 ```
-async def homepage(request):  # async only — sync dispatch regression 못 잡음
+async def homepage(request):  # async only — misses sync dispatch regressions
     return PlainTextResponse("Hello")
 
 def test_homepage(test_client_factory):
@@ -158,15 +158,15 @@ def test_homepage(test_client_factory):
 
 ## Anti-Patterns
 
-### 테스트 타입을 모듈마다 재정의
+### Redefining test types per module
 
 **Why**: fixture signature drift
 
-**Alternative**: tests/types.py 단일 source
+**Alternative**: Single source in tests/types.py
 
-### TestClient backend 를 ClassVar 로 고정
+### Pinning TestClient backend as a ClassVar
 
-**Why**: multi-backend 격리 깨짐
+**Why**: Breaks multi-backend isolation
 
 **Alternative**: constructor arg + per-instance
 
@@ -174,15 +174,15 @@ def test_homepage(test_client_factory):
 
 ### tests/types.py
 
-테스트 fixture 의 공통 Protocol/TypeAlias 단일 source
+Single source for common Protocol/TypeAlias used by test fixtures
 
 ### testclient.py
 
-Optional test-only deps 는 module-import time RuntimeError + install hint
+Optional test-only deps raise RuntimeError + install hint at module-import time
 
 ## Checklist
 
-- [ ] 새 fixture 의 타입이 tests/types.py 에 있는가?
-- [ ] TestClient/runner 의 backend/option 이 constructor arg 인가?
-- [ ] Optional test-only 의존성이 명시적 RuntimeError 로 가이드되는가?
-- [ ] sync/async transparent dispatch 두 형태 모두 fixture 로 검증하는가?
+- [ ] Is the new fixture's type in tests/types.py?
+- [ ] Is the TestClient/runner's backend/option a constructor arg?
+- [ ] Is the optional test-only dependency guided by an explicit RuntimeError?
+- [ ] Are both forms of sync/async transparent dispatch verified via fixtures?

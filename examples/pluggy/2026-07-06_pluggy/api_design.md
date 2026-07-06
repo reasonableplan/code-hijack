@@ -2,15 +2,15 @@
 
 ## Design Intent
 
-pytest/tox/devpi 생태계의 최하부 라이브러리로서 하위호환이 최우선이다 — 레거시 패턴은 깨는 대신 지원을 유지한 채 DeprecationWarning 으로 이주를 안내하고, 옛 공개 이름은 alias 로 남긴다. 반대로 잘못된 사용은 가능한 가장 이른 시점(선언/등록)에 명시적 에러로 거부해 런타임 무증상 오동작을 차단한다.
+As the bottommost library in the pytest/tox/devpi ecosystem, backward compatibility comes first — instead of breaking legacy patterns, support is kept while DeprecationWarning guides migration, and old public names remain as aliases. Conversely, invalid usage is rejected with an explicit error at the earliest possible point (declaration/registration), to block silent runtime misbehavior.
 
 ## Rules (7)
 
-### 레거시 사용 패턴은 즉시 깨지 말고 지원을 유지한 채 DeprecationWarning 으로 이주를 안내한다 — 경고 메시지에 구체적 대안과 '미래 버전에서 에러가 된다'는 예고를 포함하고, 업스트림 픽스가 아직 릴리스되지 않은 서드파티는 만료 조건을 주석으로 명시한 suppress 목록으로 예외 처리한다
+### Don't break a legacy usage pattern immediately — keep support while guiding migration with a DeprecationWarning. Include a concrete alternative and a notice that 'this will become an error in a future version' in the warning message, and for third parties whose upstream fix hasn't shipped yet, exempt them via a suppress list with the expiry condition documented in a comment
 
 **Priority**: `MUST` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 수천 개 하위 플러그인이 의존 — 하드 브레이크 대신 경고로 이주 시간을 주는 게 이 레포의 반복 결정
+**Why**: Thousands of downstream plugins depend on it — giving migration time via a warning instead of a hard break is this repo's recurring decision
 
 **Reference**: `src/pluggy/_hooks.py:373-382`, `src/pluggy/_hooks.py:294-303`
 
@@ -40,11 +40,11 @@ if _is_class_method and args[0] not in _IMPLICIT_NAMES:
 2. [PREFERENCE] · COMMIT `0258484` — Address review: DeprecationWarning, add self to test, suppress pytest-timeout
    > Change FutureWarning to DeprecationWarning for hookspec methods missing self... Suppress the deprecation warning for pytest-timeout's TimeoutHooks (upstream fix exists but is unreleased)
 
-### 양립 불가능한 옵션 조합은 문서가 아니라 코드로 거부한다 — 선언 시점(ValueError) 또는 등록 시점(전용 ValidationError)에 즉시 실패시키고, 런타임 깊숙한 곳에서 조용히 오동작하게 두지 않는다
+### Reject incompatible option combinations in code, not just documentation — fail immediately at declaration time (ValueError) or registration time (a dedicated ValidationError), rather than letting it silently misbehave deep in runtime
 
 **Priority**: `MUST` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 비호환 조합(historic×firstresult, wrapper×hookwrapper 등)을 통과시키면 훅 실행 깊숙한 곳에서 무증상 오동작
+**Why**: Letting an incompatible combination through (historic×firstresult, wrapper×hookwrapper, etc.) causes silent misbehavior deep inside hook execution
 
 **Reference**: `src/pluggy/_hooks.py:147-149`, `src/pluggy/_manager.py:371-377`
 
@@ -69,13 +69,13 @@ setattr(func, self.project_name + "_spec", opts)
 1. [COMMENT] · COMMENT `src/pluggy/_hooks.py:613` — XXX
    > remember firstresult isn't compat with historic
 
-**Probe**: behavior-confirmed — control: 비호환 조합 무증상 수용 — opts 저장 후 그대로 통과 / treatment: 선언 시점 ValueError 거부 — pluggy 원문 메시지 'cannot have a historic firstresult hook' verbatim 재현
+**Probe**: behavior-confirmed — control: silently accepts the incompatible combination — stores opts and passes it straight through / treatment: rejects with a ValueError at declaration time — reproduces pluggy's original message 'cannot have a historic firstresult hook' verbatim
 
-### 공개 이름을 리네임할 때 옛 이름을 모듈 말미의 alias 로 유지하고, 어느 버전까지의 호환인지 주석으로 못박는다
+### When renaming a public name, keep the old name as an alias at the end of the module, and pin down in a comment which version it stays compatible through
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 내부 심볼도 생태계가 이미 import 하고 있다 — 리네임의 비용을 라이브러리가 부담
+**Why**: Even internal symbols are already imported by the ecosystem — the library absorbs the cost of the rename
 
 **Reference**: `src/pluggy/_result.py:106-107`, `src/pluggy/_hooks.py:402-403`, `src/pluggy/_hooks.py:618-619`
 
@@ -90,14 +90,14 @@ _Result = Result
 class Result(Generic[ResultType]):
     ...
 
-# (_Result alias 제거 — 옛 이름 import 하던 하위 사용자 즉시 파손)
+# (the _Result alias removed — immediately breaks downstream users importing the old name)
 ```
 
-### 패키지 공개 표면은 __all__ 로 선언하고 구현은 전부 underscore 접두 모듈에 숨긴 뒤 패키지 루트에서 재노출한다; 모듈 __getattr__ 로 동적 속성을 제공할 때는 알 수 없는 이름에 명시적 AttributeError 를 raise 한다
+### Declare the package's public surface via __all__, hide all implementation in underscore-prefixed modules, and re-export from the package root; when providing dynamic attributes via module __getattr__, raise an explicit AttributeError for unknown names
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 임포트 시점 비용(메타데이터 조회)은 지연 로딩으로 미루되, 오탈자 접근이 조용히 엉뚱한 값을 반환하지 않게 한다
+**Why**: Defer the import-time cost (metadata lookup) via lazy loading, while making sure a typo'd access doesn't silently return the wrong value
 
 **Reference**: `src/pluggy/__init__.py:1-16`, `src/pluggy/__init__.py:32-38`
 
@@ -124,11 +124,11 @@ def __getattr__(name):
 1. [PREFERENCE] · COMMIT `96e05d6` — Remove version_file setting and migrate to lazy version loading
    > Remove setuptools-scm version_file setting and replace static version import with lazy loading via __getattr__ using importlib.metadata.version.
 
-### 매핑 값에 None 을 '차단됨' 같은 의미 있는 상태로 저장할 때, '항목 없음'과 구분하는 검사는 truthiness 가 아니라 별도 sentinel 기본값과 is None 비교로 한다
+### When storing None in a mapping value to mean a meaningful state like 'blocked', distinguish it from 'no entry' using a separate sentinel default and an is None comparison, not truthiness
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: falsy 한 값 객체가 '차단' sentinel 과 충돌하면 무증상 상태 누수 — 레포의 unregister 경로에 실제로 잔존하는 결함 유형
+**Why**: If a falsy value object collides with the 'blocked' sentinel, state silently leaks — a defect type that actually persists in this repo's unregister path
 
 **Reference**: `src/pluggy/_manager.py:140-142`, `src/pluggy/_manager.py:247-250`
 
@@ -145,11 +145,11 @@ if self._name2plugin.get(name):
     del self._name2plugin[name]
 ```
 
-### 프레임워크가 사용자 코드를 발견·해석하는 지점은 서브클래스가 오버라이드할 수 있는 명시적 parse_* 메서드로 분리하고, 옵션 스키마는 TypedDict 로 문서화하며 누락 키는 normalize 함수의 setdefault 로 보장한다
+### Separate the point where the framework discovers and interprets user code into an explicit parse_* method that subclasses can override; document the option schema with a TypedDict, and guarantee missing keys via setdefault in a normalize function
 
 **Priority**: `SHOULD` | **Confidence**: `medium` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 발견 로직을 메서드로 노출해 pytest 등 호스트가 관례를 커스텀 — 옵션 기본값은 한 곳에서 보장
+**Why**: Exposing the discovery logic as a method lets hosts like pytest customize the convention — option defaults are guaranteed in one place
 
 **Reference**: `src/pluggy/_manager.py:176-199`, `src/pluggy/_hooks.py:282-288`, `src/pluggy/_hooks.py:41-75`
 
@@ -171,11 +171,11 @@ tryfirst = opts["tryfirst"] if "tryfirst" in opts else False
 trylast = opts.get("trylast") or False
 ```
 
-### 호출 계약 위반은 가능한 가장 이른 시점에 진단한다 — 호출은 키워드 인자만 허용하고, 스펙 선언 인자가 빠지면 실행 전에 경고하며, 구현이 스펙에 없는 인자를 요구하면 등록 시점에 검증 에러를 낸다
+### Diagnose call-contract violations as early as possible — allow only keyword arguments in calls, warn before execution if a spec-declared argument is missing, and raise a validation error at registration time if an implementation requires an argument not in the spec
 
 **Priority**: `SHOULD` | **Confidence**: `high` | **Layer**: `shared` | **Scope**: `cross_project`
 
-**Why**: 인자 불일치를 훅 실행 시점의 KeyError 로 미루면 어느 플러그인·어느 선언이 문제인지 추적 불가
+**Why**: Deferring an argument mismatch to a KeyError at hook-execution time makes it impossible to trace which plugin or declaration is at fault
 
 **Reference**: `src/pluggy/_hooks.py:528-543`, `src/pluggy/_manager.py:344-352`, `src/pluggy/_hooks.py:509-526`
 
@@ -200,21 +200,21 @@ def __call__(self, *args, **kwargs):
 
 ## Anti-Patterns
 
-### 레거시 패턴 즉시 제거 (경고 없는 하드 브레이크)
+### Removing a legacy pattern immediately (a hard break with no warning)
 
-**Why**: 수천 개 하위 플러그인 파손 — 이 레포는 예외 없이 warn-then-error 경로를 쓴다
+**Why**: Breaks thousands of downstream plugins — this repo uses the warn-then-error path without exception
 
-**Alternative**: 지원 유지 + DeprecationWarning(대안·예고 포함) + 만료 조건 명시 suppress 목록
+**Alternative**: Keep support + DeprecationWarning (with alternative and notice) + a suppress list with an explicit expiry condition
 
-### 잘못된 옵션 조합을 받아들이고 런타임에서 조용히 오동작
+### Accepting an invalid option combination and silently misbehaving at runtime
 
-**Why**: 훅 실행 깊숙한 곳의 무증상 오류는 플러그인 작성자가 추적 불가
+**Why**: A silent error deep inside hook execution is untraceable for plugin authors
 
-**Alternative**: 선언/등록 시점 ValueError·PluginValidationError (plugin 객체 첨부)
+**Alternative**: A ValueError/PluginValidationError at declaration/registration time (with the plugin object attached)
 
 ## Checklist
 
-- [ ] 공개 표면 변경에 deprecation 경로(경고+대안+예고)가 있는가?
-- [ ] 비호환 옵션 조합이 선언/등록 시점에 거부되는가?
-- [ ] 리네임에 historical alias + 버전 주석이 남는가?
-- [ ] None-sentinel 상태 구분에 truthiness 를 쓰지 않았는가?
+- [ ] Does a public-surface change have a deprecation path (warning + alternative + notice)?
+- [ ] Is an incompatible option combination rejected at declaration/registration time?
+- [ ] Does a rename leave a historical alias + a version comment?
+- [ ] Does distinguishing a None-sentinel state avoid using truthiness?
