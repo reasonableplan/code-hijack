@@ -162,7 +162,7 @@ class TestAnalyzeLocalMode:
         assert result.exit_code == 0, result.output
         mock_local_cls.assert_called_once()
         # No interactive confirm prompt in local mode — just runs.
-        assert "분석을 시작할까요" not in result.output
+        assert "Start the analysis?" not in result.output
 
     def test_local_mode_uses_default_comms_dir_under_output(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

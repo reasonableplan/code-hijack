@@ -105,12 +105,12 @@ async def refine(result: SessionResult, llm: BaseLLM, *, model: str) -> SessionR
     try:
         raw = await llm.analyze(prompt, model=model)
     except Exception as e:  # noqa: BLE001
-        logger.warning("critic LLM 호출 실패 — 원본 반환: %s", e)
+        logger.warning("critic LLM call failed — returning original: %s", e)
         return result
 
     parsed = _parse_critic_response(raw)
     if parsed is None:
-        logger.warning("critic 응답 파싱 실패 — 원본 반환")
+        logger.warning("critic response parse failed — returning original")
         return result
 
     drop_set = set(parsed.get("drop", []))

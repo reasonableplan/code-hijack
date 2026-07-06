@@ -428,7 +428,7 @@ def _git_clone(target: str, dest: str) -> None:
             errors="replace",
         )
     if result.returncode != 0:
-        raise FetchError(FETCH_001, f"git clone 실패: {result.stderr.strip()}")
+        raise FetchError(FETCH_001, f"git clone failed: {result.stderr.strip()}")
 
 
 def _fetch_remote(target: str) -> Path:
@@ -487,7 +487,7 @@ def fetch_source(
         cloned_root = _fetch_remote(target)
         repo_root = cloned_root / subpath if subpath else cloned_root
     else:
-        raise InputError(INPUT_001, f"유효하지 않은 경로 또는 URL: {target!r}")
+        raise InputError(INPUT_001, f"Invalid path or URL: {target!r}")
 
     # 2. 파일 재귀 수집 (_SKIP_DIRS 제외, _SUPPORTED_SUFFIXES만)
     collected: list[Path] = []

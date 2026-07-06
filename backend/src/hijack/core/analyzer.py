@@ -110,7 +110,7 @@ def _rules_from_parsed(
             continue
         missing = _REQUIRED_RULE_FIELDS - item.keys()
         if missing:
-            logger.warning("규칙 필드 누락 %s — 드롭: %s", missing, item.get("rule", "?"))
+            logger.warning("missing rule fields %s — dropped: %s", missing, item.get("rule", "?"))
             continue
         evidence = _evidence_from_parsed(
             item.get("evidence", []),
@@ -331,7 +331,7 @@ async def _analyze_category(
             break
         except LLMError as e:
             last_error = str(e)
-            logger.warning("[%s] LLM 호출 실패 (attempt %d): %s", category, attempt + 1, e)
+            logger.warning("[%s] LLM call failed (attempt %d): %s", category, attempt + 1, e)
             if attempt < 1:
                 await asyncio.sleep(_BACKOFF_SECONDS[attempt])
     else:
@@ -339,8 +339,8 @@ async def _analyze_category(
 
     parsed = _parse_json(raw) or _parse_regex_fallback(raw)
     if parsed is None:
-        logger.warning("[%s] JSON 파싱 실패 — raw 출력 보존", category)
-        return _error_result(category, raw, f"{LLM_003}: JSON 및 regex 파싱 실패")
+        logger.warning("[%s] JSON parse failed — raw output preserved", category)
+        return _error_result(category, raw, f"{LLM_003}: JSON and regex parsing failed")
 
     rules = _rules_from_parsed(
         parsed.get("rules", []),
@@ -517,7 +517,7 @@ async def run_full_analysis(
 
     if critic and any(c.rules for c in category_results):
         from hijack.core.critic import refine
-        logger.info("Critic 레이어 실행 중...")
+        logger.info("Running critic layer...")
         session = await refine(session, llm, model=model)
 
     return session

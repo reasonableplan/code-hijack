@@ -110,6 +110,11 @@ Return a JSON object with this exact structure:
 
 QUALITY REQUIREMENTS (non-negotiable):
 
+0. OUTPUT LANGUAGE: write every prose field (rule, reason, design_intent,
+   anti_patterns, file_type_guides, checklist) in English, regardless of the
+   conversation language. Evidence headline/quote and code excerpts stay
+   verbatim in their original language.
+
 1. `ref_files`: MUST include line number(s). Format: "path/to/file.py:42" for a single
    line, "path/to/file.py:42-58" for a range. NEVER just the filename.
    If you cite a function/class, point to its definition line (def/class line).
@@ -119,10 +124,10 @@ QUALITY REQUIREMENTS (non-negotiable):
    don't create the rule.
 
 3. `bad_example`: MUST be actual anti-pattern code, not a comment describing what to
-   avoid. NEVER write "# 이렇게 하지 말 것" or "# X 를 하면 안 됨" — always provide
+   avoid. NEVER write "# don't do this" or "# X is not allowed" — always provide
    the concrete code form the author avoided or that would break the rule.
    GOOD bad_example:  `x = eval(user_input)`
-   BAD  bad_example:  `# eval 로 유저 입력 실행`
+   BAD  bad_example:  `# runs user input through eval`
 
 4. `priority`: MUST only for non-negotiable rules (violation = PR rejection).
    SHOULD for strong preferences. Don't inflate — when uncertain, use SHOULD.
@@ -269,7 +274,7 @@ QUALITY REQUIREMENTS (non-negotiable):
 FEW-SHOT EXAMPLE #1 — GOOD quality rule (intent_kind=incident):
 
 {
-  "rule": "subprocess.run 은 반드시 capture_output=True + text=True 조합으로 호출",
+  "rule": "subprocess.run must always be called with the capture_output=True + text=True combination",
   "priority": "MUST",
   "confidence": "high",
   "ref_files": ["src/hijack/core/fetcher.py:229-237"],
@@ -313,23 +318,23 @@ FEW-SHOT EXAMPLE #2 — GOOD quality rule (intent_kind=preference, principle-lev
 FEW-SHOT EXAMPLE #3 — BAD quality rule (AVOID these mistakes):
 
 {
-  "rule": "좋은 코드를 짜야 한다",                    // ❌ 너무 추상적
-  "priority": "MUST",                              // ❌ 판단 불가한 규칙에 MUST
+  "rule": "Write good code",                       // ❌ too abstract
+  "priority": "MUST",                              // ❌ MUST on an unjudgeable rule
   "confidence": "high",
-  "ref_files": ["src/main.py"],                    // ❌ 라인 번호 없음
-  "good_example": "# 좋은 예시 코드",                // ❌ 실제 코드 아닌 주석
-  "bad_example": "# 이렇게 하지 말 것",              // ❌ 설명문 — 패턴 매칭 불가
-  "reason": "중요하니까",                           // ❌ 설계 의도 없음
+  "ref_files": ["src/main.py"],                    // ❌ no line number
+  "good_example": "# good example code",           // ❌ a comment, not real code
+  "bad_example": "# don't do this",                // ❌ description — pattern matching impossible
+  "reason": "Because it matters",                  // ❌ no design intent
   "layer": "shared",
-  "evidence": []                                   // ❌ 출처 없음 — 룰 자체를 드롭하라
+  "evidence": []                                   // ❌ no source — drop the rule entirely
 }
 
-NEGATIVE EXAMPLE 의 모든 ❌ 를 피하라. 특히:
-- rule 은 구체 동작으로 (WHAT + WHY 암시)
-- ref_files 는 반드시 "path:line" 형식
-- good/bad_example 은 실제 코드 발췌, 주석 아님
-- reason 은 1-sentence intent gist (≤150자)
-- evidence 가 비면 [no-evidence] 룰만 통과 — 일반 룰은 드롭"""
+Avoid every ❌ in the NEGATIVE EXAMPLE. In particular:
+- rule states a concrete behavior (WHAT, with the WHY implied)
+- ref_files must use the "path:line" format
+- good/bad_example are real code excerpts, not comments
+- reason is a 1-sentence intent gist (≤150 chars)
+- if evidence is empty, only [no-evidence] rules pass — otherwise drop the rule"""
 
 _LAYER_INSTRUCTION = (
     "LAYER FIELD: Each file in <files> has a header like "

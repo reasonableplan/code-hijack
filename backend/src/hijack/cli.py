@@ -48,15 +48,15 @@ def _load_session_json(path_str: str) -> SessionResult:
             raise click.BadParameter(f"session.json not found in {p.as_posix()!r}")
         p = candidate
     if not p.exists():
-        raise click.BadParameter(f"파일이 없습니다: {p.as_posix()!r}")
+        raise click.BadParameter(f"File not found: {p.as_posix()!r}")
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
-        raise click.BadParameter(f"session.json 파싱 실패 ({p.as_posix()!r}): {e.msg}") from e
+        raise click.BadParameter(f"Failed to parse session.json ({p.as_posix()!r}): {e.msg}") from e
     try:
         return SessionResult.from_json(data)
     except (KeyError, TypeError) as e:
-        raise click.BadParameter(f"session.json 스키마 오류 ({p.as_posix()!r}): {e}") from e
+        raise click.BadParameter(f"session.json schema error ({p.as_posix()!r}): {e}") from e
 
 
 def _completed_categories(session: SessionResult) -> list[str]:
@@ -71,43 +71,45 @@ def _completed_categories(session: SessionResult) -> list[str]:
 @click.group()
 @click.version_option(__version__, prog_name="code-hijack")
 def cli() -> None:
-    """시니어 코드베이스를 LLM으로 분석해 AI 에이전트용 규칙을 추출한다."""
+    """Analyze a senior codebase with an LLM and extract AI-agent coding rules."""
 
 
 @cli.command("analyze")
 @click.argument("target")
-@click.option("--model", "-m", default=DEFAULT_MODEL, show_default=True, help="LLM 모델 ID")
-@click.option("--path", "-p", "subpath", default=None, help="모노레포 서브디렉토리")
+@click.option("--model", "-m", default=DEFAULT_MODEL, show_default=True, help="LLM model ID")
+@click.option("--path", "-p", "subpath", default=None, help="Monorepo subdirectory")
 @click.option(
     "--categories",
     default=",".join(MVP_CATEGORIES),
     show_default=True,
-    help="분석 카테고리 (콤마 구분)",
+    help="Categories to analyze (comma-separated)",
 )
-@click.option("--output", "-o", "output_dir", default=None, help="출력 디렉토리")
+@click.option("--output", "-o", "output_dir", default=None, help="Output directory")
 @click.option("--resume", default=None, metavar="SESSION_JSON",
-              help="이전 세션 session.json (완료된 카테고리 스킵)")
-@click.option("--dry-run", is_flag=True, help="LLM 호출 없이 예상 비용만 출력")
+              help="Previous session.json (skips completed categories)")
+@click.option("--dry-run", is_flag=True, help="Print the estimated cost only, no LLM calls")
 @click.option("--critic/--no-critic", default=True,
-              help="Critic 레이어로 중복/MUST 인플레 재평가 (기본 on, +1 LLM 호출)")
+              help="Re-evaluate duplicates/MUST inflation with the critic layer "
+                   "(default on, +1 LLM call)")
 @click.option(
     "--llm-mode",
     type=click.Choice(["api", "local"]),
     default="api",
     show_default=True,
-    help="api: Anthropic API (ANTHROPIC_API_KEY 필요). "
-         "local: file-IPC — 외부 응답자가 prompt를 읽고 response를 써준다 (skill mode).",
+    help="api: Anthropic API (requires ANTHROPIC_API_KEY). "
+         "local: file-IPC — an external responder reads the prompt and writes "
+         "the response (skill mode).",
 )
 @click.option(
     "--comms-dir",
     default=None,
     metavar="DIR",
-    help="--llm-mode local 의 prompt/response 디렉토리 (기본: <output>/comms/).",
+    help="Prompt/response directory for --llm-mode local (default: <output>/comms/).",
 )
 @click.option("--refresh-prs", is_flag=True,
-              help="PR 캐시를 초기화하고 다시 가져온다 (Phase A1)")
-@click.option("--verbose", "-v", is_flag=True, help="상세 로그")
-@click.option("--quiet", "-q", is_flag=True, help="진행 메시지 억제")
+              help="Clear the PR cache and re-fetch (Phase A1)")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose logging")
+@click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages")
 def analyze(
     target: str,
     model: str,
@@ -123,9 +125,9 @@ def analyze(
     verbose: bool,
     quiet: bool,
 ) -> None:
-    """TARGET 레포를 분석해 규칙 문서를 생성한다.
+    """Analyze the TARGET repo and generate rule documents.
 
-    TARGET: GitHub URL 또는 로컬 경로
+    TARGET: GitHub URL or local path
     """
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
@@ -142,9 +144,9 @@ def analyze(
         skipped = [c for c in category_list if c in done]
         category_list = [c for c in category_list if c not in done]
         if skipped and not quiet:
-            click.echo(f"[resume] 스킵: {', '.join(skipped)}")
+            click.echo(f"[resume] skipping: {', '.join(skipped)}")
         if not category_list:
-            click.echo("[resume] 모든 카테고리가 이미 완료됐습니다.")
+            click.echo("[resume] all categories already completed.")
             return
 
     _run(
@@ -166,12 +168,12 @@ def analyze(
 @click.argument("session1")
 @click.argument("session2")
 @click.option("--output", "-o", default=None, metavar="FILE",
-              help="diff 결과를 파일로 저장 (기본: stdout)")
+              help="Write the diff to a file (default: stdout)")
 def diff_cmd(session1: str, session2: str, output: str | None) -> None:
-    """두 세션의 규칙 변경사항을 비교한다.
+    """Compare rule changes between two sessions.
 
-    SESSION1: 이전 세션 (session.json 또는 세션 디렉토리)
-    SESSION2: 최신 세션 (session.json 또는 세션 디렉토리)
+    SESSION1: older session (session.json or session directory)
+    SESSION2: newer session (session.json or session directory)
     """
     old = _load_session_json(session1)
     new = _load_session_json(session2)
@@ -180,7 +182,7 @@ def diff_cmd(session1: str, session2: str, output: str | None) -> None:
 
     if output:
         Path(output).write_text(md, encoding="utf-8")
-        click.echo(f"diff 저장: {output}")
+        click.echo(f"diff written: {output}")
     else:
         click.echo(md)
 
@@ -189,10 +191,10 @@ def diff_cmd(session1: str, session2: str, output: str | None) -> None:
 @click.argument("session1")
 @click.argument("session2", required=False, default=None)
 def measure_cmd(session1: str, session2: str | None) -> None:
-    """세션 지표를 산출하거나 두 세션을 비교한다.
+    """Compute session metrics, or compare two sessions.
 
-    SESSION1: session.json 또는 세션 디렉토리 (단일 측정 또는 비교 기준)
-    SESSION2: (선택) session.json 또는 세션 디렉토리 — 지정 시 SESSION1과 비교
+    SESSION1: session.json or session directory (single measurement, or comparison base)
+    SESSION2: (optional) session.json or session directory — compared against SESSION1
     """
     s1 = _load_session_json(session1)
     m1 = calc_session_metrics(s1)
@@ -224,20 +226,20 @@ def measure_cmd(session1: str, session2: str | None) -> None:
 @click.argument("session")
 @click.option("--output", "-o", "output_dir", required=True,
               metavar="DIR",
-              help="HarnessAI docs 디렉토리 (conventions.md / guidelines/ 출력 루트)")
+              help="HarnessAI docs directory (output root for conventions.md / guidelines/)")
 def harness_export_cmd(session: str, output_dir: str) -> None:
-    """code-hijack 세션을 HarnessAI conventions/guidelines 형식으로 변환한다.
+    """Convert a code-hijack session into HarnessAI conventions/guidelines format.
 
-    SESSION: session.json 또는 세션 디렉토리 (raw 분석 결과)
+    SESSION: session.json or session directory (raw analysis output)
 
-    cross_project scope 의 규칙만 자동 적용. framework_internal 은 제외,
-    domain_specific 은 shared-lessons-candidates.md 로 분리.
+    Only cross_project rules are auto-applied. framework_internal is excluded;
+    domain_specific goes to shared-lessons-candidates.md for review.
     """
     session_result = _load_session_json(session)
     output_path = Path(output_dir)
     summary = export_session(session_result, output_path)
 
-    click.echo(f"\n[harness-export] 완료 → {summary.output_dir.as_posix()}")
+    click.echo(f"\n[harness-export] done → {summary.output_dir.as_posix()}")
     click.echo(f"  conventions.md: {summary.conventions_path.relative_to(output_path).as_posix()}")
     click.echo(f"  guidelines: {len(summary.guideline_paths)} files")
     if summary.lesson_candidates_path:
@@ -248,21 +250,24 @@ def harness_export_cmd(session: str, output_dir: str) -> None:
     click.echo("")
     click.echo(
         f"  scope — cross_project: {summary.cross_project_count}, "
-        f"framework_internal: {summary.framework_internal_count} (제외), "
-        f"domain_specific: {summary.domain_specific_count} (lesson 후보)"
+        f"framework_internal: {summary.framework_internal_count} (excluded), "
+        f"domain_specific: {summary.domain_specific_count} (lesson candidates)"
     )
     click.echo(f"  anti-patterns: {summary.anti_pattern_count}")
     click.echo("")
-    click.echo("다음 단계: 출력 파일을 검토 후 HarnessAI 프로젝트의 docs/ 로 복사하세요.")
+    click.echo(
+        "Next step: review the output files, then copy them into your "
+        "HarnessAI project's docs/."
+    )
 
 
 @cli.command("apply")
 @click.argument("session")
 @click.argument("target_repo", type=click.Path(exists=True, file_okay=False))
 @click.option("--output", "-o", default=None, metavar="FILE",
-              help="출력 경로 (기본: <target_repo>/CLAUDE.md)")
+              help="Output path (default: <target_repo>/CLAUDE.md)")
 @click.option("--strict", is_flag=True,
-              help="reference_only 규칙을 결과에서 제외")
+              help="Exclude reference_only rules from the output")
 @click.option(
     "--stack",
     default=None,
@@ -271,7 +276,7 @@ def harness_export_cmd(session: str, output_dir: str) -> None:
          "(e.g., 'fastapi,pydantic,sqlalchemy'). Skips pyproject.toml/package.json "
          "parsing entirely.",
 )
-@click.option("--quiet", "-q", is_flag=True, help="진행 메시지 억제")
+@click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages")
 def apply_cmd(
     session: str,
     target_repo: str,
@@ -280,10 +285,10 @@ def apply_cmd(
     stack: str | None,
     quiet: bool,
 ) -> None:
-    """시니어 세션의 규칙을 타겟 레포 스택에 맞게 조정해 CLAUDE.md를 생성한다.
+    """Adapt a senior session's rules to the target repo stack and generate CLAUDE.md.
 
-    SESSION: 이전 `analyze` 실행의 session.json 또는 세션 디렉토리.
-    TARGET_REPO: 규칙을 적용할 로컬 프로젝트 경로.
+    SESSION: session.json or session directory from a previous `analyze` run.
+    TARGET_REPO: local project path to apply the rules to.
     """
     session_result = _load_session_json(session)
     target_path = Path(target_repo)
@@ -302,9 +307,9 @@ def apply_cmd(
         )
 
     if out_path.exists() and not quiet:
-        prompt = f"\n기존 파일({out_path.as_posix()})을 덮어쓸까요?"
+        prompt = f"\nOverwrite existing file ({out_path.as_posix()})?"
         if not click.confirm(prompt, default=True):
-            click.echo("취소되었습니다.")
+            click.echo("Cancelled.")
             return
 
     result = apply_session_to_target(
@@ -395,30 +400,30 @@ def _run(
         click.echo(f"{'━' * 50}\n")
 
     if not quiet:
-        click.echo("[1/4] 파일 수집 중...")
+        click.echo("[1/4] Collecting files...")
     files, repo_root = fetch_source(target, subpath=subpath)
     if not quiet:
-        click.echo(f"  → {len(files)}개 파일 수집 완료")
+        click.echo(f"  → {len(files)} files collected")
 
     cost = _estimate_cost(len(files), len(category_list))
     if not quiet:
-        click.echo("\n[2/4] 비용 추정")
+        click.echo("\n[2/4] Cost estimate")
         if llm_mode == "local":
-            click.echo("  → LLM 모드: local (file-IPC, $0)")
+            click.echo("  → LLM mode: local (file-IPC, $0)")
         else:
-            click.echo(f"  → 예상 비용: ~${cost:.2f} ({model})")
-        click.echo(f"  → 카테고리: {', '.join(category_list)}")
+            click.echo(f"  → Estimated cost: ~${cost:.2f} ({model})")
+        click.echo(f"  → Categories: {', '.join(category_list)}")
 
     if dry_run:
-        click.echo("\n[dry-run] LLM 호출 없이 종료합니다.")
+        click.echo("\n[dry-run] Exiting without LLM calls.")
         return
 
     # Local mode is always non-interactive — the responding agent doesn't have
     # a TTY to confirm to. API mode keeps the safety prompt.
     if not quiet and llm_mode == "api":
-        confirmed = click.confirm("\n분석을 시작할까요?", default=True)
+        confirmed = click.confirm("\nStart the analysis?", default=True)
         if not confirmed:
-            click.echo("취소되었습니다.")
+            click.echo("Cancelled.")
             return
 
     base = Path(output_dir) if output_dir else repo_root / "docs" / "hijacked"
@@ -428,18 +433,18 @@ def _run(
         comms_path.mkdir(parents=True, exist_ok=True)
         llm = LocalLLM(comms_path)
         if not quiet:
-            click.echo(f"  → comms 디렉토리: {comms_path.as_posix()}")
+            click.echo(f"  → comms directory: {comms_path.as_posix()}")
     else:
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
-            raise LLMError(LLM_001, "ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+            raise LLMError(LLM_001, "ANTHROPIC_API_KEY is not set.")
         # lazy import: measure/diff 등 API 불필요 커맨드가 anthropic 없이 돌도록
         from hijack.llm.api import ClaudeAPIClient
 
         llm = ClaudeAPIClient(api_key=api_key)
 
     if not quiet:
-        click.echo("\n[3/4] LLM 분석 중...")
+        click.echo("\n[3/4] Running LLM analysis...")
 
     result = asyncio.run(
         run_full_analysis(
@@ -456,15 +461,15 @@ def _run(
 
     integrated = base / "integrated"
     if integrated.exists() and not quiet:
-        prompt = f"\n기존 통합 파일({integrated.as_posix()})을 덮어쓸까요?"
+        prompt = f"\nOverwrite existing integrated files ({integrated.as_posix()})?"
         if not click.confirm(prompt, default=True):
-            raise OutputError(OUTPUT_001, f"덮어쓰기 거부됨: {integrated.as_posix()}")
+            raise OutputError(OUTPUT_001, f"Overwrite declined: {integrated.as_posix()}")
     write_output(result, base)
 
     if not quiet:
-        click.echo("\n[4/4] 완료!")
-        click.echo(f"\n세션 파일: {(base / result.session_id).as_posix()}")
-        click.echo(f"통합 파일: {(base / 'integrated').as_posix()}")
+        click.echo("\n[4/4] Done!")
+        click.echo(f"\nSession files: {(base / result.session_id).as_posix()}")
+        click.echo(f"Integrated files: {(base / 'integrated').as_posix()}")
         failed = [c.category for c in result.categories if c.error]
         if failed:
-            click.echo(f"\n⚠️  실패한 카테고리: {', '.join(failed)}", err=True)
+            click.echo(f"\n⚠️  Failed categories: {', '.join(failed)}", err=True)
