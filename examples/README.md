@@ -11,7 +11,7 @@
 - **Rules extracted**: 21 (8 architecture + 6 coding_style + 7 api_design)
 - **Quality metrics**:
   - MUST ratio: 28.6% (전원 cited)
-  - **Rationale tier: cited 21 / speculative 0 (100%)**
+  - **Rationale tier: cited 21 / speculative 0 (100%)** — 앵커 분리: **시니어 인용(commit/PR/SATD) 10 / 코드 앵커 11**. 코드 앵커는 실존 코드의 verbatim 관찰이지 시니어가 남긴 WHY 가 아님 — 이 구분을 measurement.json 과 CLAUDE.md 헤더에 그대로 노출한다 (발명된 인용 0 은 두 버킷 공통).
   - **exemplar_verbatim_ratio: 100%**
   - intent_kind: rejection 2 / satd_citation_ratio 0.2 (SATD `XXX` 주석이 MUST 지탱)
   - foresight: 3 카드 전원 confirmed (zero-deps 최하부 의존성 / hot-path 성능 / 생태계 하위호환)

@@ -72,7 +72,7 @@ R4~R6 (werkzeug + pluggy, 2026-07-05/06) 후 2축 확정:
 
 2026 문헌 대비:
 
-- LLM 이 rationale 을 **생성**하면 precision ~0.27, 오도성 주장 1.6–3.2% ([arxiv 2504.20781](https://arxiv.org/abs/2504.20781)). code-hijack 이 WHY 를 LLM 에게 짓게 하지 않는 이유 — 시니어의 **verbatim** 증거(커밋, 거절 PR, SATD 주석)만 surface 하고, 검증 인용 없는 MUST 는 기계적으로 강등한다.
+- LLM 이 rationale 을 **생성**하면 precision ~0.27, 오도성 주장 1.6–3.2% ([arxiv 2504.20781](https://arxiv.org/abs/2504.20781)). code-hijack 이 WHY 를 LLM 에게 짓게 하지 않는 이유 — 시니어의 **verbatim** 증거(커밋, 거절 PR, SATD 주석)만 surface 하고, 검증 인용 없는 MUST 는 기계적으로 강등한다. 같은 기준을 자기 headline 지표에도 적용한다: `cited` 는 **시니어 인용** vs **코드 앵커**로 분리 보고 — 코드의 verbatim 관찰은 시니어가 남긴 WHY 가 아니므로 그걸로 세지 않는다.
 - 최근접 접근 Probe-and-Refine ([arxiv 2606.20512](https://arxiv.org/abs/2606.20512)) 은 synthetic probe *행동*으로 레포 가이드를 튜닝 (+7.5pp SWE-bench) 하지만 provenance 가 없다 — *무엇이* 되는지는 말해도 *시니어가 왜 그렇게 골랐는지*는 못 말한다. code-hijack 은 이제 둘 다 든다: 기록된 WHY(verbatim evidence) + 규칙 단위 행동 probe 배지 (`behavior-confirmed` — [examples/pluggy](examples/pluggy/) 가 첫 배지 샘플, 3 probed / 2 discriminated).
 - 컨텍스트 파일은 동일 완성도에서 에이전트 **비용**을 실측으로 줄인다: runtime −28.6%, 출력 토큰 −16.6% ([arxiv 2601.20404](https://arxiv.org/abs/2601.20404)) — 단 저 논문의 태스크는 레포 탐색형. 자체 A/B 도 같은 스코프에서만 재현 (탐색형 툴콜 −67% vs self-contained 생성 태스크 이득 없음, 위 2축 참조).
 

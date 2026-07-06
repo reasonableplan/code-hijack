@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from hijack.core.evidence import compute_evidence_metrics
 from hijack.core.models import FORESIGHT_VERDICT_VALUES, ForesightCard, SessionResult
 
 
@@ -24,6 +25,13 @@ class MeasurementResult:
     tier_distribution: dict[str, int]
     intent_kind_distribution: dict[str, int]
     foresight_scores: list[dict[str, str]]
+    # Cited-anchor split (evidence.py _cited_anchor). cited_history_count is
+    # rules citing an actual senior decision record (commit/PR/SATD quote);
+    # cited_code_count is rules anchored only by a valid ref_files path:line.
+    # Their sum can differ from tier_distribution["cited"] only in edge cases
+    # (both are reported honestly rather than reconciled).
+    cited_history_count: int = 0
+    cited_code_count: int = 0
     # SATD comment-citation metrics (W2 strengthening). satd_supplied_count is
     # how many SATD items the miner surfaced; comment_cited_rule_count /
     # comment_cited_ref_count count how many of those were actually cited by
@@ -51,6 +59,8 @@ class MeasurementResult:
             "tier_distribution": self.tier_distribution,
             "intent_kind_distribution": self.intent_kind_distribution,
             "foresight_scores": self.foresight_scores,
+            "cited_history_count": self.cited_history_count,
+            "cited_code_count": self.cited_code_count,
             "satd_supplied_count": self.satd_supplied_count,
             "comment_cited_rule_count": self.comment_cited_rule_count,
             "comment_cited_ref_count": self.comment_cited_ref_count,
@@ -70,6 +80,8 @@ class MeasurementResult:
             tier_distribution=data["tier_distribution"],
             intent_kind_distribution=data["intent_kind_distribution"],
             foresight_scores=data["foresight_scores"],
+            cited_history_count=data.get("cited_history_count", 0),
+            cited_code_count=data.get("cited_code_count", 0),
             satd_supplied_count=data.get("satd_supplied_count", 0),
             comment_cited_rule_count=data.get("comment_cited_rule_count", 0),
             comment_cited_ref_count=data.get("comment_cited_ref_count", 0),
@@ -173,6 +185,8 @@ def calc_session_metrics(
         if c.verdict
     ]
 
+    anchor = compute_evidence_metrics(session).overall
+
     return MeasurementResult(
         session_id=session.session_id,
         cited_ratio=cited_ratio,
@@ -180,6 +194,8 @@ def calc_session_metrics(
         tier_distribution=tier_distribution,
         intent_kind_distribution=intent_kind_distribution,
         foresight_scores=foresight_scores,
+        cited_history_count=anchor.cited_history,
+        cited_code_count=anchor.cited_code,
         satd_supplied_count=satd_supplied_count,
         comment_cited_rule_count=comment_cited_rule_count,
         comment_cited_ref_count=comment_cited_ref_count,
@@ -328,7 +344,8 @@ def format_measurement_summary(result: MeasurementResult) -> str:
     """사람이 읽는 측정 요약 문자열을 반환한다 (cli.py 에서 click.echo 로 출력)."""
     lines: list[str] = [
         f"Session: {result.session_id}",
-        f"  cited_ratio : {result.cited_ratio:.1%}",
+        f"  cited_ratio : {result.cited_ratio:.1%} "
+        f"(senior-quoted {result.cited_history_count} / code-anchored {result.cited_code_count})",
         f"  must_ratio  : {result.must_ratio:.1%}",
         "  tier distribution:",
     ]

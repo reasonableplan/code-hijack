@@ -144,6 +144,7 @@ class TestMeasurementResultSerialization:
         assert set(data.keys()) == {
             "session_id", "cited_ratio", "must_ratio",
             "tier_distribution", "intent_kind_distribution", "foresight_scores",
+            "cited_history_count", "cited_code_count",
             "satd_supplied_count", "comment_cited_rule_count",
             "comment_cited_ref_count", "satd_citation_ratio",
             "exemplar_checked_count", "exemplar_verbatim_ratio",
@@ -165,6 +166,20 @@ class TestMeasurementResultSerialization:
         assert restored.comment_cited_rule_count == 0
         assert restored.comment_cited_ref_count == 0
         assert restored.satd_citation_ratio == 0.0
+
+    def test_from_json_backward_compat_missing_anchor_fields(self) -> None:
+        # Pre-anchor-split measurement.json lacks the new keys.
+        data = {
+            "session_id": "old",
+            "cited_ratio": 0.5,
+            "must_ratio": 0.5,
+            "tier_distribution": {},
+            "intent_kind_distribution": {},
+            "foresight_scores": [],
+        }
+        restored = MeasurementResult.from_json(data)
+        assert restored.cited_history_count == 0
+        assert restored.cited_code_count == 0
 
     def test_from_json_backward_compat_missing_exemplar_fields(self) -> None:
         # Pre-W4a measurement.json lacks the new keys.
@@ -239,6 +254,29 @@ class TestCalcSessionMetrics:
         m = calc_session_metrics(session)
         assert m.cited_ratio == 1.0
         assert m.session_id == "s1"
+
+    def test_cited_anchor_split(self) -> None:
+        quoted = _make_rule(
+            "R1",
+            evidence=[
+                Evidence(
+                    kind="commit",
+                    ref="abc1234",
+                    headline="fix: keep original traceback",
+                    quote="the traceback grows on every raise",
+                    intent_kind="incident",
+                )
+            ],
+        )
+        code_anchored = _make_rule("R2")
+        code_anchored.ref_files = ["src/a.py:10-20"]
+        session = _make_session(
+            "s-split", [_make_category("architecture", [quoted, code_anchored])]
+        )
+        session.selected_files = ["src/a.py"]
+        m = calc_session_metrics(session)
+        assert m.cited_history_count == 1
+        assert m.cited_code_count == 1
 
     def test_mixed_tiers_gives_accurate_ratio(self) -> None:
         rules = [

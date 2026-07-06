@@ -348,6 +348,11 @@ class TestRenderClaudeMdEntrypoint:
         md = render_claude_md_entrypoint(_session())
         assert "org/repo" in md
 
+    def test_contains_provenance_split(self) -> None:
+        md = render_claude_md_entrypoint(_session())
+        assert "규칙 근거: 시니어 인용(commit/PR/SATD)" in md
+        assert "코드 앵커" in md
+
 
 # ---------------------------------------------------------------------------
 # render_system_prompt_md
