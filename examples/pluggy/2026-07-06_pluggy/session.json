@@ -1,0 +1,1059 @@
+{
+  "session_id": "2026-07-06_pluggy",
+  "target": "https://github.com/pytest-dev/pluggy",
+  "model": "claude-code-skill-mode",
+  "timestamp": "2026-07-06T03:09:21.636342+00:00",
+  "selected_files": [
+    "docs/conf.py",
+    "downstream/run_downstream.py",
+    "scripts/release.py",
+    "scripts/towncrier-draft-to-file.py",
+    "testing/benchmark.py",
+    "testing/conftest.py",
+    "testing/test_details.py",
+    "testing/test_helpers.py",
+    "testing/test_hookcaller.py",
+    "testing/test_invocations.py",
+    "testing/test_multicall.py",
+    "testing/test_pluginmanager.py",
+    "testing/test_result.py",
+    "testing/test_tracer.py",
+    "testing/test_warnings.py",
+    "src/pluggy/_callers.py",
+    "src/pluggy/_hooks.py",
+    "src/pluggy/_manager.py",
+    "src/pluggy/_result.py",
+    "src/pluggy/_tracing.py",
+    "src/pluggy/_warnings.py",
+    "src/pluggy/__init__.py",
+    "docs/examples/toy-example.py",
+    "docs/examples/eggsample/setup.py",
+    "docs/examples/eggsample-spam/eggsample_spam.py",
+    "docs/examples/eggsample-spam/setup.py",
+    "docs/examples/eggsample/eggsample/hookspecs.py",
+    "docs/examples/eggsample/eggsample/host.py",
+    "docs/examples/eggsample/eggsample/lib.py",
+    "docs/examples/eggsample/eggsample/__init__.py"
+  ],
+  "categories": [
+    {
+      "category": "architecture",
+      "design_intent": "실행 파이프라인(등록 → 정렬 → multicall → teardown)은 플러그인 콜백이 무엇을 하든 — 예외를 던지든, 실행 중 새 플러그인을 등록하든, StopIteration 같은 제어흐름 예외를 쓰든 — 호출 계약이 유지되도록 방어적으로 설계됐다. 비용은 콜드 경로(등록)에 배치하고 핫 경로(호출)는 사전 정렬된 단일 리스트 순회로 유지한다.",
+      "rules": [
+        {
+          "rule": "제너레이터 경계를 넘어 예외를 전달할 때는 언어 런타임의 예외 변형을 명시적으로 복원한다 — StopIteration 을 제너레이터에 throw 하면 RuntimeError 로 바뀌므로, cause 체인을 검사해 원래 예외로 재개한다",
+          "priority": "MUST",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_callers.py:140-155"
+          ],
+          "good_example": "try:\n    teardown.throw(exception)\nexcept RuntimeError as re:\n    # StopIteration from generator causes RuntimeError\n    # even for coroutine usage - see #544\n    if (\n        isinstance(exception, StopIteration)\n        and re.__cause__ is exception\n    ):\n        teardown.close()\n        continue\n    else:\n        raise",
+          "bad_example": "for teardown in reversed(teardowns):\n    if exception is not None:\n        teardown.throw(exception)\n    else:\n        teardown.send(result)",
+          "reason": "래퍼 체인 통과 중 StopIteration 이 RuntimeError 로 둔갑하면 호출자가 원래 제어흐름 예외를 받지 못한다",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [
+            {
+              "kind": "commit",
+              "ref": "3875ea5",
+              "headline": "fix #544: Correctly pass StopIteration trough wrappers",
+              "quote": "Raising a StopIteration in a generator triggers a RuntimeError. If the RuntimeError of a generator has the passed in StopIteration as cause resume with that StopIteration as normal exception instead of failing with the RuntimeError.",
+              "intent_kind": "preference",
+              "date": null
+            }
+          ],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "저장했다가 나중에 재발생시킬 수 있는 예외는 포착 시점의 __traceback__ 을 별도 필드에 보관하고, 재raise 는 항상 raise exc.with_traceback(saved_tb) 로 한다 — 예외 객체의 traceback 은 raise 될 때마다 변이·누적된다",
+          "priority": "MUST",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_result.py:39-40",
+            "src/pluggy/_result.py:97-103"
+          ],
+          "good_example": "# Exception __traceback__ is mutable, this keeps the original.\nself._traceback = exception.__traceback__ if exception is not None else None\n...\nexc = self._exception\ntb = self._traceback\nif exc is None:\n    return cast(ResultType, self._result)\nelse:\n    raise exc.with_traceback(tb)",
+          "bad_example": "def get_result(self):\n    if self._exception is not None:\n        raise self._exception\n    return self._result",
+          "reason": "같은 예외를 여러 번 raise 하면 traceback 이 매번 길어지는 무증상 오염 — 1.1.0 에서 실제 회귀",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [
+            {
+              "kind": "commit",
+              "ref": "93ac1e9",
+              "headline": "result: keep original traceback and reraise with it",
+              "quote": "The `Result` API allows the same exception to be raised multiple times. In Python, `Exception.__traceback__` becomes longer everytime an exception is raised. This means that on every raise, the exception's traceback gets longer and longer. To prevent this, save the original traceback and always raise using it. Regressed in pluggy 1.1.0 (fbc444218c442dd8cbe29bd68cde8fea52b56baf).",
+              "intent_kind": "incident",
+              "date": null
+            }
+          ],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true,
+          "probe": {
+            "task": "Outcome 캡처 클래스 구현 — get_result 다회 재raise 경계 (Haiku C/T)",
+            "verdict": "discriminated",
+            "control_behavior": "naive `raise self._exception` — 3회 재raise 시 traceback 4->6->8 프레임 누적 성장 (무증상 오염)",
+            "treatment_behavior": "포착 시 __traceback__ 별도 저장 + `raise exc.with_traceback(tb)` — 3회 재raise 후 4 프레임 불변 (_result.py 93ac1e9 패턴 재현)",
+            "model": "haiku"
+          }
+        },
+        {
+          "rule": "컬렉션에서 소유자 단위 제거는 첫 매치에서 멈추지 말고 매치 전부를 단일 연산으로 제거하며(없으면 명시적 에러), 소유자 기준 조회 API 는 같은 컨테이너를 중복 반환하지 않는다 — 한 소유자가 같은 키에 여러 항목을 등록할 수 있다",
+          "priority": "MUST",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_hooks.py:471-476",
+            "src/pluggy/_manager.py:434-447"
+          ],
+          "good_example": "def _remove_plugin(self, plugin: _Plugin) -> None:\n    \"\"\"Remove all hook implementations registered by the given plugin.\"\"\"\n    remaining = [impl for impl in self._hookimpls if impl.plugin != plugin]\n    if len(remaining) == len(self._hookimpls):\n        raise ValueError(f\"plugin {plugin!r} not found\")\n    self._hookimpls[:] = remaining",
+          "bad_example": "def _remove_plugin(self, plugin):\n    for i, method in enumerate(self._hookimpls):\n        if method.plugin == plugin:\n            del self._hookimpls[i]\n            return\n    raise ValueError(f\"plugin {plugin!r} not found\")",
+          "reason": "첫 매치 제거는 다중 등록 시 잔존 항목을 남기고, 중복 반환 조회와 결합하면 우연히만 동작하는 취약 구조가 된다",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [
+            {
+              "kind": "commit",
+              "ref": "20d8143",
+              "headline": "Fix _remove_plugin to remove all hookimpls and get_hookcallers to deduplicate (#646)",
+              "quote": "When a plugin registers multiple hook implementations on the same hook (e.g. via specname), `_remove_plugin` only removed the first matching hookimpl. This worked because `get_hookcallers` returned duplicate HookCaller entries, causing `_remove_plugin` to be called multiple times. This was fragile and made `get_hookcallers` return unexpected duplicates to callers of the public API.",
+              "intent_kind": null,
+              "date": null
+            }
+          ],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true,
+          "probe": {
+            "task": "specname 다중 등록 레지스트리 구현 — unregister 완전성 (Haiku C/T)",
+            "verdict": "not_discriminated",
+            "control_behavior": "기본 구현이 이미 견고: plugin->hooks dict + 컴프리헨션 전량 제거 — 잔존 0, 조회 중복 0",
+            "treatment_behavior": "동일하게 깨끗 — 규칙 준수 자가보고했으나 관측 행동 차이 없음",
+            "model": "haiku"
+          }
+        },
+        {
+          "rule": "콜백 실행 루프는 예외가 발생해도 이미 셋업된 teardown 전부를 역순으로 실행해야 한다 — 예외는 변수에 저장해 finally 의 teardown 순회를 마친 뒤 마지막에 재발생시키고, 각 teardown 은 결과나 예외를 대체할 수 있다",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_callers.py:131-141",
+            "src/pluggy/_callers.py:44-57"
+          ],
+          "good_example": "except BaseException as exc:\n    exception = exc\nfinally:\n    if firstresult:  # first result hooks return a single value\n        result = results[0] if results else None\n    else:\n        result = results\n\n    # run all wrapper post-yield blocks\n    for teardown in reversed(teardowns):",
+          "bad_example": "results = []\nfor hook_impl in reversed(hook_impls):\n    results.append(hook_impl.function(*args))\nfor teardown in reversed(teardowns):\n    teardown.send(results)",
+          "reason": "예외 시 teardown 스킵은 래퍼 자원 정리를 GC 시점으로 미뤄 실행 순서 보장이 깨진다",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "실행 중 콜백이 컬렉션을 변이할 수 있으므로(콜백이 새 항목을 등록), 실행은 컬렉션의 스냅샷 복사본 위에서 수행한다",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_hooks.py:541-543",
+            "src/pluggy/_hooks.py:563-565"
+          ],
+          "good_example": "# Copy because plugins may register other plugins during iteration (#438).\nreturn self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)",
+          "bad_example": "return self._hookexec(self.name, self._hookimpls, kwargs, firstresult)",
+          "reason": "호출 도중 등록이 일어나면 라이브 리스트 순회는 항목 스킵/중복 실행을 일으킨다",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "핫 경로(호출)와 콜드 경로(등록)의 비용을 명시적으로 교환한다 — 호출 시점에 컬렉션을 조립·연결하지 말고, 등록 시점에 실행 순서로 정렬된 단일 컬렉션을 유지한다",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_hooks.py:433-440",
+            "src/pluggy/_hooks.py:482-504"
+          ],
+          "good_example": "# The hookimpls list. The caller iterates it *in reverse*. Format:\n# 1. trylast nonwrappers\n# 2. nonwrappers\n# 3. tryfirst nonwrappers\n# 4. trylast wrappers\n# 5. wrappers\n# 6. tryfirst wrappers\nself._hookimpls: Final[list[HookImpl]] = []",
+          "bad_example": "def __call__(self, **kwargs):\n    impls = self._nonwrappers + self._wrappers\n    return self._hookexec(self.name, impls, kwargs, firstresult)",
+          "reason": "등록은 호출보다 훨씬 드물다 — 리스트 연결을 핫 콜 경로에서 제거하는 대신 등록을 약간 느리게 하는 교환",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [
+            {
+              "kind": "commit",
+              "ref": "63b7e90",
+              "headline": "hooks: keep hookimpls in a single list",
+              "quote": "The hookexec receives them in a single list (which is good), so make the HookCaller keep them in a single array as well, so can avoid the list concatenation in the hot call path. This makes adding a hookimpl a little slower, but not by much, and it is much colder than calling so the tradeoff makes sense.",
+              "intent_kind": "preference",
+              "date": null
+            }
+          ],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "핫 경로의 런타임 introspection 은 inspect.signature 대신 코드 객체 속성(co_varnames, co_argcount, __defaults__)을 직접 사용한다 — signature 는 annotation 해석을 트리거해 느리고, 미정의 타입 참조 시 실패한다",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_hooks.py:343-359"
+          ],
+          "good_example": "code: types.CodeType = func.__code__  # type: ignore[attr-defined]\ndefaults: tuple[object, ...] | None = func.__defaults__  # type: ignore[attr-defined]\n...\nargs: tuple[str, ...] = code.co_varnames[: code.co_argcount]",
+          "bad_example": "sig = inspect.signature(func)\nargs = [p.name for p in sig.parameters.values()\n        if p.kind is p.POSITIONAL_OR_KEYWORD]",
+          "reason": "annotation 해석 회피 — 단순·고속이며 PEP 649 지연 평가 환경에서 미정의 참조 실패까지 차단",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [
+            {
+              "kind": "commit",
+              "ref": "c4e254c",
+              "headline": "Simplify varnames to use code object directly",
+              "quote": "Use code object attributes (co_varnames, co_argcount) and __defaults__ directly instead of inspect.signature(). This avoids annotation resolution entirely, which is simpler and more efficient.",
+              "intent_kind": "preference",
+              "date": null
+            },
+            {
+              "kind": "commit",
+              "ref": "74876c4",
+              "headline": "Fix varnames to handle Python 3.14 deferred annotations",
+              "quote": "In Python 3.14+, annotations are evaluated lazily per PEP 649/749. When inspect.signature() is called, it tries to resolve annotations by default, which fails if the annotation references an undefined type.",
+              "intent_kind": "constraint",
+              "date": null
+            }
+          ],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "원본 컬렉션의 필터링된 뷰가 필요할 때 데이터를 복사한 새 객체를 만들지 말고, 데이터 접근을 프로퍼티로 원본에 위임하는 프록시로 구현한다",
+          "priority": "SHOULD",
+          "confidence": "medium",
+          "ref_files": [
+            "src/pluggy/_hooks.py:622-653",
+            "src/pluggy/_manager.py:511-521"
+          ],
+          "good_example": "@property  # type: ignore[misc]\ndef _hookimpls(self) -> list[HookImpl]:\n    return [\n        impl\n        for impl in self._orig._hookimpls\n        if impl.plugin not in self._remove_plugins\n    ]",
+          "bad_example": "subset = HookCaller(orig.name, orig._hookexec)\nfor impl in orig._hookimpls:\n    if impl.plugin not in remove_plugins:\n        subset._add_hookimpl(impl)\nreturn subset",
+          "reason": "복사본은 원본의 이후 변이(등록/역사적 호출)를 반영 못하고 수명이 얽혀 메모리 누수를 만든다",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        }
+      ],
+      "anti_patterns": [
+        {
+          "pattern": "예외 발생 시 teardown 루프를 건너뛰고 즉시 전파",
+          "reason": "이미 셋업된 래퍼들의 post-yield 블록이 실행되지 않아 자원 정리가 GC 시점으로 밀린다",
+          "alternative": "예외를 저장하고 finally 에서 teardown 전원 역순 실행 후 재발생 (_callers.py:131-172)"
+        },
+        {
+          "pattern": "호출 경로에서 리스트 연결/정렬 수행",
+          "reason": "훅 호출은 등록보다 압도적으로 빈번한 핫 경로",
+          "alternative": "등록 시점에 splitpoint 삽입으로 사전 정렬된 단일 리스트 유지 (_hooks.py:482-504)"
+        }
+      ],
+      "file_type_guides": {},
+      "checklist": [
+        "저장된 예외를 재raise 하는 코드가 with_traceback(saved_tb) 을 쓰는가?",
+        "제너레이터에 throw 하는 코드가 StopIteration→RuntimeError 변형을 복원하는가?",
+        "실행 루프가 컬렉션 스냅샷 복사본을 사용하는가?",
+        "소유자 단위 제거가 전체 매치를 제거하는가 (첫 매치 아님)?"
+      ],
+      "raw_llm_output": "(skill-mode)",
+      "error": null
+    },
+    {
+      "category": "coding_style",
+      "design_intent": "테스트가 행동 계약의 단일 진실이다 — 동작 수정은 그 회귀를 고정하는 테스트와 함께만 받아들여지고, 테스트 없는 동작 변경 PR 은 닫힌다. 타입 힌트는 최소 지원 버전(3.10+)의 모던 문법으로 통일하고, 경고·순서 같은 미세 계약도 테스트에서 정밀하게 고정한다.",
+      "rules": [
+        {
+          "rule": "동작을 바꾸는 변경은 그 동작을 고정하는 테스트를 동반해야 한다 — 회귀 수정이면 회귀를 노출하는 테스트를 먼저 추가한다",
+          "priority": "MUST",
+          "confidence": "high",
+          "ref_files": [
+            "testing/test_warnings.py:16-50",
+            "testing/test_invocations.py:1"
+          ],
+          "good_example": "with pytest.warns(\n    PluggyTeardownRaisedWarning,\n    match=r\"\\bplugin2\\b.*\\bmy_hook\\b.*\\n.*ZeroDivisionError\",\n) as wc:\n    with pytest.raises(ZeroDivisionError):\n        pm.hook.my_hook()\nassert len(wc.list) == 1",
+          "bad_example": "--- src/pluggy/_manager.py\n-        if self._name2plugin.get(name):\n+        if self._name2plugin.get(name) is not None:\n(메인테이너가 실제로 닫은 PR#648 의 diff — 동작 수정이나 테스트 없음)",
+          "reason": "테스트 없는 동작 수정 PR 은 리뷰 없이 닫힌다 — 이 레포의 실제 게이트",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [
+            {
+              "kind": "pr",
+              "ref": "PR#648",
+              "headline": "Fix unregister skipping cleanup for falsy plugin objects",
+              "quote": "this looks like a fully agentic pr without tests, i'm jsut going to close it",
+              "intent_kind": "rejection",
+              "date": null
+            },
+            {
+              "kind": "commit",
+              "ref": "f087c1e",
+              "headline": "Add a test which verifies firstresult wrappers",
+              "quote": "This is to expose the regression from issue #71. Wrappers must return a single value not a list.",
+              "intent_kind": "incident",
+              "date": null
+            }
+          ],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "타입 힌트는 최소 지원 파이썬 버전의 모던 문법으로 통일한다 — X | None (Optional 금지), collections.abc 제네릭, 타입 별칭에는 명시적 TypeAlias, 파일 상단 from __future__ import annotations",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_callers.py:5-24",
+            "src/pluggy/_manager.py:36-39"
+          ],
+          "good_example": "from __future__ import annotations\n\nfrom collections.abc import Generator\nfrom collections.abc import Mapping\nfrom collections.abc import Sequence\n...\nTeardown: TypeAlias = Generator[None, object, object]",
+          "bad_example": "from typing import Generator, Mapping, Optional, Union\n\nTeardown = Generator[None, object, object]\ndef exec(self, res: Optional[Union[int, str]]) -> None: ...",
+          "reason": "버전 하한을 올릴 때 문법도 일괄 이주 — 별칭과 일반 대입의 구분, IDE/타입체커 정확도",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [
+            {
+              "kind": "commit",
+              "ref": "4dd2443",
+              "headline": "Require Python 3.10+, modernize type annotations",
+              "quote": "Modernize type hints: Union → |, Optional → | None - Move Callable imports to collections.abc - Update pyupgrade to --py310-plus",
+              "intent_kind": "preference",
+              "date": null
+            },
+            {
+              "kind": "commit",
+              "ref": "009bdc3",
+              "headline": "Add TypeAlias annotations for improved type clarity",
+              "quote": "Leverage TypeAlias (available in Python 3.10+) to explicitly mark type aliases throughout the codebase... This improves IDE support, type checker accuracy, and makes the distinction between type aliases and regular assignments clear.",
+              "intent_kind": "preference",
+              "date": null
+            }
+          ],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "import 는 심볼당 한 줄로 쓴다 — from X import (A, B, C) 묶음 대신 from X import A 를 반복하고 알파벳 정렬한다",
+          "priority": "SHOULD",
+          "confidence": "medium",
+          "ref_files": [
+            "src/pluggy/__init__.py:17-29",
+            "src/pluggy/_manager.py:16-28",
+            "src/pluggy/_callers.py:7-19"
+          ],
+          "good_example": "from ._hooks import HookCaller\nfrom ._hooks import HookImpl\nfrom ._hooks import HookimplMarker\nfrom ._hooks import HookimplOpts",
+          "bad_example": "from ._hooks import (HookCaller, HookImpl, HookimplMarker,\n                     HookimplOpts, HookRelay, HookspecMarker)",
+          "reason": "한 줄 한 심볼은 diff/충돌 단위를 최소화 — 레포 전체에서 일관 적용된 형태",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "경고를 검증하는 테스트는 경고 타입만이 아니라 메시지 정규식(match), 발생 횟수, 발생 위치(filename)까지 고정한다",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "testing/test_warnings.py:43-50",
+            "testing/test_warnings.py:61-65"
+          ],
+          "good_example": "with pytest.warns(\n    DeprecationWarning,\n    match=r\"is a method but its first parameter 'item' is not 'self'\",\n):\n    pm.add_hookspecs(Api)",
+          "bad_example": "with pytest.warns(DeprecationWarning):\n    pm.add_hookspecs(Api)",
+          "reason": "타입만 검사하면 무관한 경고가 테스트를 통과시켜 메시지 품질·발생 지점 회귀를 놓친다",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "경고가 나지 않아야 하는 경로는 통과를 암묵에 맡기지 말고 simplefilter(\"error\") 로 경고를 에러로 승격해 명시적으로 고정한다",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "testing/test_warnings.py:76-78",
+            "testing/test_warnings.py:90-92"
+          ],
+          "good_example": "with warnings.catch_warnings():\n    warnings.simplefilter(\"error\")\n    pm.add_hookspecs(Api)",
+          "bad_example": "def test_hookspec_with_self_no_warning(pm):\n    class Api:\n        @hookspec\n        def my_hook(self, item, extra):\n            pass\n\n    pm.add_hookspecs(Api)",
+          "reason": "부정 케이스(경고 없음)는 기본 필터에선 침묵 통과 — 에러 승격 없이는 회귀를 못 잡는다",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "순서가 계약인 컬렉션의 테스트는 부분 포함(in)이 아니라 기대 시퀀스 전체를 순서 포함해 일치 비교한다",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "testing/test_hookcaller.py:82",
+            "testing/test_hookcaller.py:118-123"
+          ],
+          "good_example": "assert funcs(hc.get_hookimpls()) == [\n    he_method1_d,\n    he_method1_b,\n    he_method1_a,\n    he_method1_c,\n]",
+          "bad_example": "impls = funcs(hc.get_hookimpls())\nassert he_method1_d in impls\nassert len(impls) == 4",
+          "reason": "실행 순서(trylast/tryfirst/wrapper 배치)가 이 라이브러리의 핵심 계약 — 포함 검사로는 순서 회귀를 못 잡는다",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        }
+      ],
+      "anti_patterns": [
+        {
+          "pattern": "동작 수정 PR 에 테스트 미동반",
+          "reason": "메인테이너가 리뷰 없이 닫는다 (PR#648 실례)",
+          "alternative": "수정이 고치는 동작을 노출하는 테스트를 같은 PR 에 포함"
+        },
+        {
+          "pattern": "pytest.warns 를 타입만으로 사용",
+          "reason": "무관한 경고로도 통과해 메시지·횟수 회귀를 놓침",
+          "alternative": "match 정규식 + len(wc.list) 검증 (test_warnings.py:43-50)"
+        }
+      ],
+      "file_type_guides": {},
+      "checklist": [
+        "동작 변경에 그 동작을 고정하는 테스트가 동반되는가?",
+        "Optional/Union 대신 | 문법을 쓰는가? 타입 별칭에 TypeAlias 를 붙였는가?",
+        "경고 테스트가 match·횟수까지 고정하는가? 무경고 경로는 simplefilter('error')?",
+        "순서 계약 테스트가 전체 시퀀스 일치 비교인가?"
+      ],
+      "raw_llm_output": "(skill-mode)",
+      "error": null
+    },
+    {
+      "category": "api_design",
+      "design_intent": "pytest/tox/devpi 생태계의 최하부 라이브러리로서 하위호환이 최우선이다 — 레거시 패턴은 깨는 대신 지원을 유지한 채 DeprecationWarning 으로 이주를 안내하고, 옛 공개 이름은 alias 로 남긴다. 반대로 잘못된 사용은 가능한 가장 이른 시점(선언/등록)에 명시적 에러로 거부해 런타임 무증상 오동작을 차단한다.",
+      "rules": [
+        {
+          "rule": "레거시 사용 패턴은 즉시 깨지 말고 지원을 유지한 채 DeprecationWarning 으로 이주를 안내한다 — 경고 메시지에 구체적 대안과 '미래 버전에서 에러가 된다'는 예고를 포함하고, 업스트림 픽스가 아직 릴리스되지 않은 서드파티는 만료 조건을 주석으로 명시한 suppress 목록으로 예외 처리한다",
+          "priority": "MUST",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_hooks.py:373-382",
+            "src/pluggy/_hooks.py:294-303"
+          ],
+          "good_example": "warnings.warn(\n    f\"{qualname} is a method but its first parameter\"\n    f\" {args[0]!r} is not 'self'.\"\n    f\" Add 'self' as the first parameter or use @staticmethod.\"\n    f\" This will become an error in a future version of pluggy.\",\n    DeprecationWarning,\n    stacklevel=2,\n)",
+          "bad_example": "if _is_class_method and args[0] not in _IMPLICIT_NAMES:\n    raise TypeError(f\"{qualname} must declare 'self' as first parameter\")",
+          "reason": "수천 개 하위 플러그인이 의존 — 하드 브레이크 대신 경고로 이주 시간을 주는 게 이 레포의 반복 결정",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [
+            {
+              "kind": "commit",
+              "ref": "dd20a85",
+              "headline": "Warn from varnames for hookspec methods missing self",
+              "quote": "HookSpec.__init__ passes legacy_noself=True for class-based non-static hookspecs to support the legacy pattern while warning about it.",
+              "intent_kind": "preference",
+              "date": null
+            },
+            {
+              "kind": "commit",
+              "ref": "0258484",
+              "headline": "Address review: DeprecationWarning, add self to test, suppress pytest-timeout",
+              "quote": "Change FutureWarning to DeprecationWarning for hookspec methods missing self... Suppress the deprecation warning for pytest-timeout's TimeoutHooks (upstream fix exists but is unreleased)",
+              "intent_kind": "preference",
+              "date": null
+            }
+          ],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "양립 불가능한 옵션 조합은 문서가 아니라 코드로 거부한다 — 선언 시점(ValueError) 또는 등록 시점(전용 ValidationError)에 즉시 실패시키고, 런타임 깊숙한 곳에서 조용히 오동작하게 두지 않는다",
+          "priority": "MUST",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_hooks.py:147-149",
+            "src/pluggy/_manager.py:371-377"
+          ],
+          "good_example": "def setattr_hookspec_opts(func: _F) -> _F:\n    if historic and firstresult:\n        raise ValueError(\"cannot have a historic firstresult hook\")",
+          "bad_example": "opts: HookspecOpts = {\n    \"firstresult\": firstresult,\n    \"historic\": historic,\n}\nsetattr(func, self.project_name + \"_spec\", opts)",
+          "reason": "비호환 조합(historic×firstresult, wrapper×hookwrapper 등)을 통과시키면 훅 실행 깊숙한 곳에서 무증상 오동작",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [
+            {
+              "kind": "comment",
+              "ref": "src/pluggy/_hooks.py:613",
+              "headline": "XXX",
+              "quote": "remember firstresult isn't compat with historic",
+              "intent_kind": null,
+              "date": null
+            }
+          ],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true,
+          "probe": {
+            "task": "hookspec 마커 구현 — firstresult+historic 비호환 조합 선언 (Haiku C/T)",
+            "verdict": "discriminated",
+            "control_behavior": "비호환 조합 무증상 수용 — opts 저장 후 그대로 통과",
+            "treatment_behavior": "선언 시점 ValueError 거부 — pluggy 원문 메시지 'cannot have a historic firstresult hook' verbatim 재현",
+            "model": "haiku"
+          }
+        },
+        {
+          "rule": "공개 이름을 리네임할 때 옛 이름을 모듈 말미의 alias 로 유지하고, 어느 버전까지의 호환인지 주석으로 못박는다",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_result.py:106-107",
+            "src/pluggy/_hooks.py:402-403",
+            "src/pluggy/_hooks.py:618-619"
+          ],
+          "good_example": "# Historical name (pluggy<=1.2), kept for backward compatibility.\n_Result = Result",
+          "bad_example": "class Result(Generic[ResultType]):\n    ...\n\n# (_Result alias 제거 — 옛 이름 import 하던 하위 사용자 즉시 파손)",
+          "reason": "내부 심볼도 생태계가 이미 import 하고 있다 — 리네임의 비용을 라이브러리가 부담",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "패키지 공개 표면은 __all__ 로 선언하고 구현은 전부 underscore 접두 모듈에 숨긴 뒤 패키지 루트에서 재노출한다; 모듈 __getattr__ 로 동적 속성을 제공할 때는 알 수 없는 이름에 명시적 AttributeError 를 raise 한다",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/__init__.py:1-16",
+            "src/pluggy/__init__.py:32-38"
+          ],
+          "good_example": "def __getattr__(name: str) -> str:\n    if name == \"__version__\":\n        from importlib.metadata import version\n\n        return version(\"pluggy\")\n\n    raise AttributeError(f\"module {__name__} has no attribute {name!r}\")",
+          "bad_example": "def __getattr__(name):\n    from importlib.metadata import version\n    return version(\"pluggy\")",
+          "reason": "임포트 시점 비용(메타데이터 조회)은 지연 로딩으로 미루되, 오탈자 접근이 조용히 엉뚱한 값을 반환하지 않게 한다",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [
+            {
+              "kind": "commit",
+              "ref": "96e05d6",
+              "headline": "Remove version_file setting and migrate to lazy version loading",
+              "quote": "Remove setuptools-scm version_file setting and replace static version import with lazy loading via __getattr__ using importlib.metadata.version.",
+              "intent_kind": "preference",
+              "date": null
+            }
+          ],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "매핑 값에 None 을 '차단됨' 같은 의미 있는 상태로 저장할 때, '항목 없음'과 구분하는 검사는 truthiness 가 아니라 별도 sentinel 기본값과 is None 비교로 한다",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_manager.py:140-142",
+            "src/pluggy/_manager.py:247-250"
+          ],
+          "good_example": "if plugin_name in self._name2plugin:\n    if self._name2plugin.get(plugin_name, -1) is None:\n        return None  # blocked plugin, return None to indicate no registration",
+          "bad_example": "if self._name2plugin.get(name):\n    del self._name2plugin[name]",
+          "reason": "falsy 한 값 객체가 '차단' sentinel 과 충돌하면 무증상 상태 누수 — 레포의 unregister 경로에 실제로 잔존하는 결함 유형",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "프레임워크가 사용자 코드를 발견·해석하는 지점은 서브클래스가 오버라이드할 수 있는 명시적 parse_* 메서드로 분리하고, 옵션 스키마는 TypedDict 로 문서화하며 누락 키는 normalize 함수의 setdefault 로 보장한다",
+          "priority": "SHOULD",
+          "confidence": "medium",
+          "ref_files": [
+            "src/pluggy/_manager.py:176-199",
+            "src/pluggy/_hooks.py:282-288",
+            "src/pluggy/_hooks.py:41-75"
+          ],
+          "good_example": "def normalize_hookimpl_opts(opts: HookimplOpts) -> None:\n    opts.setdefault(\"tryfirst\", False)\n    opts.setdefault(\"trylast\", False)\n    opts.setdefault(\"wrapper\", False)\n    opts.setdefault(\"hookwrapper\", False)\n    opts.setdefault(\"optionalhook\", False)\n    opts.setdefault(\"specname\", None)",
+          "bad_example": "opts = getattr(method, \"myproj_impl\", {})\ntryfirst = opts[\"tryfirst\"] if \"tryfirst\" in opts else False\ntrylast = opts.get(\"trylast\") or False",
+          "reason": "발견 로직을 메서드로 노출해 pytest 등 호스트가 관례를 커스텀 — 옵션 기본값은 한 곳에서 보장",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        },
+        {
+          "rule": "호출 계약 위반은 가능한 가장 이른 시점에 진단한다 — 호출은 키워드 인자만 허용하고, 스펙 선언 인자가 빠지면 실행 전에 경고하며, 구현이 스펙에 없는 인자를 요구하면 등록 시점에 검증 에러를 낸다",
+          "priority": "SHOULD",
+          "confidence": "high",
+          "ref_files": [
+            "src/pluggy/_hooks.py:528-543",
+            "src/pluggy/_manager.py:344-352",
+            "src/pluggy/_hooks.py:509-526"
+          ],
+          "good_example": "notinspec = set(hookimpl.argnames) - set(hook.spec.argnames)\nif notinspec:\n    raise PluginValidationError(\n        hookimpl.plugin,\n        f\"Plugin {hookimpl.plugin_name!r} for hook {hook.name!r}\\n\"\n        f\"hookimpl definition: {_formatdef(hookimpl.function)}\\n\"\n        f\"Argument(s) {notinspec} are declared in the hookimpl but \"\n        \"can not be found in the hookspec\",\n    )",
+          "bad_example": "def __call__(self, *args, **kwargs):\n    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, False)",
+          "reason": "인자 불일치를 훅 실행 시점의 KeyError 로 미루면 어느 플러그인·어느 선언이 문제인지 추적 불가",
+          "layer": "shared",
+          "scope": "cross_project",
+          "evidence": [],
+          "rationale_tier": "cited",
+          "exemplar_verbatim": true
+        }
+      ],
+      "anti_patterns": [
+        {
+          "pattern": "레거시 패턴 즉시 제거 (경고 없는 하드 브레이크)",
+          "reason": "수천 개 하위 플러그인 파손 — 이 레포는 예외 없이 warn-then-error 경로를 쓴다",
+          "alternative": "지원 유지 + DeprecationWarning(대안·예고 포함) + 만료 조건 명시 suppress 목록"
+        },
+        {
+          "pattern": "잘못된 옵션 조합을 받아들이고 런타임에서 조용히 오동작",
+          "reason": "훅 실행 깊숙한 곳의 무증상 오류는 플러그인 작성자가 추적 불가",
+          "alternative": "선언/등록 시점 ValueError·PluginValidationError (plugin 객체 첨부)"
+        }
+      ],
+      "file_type_guides": {},
+      "checklist": [
+        "공개 표면 변경에 deprecation 경로(경고+대안+예고)가 있는가?",
+        "비호환 옵션 조합이 선언/등록 시점에 거부되는가?",
+        "리네임에 historical alias + 버전 주석이 남는가?",
+        "None-sentinel 상태 구분에 truthiness 를 쓰지 않았는가?"
+      ],
+      "raw_llm_output": "(skill-mode)",
+      "error": null
+    }
+  ],
+  "analysis_duration_seconds": 0.0,
+  "project_structure": "8935d2002c98813f/\ndocs/\n  conf.py\n  examples/\n    eggsample/\n    eggsample-spam/\n      eggsample_spam.py\n      setup.py\n      eggsample/\n        __init__.py\n        hookspecs.py\n        host.py\n        lib.py\n      setup.py\n    toy-example.py\ndownstream/\n  run_downstream.py\nscripts/\n  release.py\n  towncrier-draft-to-file.py\nsrc/\n  pluggy/\n    __init__.py\n    _callers.py\n    _hooks.py\n    _manager.py\n    _result.py\n    _tracing.py\n    _warnings.py\ntesting/\n  benchmark.py\n  conftest.py\n  test_details.py\n  test_helpers.py\n  test_hookcaller.py\n  test_invocations.py\n  test_multicall.py\n  test_pluginmanager.py\n  test_result.py\n  test_tracer.py\n  test_warnings.py",
+  "files_by_layer": {
+    "shared": 30
+  },
+  "historic_shas": [
+    "009bdc311ef27a2e3a7e7c4c379aa0136b73a687",
+    "0194e630c6b115595c0c99d0a7f3b900a4974327",
+    "01bfb3ee69df0de23d571fe95e3ecffbe0436f2b",
+    "0258484dc180a0c28705de83783b269f4fed4873",
+    "04d7b295c59f7ac0d3d9f96e91d2e4eebecb7db0",
+    "04e9a9b9c766ff597df3ea45eb7f9b5879acdebd",
+    "0673c99034d1d770e2403558a776bc14b86dad7e",
+    "075921001ef5ac89796e1ac3e845dea7877f3ae4",
+    "09d75893ccab20ffea9528682575e7f2f1fcccd3",
+    "0a959f8fa6c0e3c362592dc0e403d27bb17ed336",
+    "0aa2462ebd8639fe888a7a632b2f16727c2702b3",
+    "0b45952cf9f8fece53a5efd1cf40466b5714c17f",
+    "0b7790eb2adf436c6df39c9a2256aa8a31ba3893",
+    "0d2850a76525aae5c4f03d0d5e987f2b8e90f944",
+    "0fa7d9e521039309bf5ebd0a202de2cb0f44a5c0",
+    "11443b4007895d7d9d560a7aa6bdbe8b6cda243b",
+    "12133da6cbb2956f9730caedfcf13ca025e45f48",
+    "12880913bf3114f84a5af63b3f6a5ac5c5a6eb7b",
+    "12ea858f2624f951c7924db7f0e1310717c177c7",
+    "13b3661080cd3f6dcae1dedbceac6814b740c6dc",
+    "1424ab0a6a54a878b171c806a39c79d54817c531",
+    "1507ec488f7ff395510434ed934666bcf085a8d4",
+    "159d95ae56ecadd5b12a06e0cb400bc4f281a2a8",
+    "1766a944e3790bd47847ab2ac70b1618ebc305b5",
+    "19055e53471c7a34a91be8267d766f7e4a9d4c83",
+    "195289ba26e04b2a9155386998dd6583a510e8b5",
+    "198eb6aba335adf79c4ffe7c51669783cff5ea0a",
+    "1b2a86ad7e901203a9b3df0d38fd58324b3122b8",
+    "1b5fd512ca9aa6ceb3d6695aae883c8ecb5742d0",
+    "1be7c25235f8e336d68945f17fe1345d1d0aa6cc",
+    "1cefdbaf430da88032f0b98ca1ce814bf17a81bd",
+    "1ec0408cb9f6caca3ea4fbae896c7f6ed3dd6774",
+    "1f6dc215338747f596f6df664ef2f7cd500c658f",
+    "204737edf0226eed9b865883ce2e983b7708e1c1",
+    "20b419d7711ec84c5357efa2d6eefbd8ca1c4112",
+    "20c352cb17debf4753135950740b80e3a956534e",
+    "20d8143f127a4d7526dbbea441857b4b80ec8bdd",
+    "2100bbf5c5dccb0d83a711649fd6e762f1e89596",
+    "21fd6c4d681191b5399ed4bc57f69ba0455d4e67",
+    "25a84da5865cd10d2867c72bcfb29a1e0b251e53",
+    "25af101747d61479fd31f507a4122da377150db7",
+    "26ddfe43f78cf3264895cbb16f39dc4fded1445d",
+    "2b015278ab85bee09d6d0eaad2fec3e6fbb09708",
+    "2b3933998096e0d3af9044a8b626fac2ddad42dd",
+    "2c1fd62786aeb465bc17331ff5aee320cb58ad95",
+    "2f5109ac339353e7018711374843a4b5909d594a",
+    "306639844ef9bc12f6519aa71413242ba2f81d56",
+    "32a02876aba75104129861472fb0efd733149f48",
+    "33a6936813009208a97e6b194216a3dbe7ab2e57",
+    "33ca1a945610dd405fa1b736bee42549303f2615",
+    "3875ea55ce4949fc89d8875ed5ef7275d2d2f890",
+    "387c7422d4724133085ec8f7aa6f3e7a44a40410",
+    "393309ed43fbf852a698fe7dcd763d282a761590",
+    "39f2136ee85857599bee46526381399587aad90f",
+    "3a7a0157dfb2b6369866b75ddb99d50ce7b15f59",
+    "3bc3aab681d8c17536fe0a952ad571e3fac5c27e",
+    "3f1eda532d0914fa6ffc7c165ce1239ef6a3824b",
+    "40f3ab1293c48d2a149a5328be893dc3fa08b395",
+    "429c5fc05263aa2d027d7451852dc8766441859c",
+    "4326ced299cc37f4abc57c22c6298362b5379602",
+    "443fee6d7a30ca694aa2eec77bde4aea9356efa0",
+    "445e29bd8b87b6e452699bf9b7f17c1418a8f6c1",
+    "4497278ec224c8a1eaddc3c2686f92ed2a58db38",
+    "4577b459a9043ba283e0d7a39beeddd627cc54a0",
+    "45b64240dc02349b757b4e63a487af80b021983d",
+    "480c975ebcacece75b43000cff7df07bc8afdf40",
+    "4a0153e51b477429d366f65ceb1711797cc45e93",
+    "4a8bf5cd22fce4c9e31b40d259ce0b201df5b73b",
+    "4c19d8da3ddca373e4bff8274002d6d173f89870",
+    "4cef8cb44734f3641ab09a58590198931b67a997",
+    "4dd2443ab8353ad3da638141597920b3bd7f7e5e",
+    "51e8df2ea682aeaef4ee42871c09479d699fa2de",
+    "550676344f7b8bf6926f65389c073e7429bb4dc5",
+    "550f4b24b60c4b71ec0f85dbf7850049b9a08812",
+    "5631ed96fb7f9f7cec6f981483325236cd5cceee",
+    "5758ba098b670604c94d709d507d51ceaf0d94e4",
+    "587848d2f5aa9630a69fe94bfcf800bc44c6bdbc",
+    "59e0ca3d7a35e60bdd769cfd97678b801b9472a4",
+    "5a1297356847937323494deed67bcabe0b88a1f0",
+    "5a5cf4e577b7fa4b12c26d5e707a240db8e0a25e",
+    "5ab312cc07408138e15b6b1f00ce45bf2d7e9319",
+    "5b9a37cbf43fee0f3bbf8ed03586e5dd0695bf56",
+    "5c6846f0a9632015e99661515d40f0f523350573",
+    "5d1ffb9a769b2dbeaaab0d05455c66aa7aa5ecf4",
+    "5d21bc99da48e9c1751992ea3634189c21f7daa3",
+    "5deb645dd303d2d96597a23370bd8c4531290a26",
+    "60f0fd6ff0298b509f0685d96989bb11d487938e",
+    "6283b3b9d24f478f40ec3f4bcc8a7a7742b1e991",
+    "63b7e908b4b22c30d86cd2cff240b3b7aa6da596",
+    "64d79154df0a36ba0782cf7438f32949d599eca7",
+    "653a1e9bedb83db0a1c878093d3671226cc2a613",
+    "69c3255f7e57af33ac916e24656365f1b912b616",
+    "6a417de0f060e421008ab9ebbc066111a4bc6705",
+    "6babb6e64e93ed74a72203fdc67955ae8ca3bfb3",
+    "6e3fc5fb262df1133d693334425af7aedf3056f3",
+    "6f28953a8590c22064c141e9ebb5b996677090e2",
+    "6f6ea680ca5a1f73dca356eb23c0dd6bd5f7190e",
+    "6fdb034a61d27848d2b4c7298fcb8cc815eeaca2",
+    "718c27e757723c371ebf8b2dbc1a1b5374887d91",
+    "71f2d6b4a21381314f730dd5b5f93519882f79da",
+    "72948afada60cd9d6474b4631fabb864731de578",
+    "7372a055bf5752297d35262be62e568aa98b5c31",
+    "739fcd4e8aa61c6a2dea845bfe44f45245e2ff8a",
+    "74876c40efa3137aee8ebf5d53d9542d65a13381",
+    "7748ba01bb5acb9333bcafc442a04fda975143c6",
+    "7791b9c3ae22f76fcdd869a0db2426df14475a88",
+    "7aabba9a152e5ea4246d3a7b5eead43922656fa5",
+    "7aef3e608fddc57648daffaec23432e6893f26ff",
+    "7c9d0fa7c994f5f52585f47ac40ba9bb8dc5970e",
+    "7f5213ea9a179dc1c925eb449434cdc1faa1312f",
+    "8029ab004ddd7e863980419d1adeacb9b819d437",
+    "80a489128e868143914662ce18826c65dab647fb",
+    "80a73dcf58eb0bf8e707c89bd572a46cc69eb141",
+    "83f1a8977d4bbbb2bbbc70106c06bbe29b7a74e2",
+    "843d4b93e3d3fb41de66911792640dbd8d59ba8e",
+    "84fb9ea33da186c24652a84e854960091927fcd6",
+    "85a6c242bad5c6bcb1c9ff4239e12d4e271afe3f",
+    "85e1d742c616c24ca3e8c82461cde09cf62e6426",
+    "86f3aa49dcac0a43330134feb2ab397488a086ed",
+    "8867b1c9c66e52255b4acf0ff45353484969d92e",
+    "8900b4c09ed0ea31c448d900800d58be3ea47477",
+    "894b5e2599f0800ec48cb36cd9a36ae40d7461bb",
+    "8984e86069a6aa82a1900e07569913f11ac4fc8e",
+    "8b9fd3a432d65f3b85066c21abe8af785315e5cf",
+    "8e0c74dac3b4bda53359c38d92ce31c40ce4f03d",
+    "92e72be06e7a472d7cf529056ec47e3433bf6c3d",
+    "93ac1e9c468c733fb632237836766795f647d755",
+    "9538f2a75d248afafeecfd7dbb44a28d4d12aba9",
+    "9550fc30e06bf7037e7747356e58bc53d1d6e33b",
+    "95bbf5ebe9662f826dee9130a5b0271287f96d06",
+    "96c99518a396f0f264e2815f096ed77da15ca98e",
+    "96e05d6bae463a1b2dfc46dedcfed95d201a622e",
+    "973fb561869c315a269281817f3b3de4be6f9c43",
+    "9a2172571ef7ccd1f90124ceddb19c0434b50bfe",
+    "9a476aa33e15cb1f3e71c9909ff9db99af9a1aaf",
+    "9a9e3c274141a25ef617195b4ccc67cd68497465",
+    "9cf2eaa50dd1ad3ebf042978629e78c695197095",
+    "9ef53eefa5d6016dec48ee02a2b385a320898471",
+    "9fddd543a093ad49b25354e4a07e1a0171742cc4",
+    "a05bdd56e19085bbb48dc9e8cb8c56df26e81fe7",
+    "a10dbae8ffd427f56cc0e1f4445615a1814d6baf",
+    "a20a6670c1b9288e199b6959566c4969728ee474",
+    "a2939c044b64b9445fab85fcc02a66b237c035e4",
+    "a34c2d52d7fae4ac7f2e6b04f18d22ec8ade029b",
+    "a400a2cb9f9f7cac5a936d540c42abdc95348290",
+    "a568a9fe545df0c7e5310bf1fd7dd70f19ca7a30",
+    "a57f279592c32b291a523c1d14defc3eeda08c8a",
+    "a7b0165a0e38ee412bdf5730f005827135054c14",
+    "a90470fe3f1661438405b3dad642ca2206a2abb3",
+    "aac593436a655905e77ce63dd6446d7503834e8d",
+    "accb6d66b349b374d6b9f817f9ad33fc4c792859",
+    "ad2f915b6a68c4f4e1f04fb6cd1fad44dcb64e99",
+    "afb9f7514c6f4df8820eb714d8f7e8b2e925207e",
+    "b05954e58dd1d2b698baf698204c5775d4f1ad61",
+    "b0f3b6d616fbb5235ad5f9757b712173c4ace45e",
+    "b18141489d98ff34211e3a36c369b1adec1a1255",
+    "b46ac5f7a3c26de44b5e6bef117a1b5f2217c96d",
+    "b4c214659c61f8c6746755af70aab58bd78372cc",
+    "b5fb741127471a98d5cb91264640218e3bbe83ff",
+    "b607b015329d3fc03f0bf5eacc604f436ddb4aec",
+    "b6be9d907422621d878b09234146db9598ee3a59",
+    "b806ff939278d45ca5d305e6ba3f1c26c6e8809b",
+    "b8fceda01a5e5879dfeead83a526c890f47095bd",
+    "bd9ecb32f19f38685d8e2dcf3e2a7a817fec644d",
+    "bebd02418f67d7a0f01ab27b9cfe7d0d7650faa9",
+    "bfc2ae35973e54ec32fec95aa05772ecf90acb64",
+    "c1dfc0b9ca32355c214883471d15ecc5133cd2b8",
+    "c2286a9ce6665b287da94ea7e48504e65ff62298",
+    "c253ce2e743f293b1307a4f5f67153b2b34c9dca",
+    "c4e254ca53d02f969c81586dc50c83cc8bb3dea9",
+    "c5277e4e9d374ca99d20d4f92fa42e17d48da678",
+    "c66077d8c017c2728517be74701ebf06859c980d",
+    "cfa7ed15797c8b85477f35043132de4d861f4945",
+    "d0ab3611f662ec5c8809fee50b304ec7af672365",
+    "d19c9bf89fe176c00756a3f9a97c67b1e4a6c2ba",
+    "d22672d954866276e04c8a6e4d3a4ba822604314",
+    "d2baceeeaf9369be92122dd666bca2790bbe6163",
+    "d2e19a4f9f72d48d5eb724acc4d4177e0b4ca74f",
+    "d32e6c9c04f8793387a5b5811509e3abe0b53668",
+    "d3877d47a0cd2a142c9d63c97c46d73b97d1b423",
+    "d3e72b0d9a1089e49948b039b83b32b16fb9e559",
+    "d4437645b3c537939cae8a091694b0cc40896071",
+    "d59403bf817f015ec24af96eaffacbdf6ac0b475",
+    "dbb1c44495f01568b7a572fc7eb1ae866c75991f",
+    "dbda5aa8848170c19192d11998245316efc47772",
+    "dd20a85e38af556e1c818b03391eab1480438e0c",
+    "ddb9161c3185f24fec785456b57d348f4def1146",
+    "de2669fae04ba83b5206620e2a6518df145af7d0",
+    "dee4fd903b9fb8d43c08b4b7e1271f5f65c42b2d",
+    "df14939f50b8d0e84974c1d28bb3a6822a92f8b0",
+    "dfedf4a6ca2d7165b45dbdab643371fee2215365",
+    "e241aed3efdde28e6862386a06d4faf840165650",
+    "e28defcbcf73b6ddb1c8a16228a9bfe87acb98a2",
+    "e2dcf96dbfa1e40166feebd51301d076e37bca6b",
+    "e37c8d0c4e6609d58b5b0875a4d431613cd21636",
+    "e3875879865100e86cad88050e63f4f0df9671a7",
+    "e507275d33b03b7e7161b2d8c9b184939973bc91",
+    "e587897dcc0766e801acc1fdaad8148edfcb5cf8",
+    "e73533604f133aab2b4b72a16ef9a3405b13e5c4",
+    "e77787bb8fb91d797b315a482216ee1b11bfc5ee",
+    "e84fdfa07a07290afd9fcd62052f6f4a6f4d9eec",
+    "e98b20c15234db25355dd50fa6594ad1a77a2e03",
+    "eb70fb9b484022da2587ee5967bdbb39a75cd38c",
+    "ef768f28d572b83e068adfd3789183c712291042",
+    "efe096a2b4013c18b1c63856319fc1f74957f625",
+    "f0535d2683710e056b6c512f3decbcab0ada5108",
+    "f087c1ee7415200428fd0cbe9b12b550da6e6172",
+    "f1a227086408437dd9e52350200bdabc8e6fe22f",
+    "f203602b5c5e901f54895c1872becf0b48438628",
+    "f5e6b7c7b92795dc9e98e27ae9dd871bf8c994df",
+    "f842d957a58088d0711515e8037e88eabe39ca74",
+    "fa2af2b84a3c164b7a16ac340119d42668a7da40",
+    "fa9c5aec4c8ae31356a2f3f8cdcf9982834b0ab4",
+    "fbc444218c442dd8cbe29bd68cde8fea52b56baf",
+    "fc6395ca27d5deb008db250da57a23dd40bc93a4",
+    "fd62ef81595f84c08e35a80fa5834ef51d9c37fe"
+  ],
+  "repo_doc_paths": [
+    "README.rst"
+  ],
+  "exemplars": [
+    {
+      "file_path": "testing/test_details.py",
+      "line_range": [
+        132,
+        152
+      ],
+      "code": "def test_plugin_getattr_raises_errors() -> None:\n    \"\"\"Pluggy must be able to handle plugins which raise weird exceptions\n    when getattr() gets called (#11).\n    \"\"\"\n\n    class DontTouchMe:\n        def __getattr__(self, x):\n            raise Exception(\"can't touch me\")\n\n    class Module:\n        x: DontTouchMe\n\n    module = Module()\n    module.x = DontTouchMe()\n    with pytest.raises(Exception, match=\"touch me\"):\n        module.x.broken\n\n    pm = PluginManager(hookspec.project_name)\n    # register() would raise an error\n    pm.register(module, \"donttouch\")\n    assert pm.get_plugin(\"donttouch\") is module",
+      "layer": "shared",
+      "role": "test",
+      "name": "test_plugin_getattr_raises_errors",
+      "why_chosen": "fully type-annotated, well-documented, sweet-spot length (21 lines)"
+    },
+    {
+      "file_path": "src/pluggy/_hooks.py",
+      "line_range": [
+        79,
+        162
+      ],
+      "code": "class HookspecMarker:\n    \"\"\"Decorator for marking functions as hook specifications.\n\n    Instantiate it with a project_name to get a decorator.\n    Calling :meth:`PluginManager.add_hookspecs` later will discover all marked\n    functions if the :class:`PluginManager` uses the same project name.\n    \"\"\"\n\n    __slots__ = (\"project_name\",)\n\n    def __init__(self, project_name: str) -> None:\n        self.project_name: Final = project_name\n\n    @overload\n    def __call__(\n        self,\n        function: _F,\n        firstresult: bool = False,\n        historic: bool = False,\n        warn_on_impl: Warning | None = None,\n        warn_on_impl_args: Mapping[str, Warning] | None = None,\n    ) -> _F: ...\n\n    @overload  # noqa: F811\n    def __call__(  # noqa: F811\n        self,\n        function: None = ...,\n        firstresult: bool = ...,\n        historic: bool = ...,\n        warn_on_impl: Warning | None = ...,\n        warn_on_impl_args: Mapping[str, Warning] | None = ...,\n    ) -> Callable[[_F], _F]: ...\n\n    def __call__(  # noqa: F811\n        self,\n        function: _F | None = None,\n        firstresult: bool = False,\n        historic: bool = False,\n        warn_on_impl: Warning | None = None,\n        warn_on_impl_args: Mapping[str, Warning] | None = None,\n    ) -> _F | Callable[[_F], _F]:\n        \"\"\"If passed a function, directly sets attributes on the function\n        which will make it discoverable to :meth:`PluginManager.add_hookspecs`.\n\n        If passed no function, returns a decorator which can be applied to a\n        function later using the attributes supplied.\n\n        :param firstresult:\n            If ``True``, the 1:N hook call (N being the number of registered\n            hook implementation functions) will stop at I<=N when the I'th\n            function returns a non-``None`` result. See :ref:`firstresult`.\n\n        :param historic:\n            If ``True``, every call to the hook will be memorized and replayed\n            on plugins registered after the call was made. See :ref:`historic`.\n\n        :param warn_on_impl:\n            If given, every implementation of this hook will trigger the given\n            warning. See :ref:`warn_on_impl`.\n\n        :param warn_on_impl_args:\n            If given, every implementation of this hook which requests one of\n            the arguments in the dict will trigger the corresponding warning.\n            See :ref:`warn_on_impl`.\n\n            .. versionadded:: 1.5\n        \"\"\"\n\n        def setattr_hookspec_opts(func: _F) -> _F:\n            if historic and firstresult:\n                raise ValueError(\"cannot have a historic firstresult hook\")\n            opts: HookspecOpts = {\n                \"firstresult\": firstresult,\n                \"historic\": historic,\n                \"warn_on_impl\": warn_on_impl,\n                \"warn_on_impl_args\": warn_on_impl_args,\n            }\n            setattr(func, self.project_name + \"_spec\", opts)\n            return func\n\n        if function is not None:\n            return setattr_hookspec_opts(function)\n        else:\n            return setattr_hookspec_opts",
+      "layer": "shared",
+      "role": "other",
+      "name": "HookspecMarker",
+      "why_chosen": "fully type-annotated, well-documented, sweet-spot length (84 lines)"
+    },
+    {
+      "file_path": "downstream/run_downstream.py",
+      "line_range": [
+        36,
+        52
+      ],
+      "code": "class EnvironmentUv(BaseModel):\n    \"\"\"uv-venv: create venv, install editables + optional groups/packages.\"\"\"\n\n    model_config = ConfigDict(extra=\"forbid\")\n\n    editables: list[str] = Field(min_length=1)\n    groups: list[str] = Field(default_factory=list)\n    packages: list[str] = Field(default_factory=list)\n\n    @field_validator(\"editables\")\n    @classmethod\n    def editables_non_empty_strings(cls, v: list[str]) -> list[str]:\n        for i, s in enumerate(v):\n            if not s.strip():\n                msg = f\"editables[{i}] must be a non-empty string\"\n                raise ValueError(msg)\n        return v",
+      "layer": "shared",
+      "role": "other",
+      "name": "EnvironmentUv",
+      "why_chosen": "partially typed, 1-line docstring, sweet-spot length (17 lines)"
+    },
+    {
+      "file_path": "testing/test_details.py",
+      "line_range": [
+        155,
+        181
+      ],
+      "code": "def test_not_all_arguments_are_provided_issues_a_warning(pm: PluginManager) -> None:\n    \"\"\"Calling a hook without providing all arguments specified in\n    the hook spec issues a warning.\"\"\"\n\n    class Spec:\n        @hookspec\n        def hello(self, arg1, arg2):\n            pass  # pragma: no cover\n\n        @hookspec(historic=True)\n        def herstory(self, arg1, arg2):\n            pass  # pragma: no cover\n\n    pm.add_hookspecs(Spec)\n\n    with pytest.warns(UserWarning, match=r\"'arg1', 'arg2'.*cannot be found.*$\"):\n        pm.hook.hello()\n    with pytest.warns(UserWarning, match=r\"'arg2'.*cannot be found.*$\"):\n        pm.hook.hello(arg1=1)\n    with pytest.warns(UserWarning, match=r\"'arg1'.*cannot be found.*$\"):\n        pm.hook.hello(arg2=2)\n\n    with pytest.warns(UserWarning, match=r\"'arg1', 'arg2'.*cannot be found.*$\"):\n        pm.hook.hello.call_extra([], kwargs=dict())\n\n    with pytest.warns(UserWarning, match=r\"'arg1', 'arg2'.*cannot be found.*$\"):\n        pm.hook.herstory.call_historic(kwargs=dict())",
+      "layer": "shared",
+      "role": "test",
+      "name": "test_not_all_arguments_are_provided_issues_a_warning",
+      "why_chosen": "fully type-annotated, well-documented, sweet-spot length (27 lines)"
+    },
+    {
+      "file_path": "testing/test_helpers.py",
+      "line_range": [
+        121,
+        132
+      ],
+      "code": "def test_varnames_bound_method_from_module_function() -> None:\n    \"\"\"A module-level function assigned to a class attribute becomes a bound\n    method when accessed on an instance, but its __qualname__ has no dot.\n    varnames must still strip the first parameter.\"\"\"\n\n    def standalone(self, x) -> None:\n        pass  # pragma: no cover\n\n    class MyClass:\n        method = standalone\n\n    assert varnames(MyClass().method) == ((\"x\",), ())",
+      "layer": "shared",
+      "role": "test",
+      "name": "test_varnames_bound_method_from_module_function",
+      "why_chosen": "fully type-annotated, well-documented, sweet-spot length (12 lines)"
+    },
+    {
+      "file_path": "testing/test_helpers.py",
+      "line_range": [
+        135,
+        146
+      ],
+      "code": "def test_varnames_unconventional_first_param_name() -> None:\n    \"\"\"Bound methods strip unconditionally, but unbound methods with\n    non-standard first parameter names preserve all arguments.\"\"\"\n\n    class MyClass:\n        def method(this, x) -> None:\n            pass  # pragma: no cover\n\n    # Bound: stripped regardless of name.\n    assert varnames(MyClass().method) == ((\"x\",), ())\n    # Unbound with dotted qualname but non-implicit name: NOT stripped.\n    assert varnames(MyClass.method) == ((\"this\", \"x\"), ())",
+      "layer": "shared",
+      "role": "test",
+      "name": "test_varnames_unconventional_first_param_name",
+      "why_chosen": "fully type-annotated, well-documented, sweet-spot length (12 lines)"
+    },
+    {
+      "file_path": "testing/test_hookcaller.py",
+      "line_range": [
+        340,
+        365
+      ],
+      "code": "def test_hookrelay_registry(pm: PluginManager) -> None:\n    \"\"\"Verify hook caller instances are registered by name onto the relay\n    and can be likewise unregistered.\"\"\"\n\n    class Api:\n        @hookspec\n        def hello(self, arg: object) -> None:\n            \"api hook 1\"\n\n    pm.add_hookspecs(Api)\n    hook = pm.hook\n    assert hasattr(hook, \"hello\")\n    assert repr(hook.hello).find(\"hello\") != -1\n\n    class Plugin:\n        @hookimpl\n        def hello(self, arg):\n            return arg + 1\n\n    plugin = Plugin()\n    pm.register(plugin)\n    out = hook.hello(arg=3)\n    assert out == [4]\n    assert not hasattr(hook, \"world\")\n    pm.unregister(plugin)\n    assert hook.hello(arg=3) == []",
+      "layer": "shared",
+      "role": "test",
+      "name": "test_hookrelay_registry",
+      "why_chosen": "fully type-annotated, well-documented, sweet-spot length (26 lines)"
+    },
+    {
+      "file_path": "testing/test_hookcaller.py",
+      "line_range": [
+        368,
+        390
+      ],
+      "code": "def test_hookrelay_registration_by_specname(pm: PluginManager) -> None:\n    \"\"\"Verify hook caller instances may also be registered by specifying a\n    specname option to the hookimpl\"\"\"\n\n    class Api:\n        @hookspec\n        def hello(self, arg: object) -> None:\n            \"api hook 1\"\n\n    pm.add_hookspecs(Api)\n    hook = pm.hook\n    assert hasattr(hook, \"hello\")\n    assert len(pm.hook.hello.get_hookimpls()) == 0\n\n    class Plugin:\n        @hookimpl(specname=\"hello\")\n        def foo(self, arg: int) -> int:\n            return arg + 1\n\n    plugin = Plugin()\n    pm.register(plugin)\n    out = hook.hello(arg=3)\n    assert out == [4]",
+      "layer": "shared",
+      "role": "test",
+      "name": "test_hookrelay_registration_by_specname",
+      "why_chosen": "fully type-annotated, well-documented, sweet-spot length (23 lines)"
+    }
+  ],
+  "pr_decisions": {
+    "items_scanned": 100,
+    "patterns": [
+      {
+        "pattern": "instead of",
+        "count": 2,
+        "examples": [
+          "## Summary `subset_hook_caller` fails to exclude plugins that use `specname` to map a differently-named method to a hook",
+          "## Summary `PluginManager.unregister()` fails to clean up the `_name2plugin` mapping for plugins whose truthiness is `Fa"
+        ]
+      }
+    ],
+    "decisions": [
+      {
+        "ref": "PR#649",
+        "title": "Fix subset_hook_caller failing to exclude plugins using specname",
+        "date": "2026-02-20 14:09:17 +0000",
+        "body_excerpt": "## Summary `subset_hook_caller` fails to exclude plugins that use `specname` to map a differently-named method to a hook. ## Problem The current filtering logic is: ```python plugins_to_remove = {plug for plug in remove_plugins if hasattr(plug, name)} ``` When a plugin registers a hook implementation via `specname`, the actual method on the plugin object has a different name than the hook: ```python class MyPlugin: @hookimpl(specname=\"my_hook\") def some_other_name(self, arg): ... ``` Here, `hasattr(plugin, \"my_hook\")` returns `False`, so the plugin is incorrectly kept in the subset even though it's in `remove_plugins`. This is used by pytest in conftest scoping via `subset_hook_caller`, so any conftest plugin using `specname` would not be properly excluded when it should be. ## Fix Instead",
+        "matched_patterns": [
+          "instead of"
+        ],
+        "maintainer_comment": "@pytest-dev/core i want to call to action @bysiber should get a public bann due to agentic abuse",
+        "intent_kind": "rejection",
+        "diff_excerpt": "--- src/pluggy/_manager.py\n@@ -516,7 +516,10 @@ def subset_hook_caller(\n         method which manages calls to all registered plugins except the ones\n         from remove_plugins.\"\"\"\n         orig: HookCaller = getattr(self.hook, name)\n-        plugins_to_remove = {plug for plug in remove_plugins if hasattr(plug, name)}\n+        registered_plugins = {impl.plugin for impl in orig._hookimpls}\n+        plugins_to_remove = {\n+            plug for plug in remove_plugins if plug in registered_plugins\n+        }\n         if plugins_to_remove:\n             return _SubsetHookCaller(orig, plugins_to_remove)\n         return orig"
+      },
+      {
+        "ref": "PR#648",
+        "title": "Fix unregister skipping cleanup for falsy plugin objects",
+        "date": "2026-02-20 14:08:30 +0000",
+        "body_excerpt": "## Summary `PluginManager.unregister()` fails to clean up the `_name2plugin` mapping for plugins whose truthiness is `False`. ## Problem The cleanup check in `unregister()` is: ```python # if self._name2plugin[name] == None registration was blocked: ignore if self._name2plugin.get(name): ``` The comment clarifies the intent: skip only when the value is `None` (which means registration was blocked via `set_blocked`). However, `self._name2plugin.get(name)` evaluates using truthiness, so a plugin object that is falsy (e.g., a container-like plugin where `__len__` returns 0 or `__bool__` returns False) will also be skipped. This leaves a stale entry in `_name2plugin`, which prevents re-registering a plugin with the same name later. ## Fix Use `is not None` instead of truthiness: ```python if s",
+        "matched_patterns": [
+          "instead of"
+        ],
+        "maintainer_comment": "this looks like a fully agentic pr without tests, i'm jsut going to close it\r\n",
+        "intent_kind": "rejection",
+        "diff_excerpt": "--- src/pluggy/_manager.py\n@@ -224,7 +224,7 @@ def unregister(\n                 hookcaller._remove_plugin(plugin)\n \n         # if self._name2plugin[name] == None registration was blocked: ignore\n-        if self._name2plugin.get(name):\n+        if self._name2plugin.get(name) is not None:\n             assert name is not None\n             del self._name2plugin[name]\n "
+      }
+    ]
+  },
+  "satd_items": {
+    "items": [
+      {
+        "ref": "src/pluggy/_hooks.py:442",
+        "tag": "TODO",
+        "text": "Document, or make private.",
+        "context": "        # TODO: Document, or make private.\n        self.spec: HookSpec | None = None\n        if specmodule_or_class is not None:\n            assert spec_opts is not None\n            self.set_specification(specmodule_or_class, spec_opts)"
+      },
+      {
+        "ref": "src/pluggy/_hooks.py:448",
+        "tag": "TODO",
+        "text": "Document, or make private.",
+        "context": "    # TODO: Document, or make private.\n    def has_spec(self) -> bool:\n        return self.spec is not None\n\n    # TODO: Document, or make private.\n    def set_specification("
+      },
+      {
+        "ref": "src/pluggy/_hooks.py:452",
+        "tag": "TODO",
+        "text": "Document, or make private.",
+        "context": "    # TODO: Document, or make private.\n    def set_specification(\n        self,\n        specmodule_or_class: _Namespace,\n        spec_opts: HookspecOpts,\n    ) -> None:"
+      },
+      {
+        "ref": "src/pluggy/_hooks.py:613",
+        "tag": "XXX",
+        "text": "remember firstresult isn't compat with historic",
+        "context": "                    # XXX: remember firstresult isn't compat with historic\n                    assert isinstance(res, list)\n                    result_callback(res[0])\n\n\n# Historical name (pluggy<=1.2), kept for backward compatibility."
+      },
+      {
+        "ref": "src/pluggy/_manager.py:154",
+        "tag": "XXX",
+        "text": "if an error happens we should make sure no state has been",
+        "context": "        # XXX if an error happens we should make sure no state has been\n        # changed at point of return\n        self._name2plugin[plugin_name] = plugin\n\n        # register matching hook implementations of the plugin\n        for name in dir(plugin):\n            hookimpl_opts = self.parse_hookimpl_opts(plugin, name)"
+      }
+    ]
+  },
+  "foresight_cards": [
+    {
+      "hypothesis": "pluggy 는 pytest/tox/devpi 생태계 전체의 최하부 의존성이므로 런타임 의존성 0 을 의도적으로 유지한다 — 여기서의 의존성 하나가 생태계 전체에 전이되기 때문",
+      "signals": [
+        "negative_space dep_count=0 — pyproject.toml [project.dependencies] 비어 있음",
+        "src/pluggy/_result.py, _tracing.py, _warnings.py — stdlib 만으로 직접 구현 (direct_impl_hints)",
+        "README.rst — 'This is the core framework used by the pytest, tox, and devpi projects.'"
+      ],
+      "falsification": "런타임 의존성을 추가하는 커밋/PR 이 머지되면 기각",
+      "tier": "corroborated",
+      "layer": "shared",
+      "verdict": "confirmed"
+    },
+    {
+      "hypothesis": "훅 호출 핫 경로의 성능이 명시적 설계 우선순위다 — pytest 가 훅을 수만 번 호출하므로, 등록(콜드) 비용을 올려서라도 호출(핫) 비용을 낮추는 교환을 반복한다",
+      "signals": [
+        "63b7e90 — 'avoid the list concatenation in the hot call path... it is much colder than calling so the tradeoff makes sense'",
+        "1288091 — 런타임 cast() 호출 제거: 'It actually adds measurable overhead here -- ~15% according to testing/benchmark.py'",
+        "testing/benchmark.py — varnames __code__ vs inspect.signature 비교 벤치마크 상주 (fd62ef8)"
+      ],
+      "falsification": "핫 콜 경로에 벤치마크 근거 없이 편의성 오버헤드를 추가하는 변경이 머지되면 기각",
+      "tier": "corroborated",
+      "layer": "shared",
+      "verdict": "confirmed"
+    },
+    {
+      "hypothesis": "하위호환 유지가 아키텍처 결정까지 지배한다 — 구식 hookwrapper 실행기를 별도 함수로 상주시키고, 서드파티 픽스 릴리스를 기다리는 suppress 목록까지 두는 것은 '생태계가 이주할 때까지 라이브러리가 비용을 부담한다'는 원칙",
+      "signals": [
+        "src/pluggy/_callers.py:27-57 — old-style hookwrapper 전용 실행기 함수 유지",
+        "src/pluggy/_hooks.py:294-303 — _NOSELF_WARN_SUPPRESS: 'pytest-timeout >=2.3.2 has the fix, but is unreleased as of 2026-05'",
+        "src/pluggy/_result.py:106-107 외 3곳 — 'Historical name (pluggy<=1.2), kept for backward compatibility.'"
+      ],
+      "falsification": "deprecation 기간 없이 레거시 지원을 즉시 제거하는 릴리스가 반복되면 기각",
+      "tier": "corroborated",
+      "layer": "shared",
+      "verdict": "confirmed"
+    }
+  ],
+  "repo_nature": "library"
+}

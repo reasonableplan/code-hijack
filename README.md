@@ -65,15 +65,22 @@ Who actually benefits, per the first downstream A/B (2026-07-04):
 
 Refinement after 3 A/B rounds (6 tasks, starlette + anyio): **rules change misuse-path behavior, not the happy path.** Every task that discriminated (rejected buffering pattern, deprecation lifecycle, context-manager re-entry guard) diverged on boundary/misuse handling — the part seniors learned from incidents; tasks whose trap was common knowledge or naturally avoided did not discriminate. Efficiency (tokens/turns) showed no consistent gain on self-contained generation tasks.
 
+Two axes settled after R4–R6 (werkzeug + pluggy, 2026-07-05/06):
+
+- **Behavior axis — discrimination requires a "shortcut gap."** Rules change behavior only where the weak model's default implementation is a *shortcut* (naive re-raise polluting tracebacks, silently accepting incompatible options). Where the default is already a robust pattern, or the trap is security common sense, rules are behaviorally redundant — werkzeug (hardening rules, probes 0/3) vs pluggy (shortcut-gap rules, probes 2/3) split exactly on this criterion. **Extraction quality and behavioral discrimination are different axes** (werkzeug: 94% cited yet the worst probe target).
+- **Efficiency axis — gains are confined to exploration-type tasks.** On a locate-and-fix task against a real unfixed bug, the rule-injected arm used −67% tool calls and −62% wall time (pluggy #649, N=1 directional) — matching the scope of 2601.20404. On self-contained generation tasks, only the rule-input token overhead (~+20%) remains.
+
 Context against the 2026 literature:
 
 - LLM-**generated** design rationale reaches precision ~0.27 with 1.6–3.2% actively misleading claims ([arxiv 2504.20781](https://arxiv.org/abs/2504.20781)). This is why code-hijack never asks the LLM to author the WHY — it surfaces the senior's **verbatim** evidence (commits, rejected PRs, SATD comments) and mechanically demotes any MUST without a verified citation.
-- The nearest-neighbor approach, Probe-and-Refine ([arxiv 2606.20512](https://arxiv.org/abs/2606.20512)), tunes repo guidance from synthetic-probe *behavior* (+7.5pp SWE-bench) but carries no provenance — it can say *what* works, not *why the seniors chose it*. code-hijack's axis is the recorded WHY; the two are complementary (probe-style verification of extracted rules is a Critic-layer candidate).
-- Context files measurably cut agent **cost** at equal completion: −28.6% runtime, −16.6% output tokens ([arxiv 2601.20404](https://arxiv.org/abs/2601.20404)). Efficiency is a value axis independent of quality — planned as a metric in the next A/B cycle.
+- The nearest-neighbor approach, Probe-and-Refine ([arxiv 2606.20512](https://arxiv.org/abs/2606.20512)), tunes repo guidance from synthetic-probe *behavior* (+7.5pp SWE-bench) but carries no provenance — it can say *what* works, not *why the seniors chose it*. code-hijack now carries both: the recorded WHY (verbatim evidence) plus per-rule behavioral probe badges (`behavior-confirmed` — [examples/pluggy](examples/pluggy/) is the first badged sample, 3 probed / 2 discriminated).
+- Context files measurably cut agent **cost** at equal completion: −28.6% runtime, −16.6% output tokens ([arxiv 2601.20404](https://arxiv.org/abs/2601.20404)) — but that paper's tasks are repo-exploration shaped. Our own A/B reproduces the gain only in that same scope (−67% tool calls on exploration vs no gain on self-contained generation; see the two axes above).
 
 ## Example outputs
 
-**Latest** — [`examples/starlette/`](examples/starlette/) (2026-05-06, v10 snapshot): [encode/starlette](https://github.com/encode/starlette), 67 files, 16 rules, **38% evidence-chain coverage** (6 verbatim citations including incident-grade evidence on a memory-regression PR), 31% MUST ratio after R6 auto-downgrade. The v11 (+security) and v12 (+performance) cycles ran 2026-05-06 in `hijack-output/validation-starlette-v{11,12}/` (gitignored); the published example reflects the 4-category v10 baseline.
+**Latest** — [`examples/pluggy/`](examples/pluggy/) (2026-07-06): [pytest-dev/pluggy](https://github.com/pytest-dev/pluggy), 30 files, 21 rules, **100% cited / 100% exemplar-verbatim**, 28.6% MUST ratio, foresight 3/3 confirmed, and the first sample with behavioral probe badges (3 probed / 2 discriminated, Haiku control-vs-treatment).
+
+Earlier — [`examples/starlette/`](examples/starlette/) (2026-05-06, v10 snapshot): [encode/starlette](https://github.com/encode/starlette), 67 files, 16 rules, **38% evidence-chain coverage** (6 verbatim citations including incident-grade evidence on a memory-regression PR), 31% MUST ratio after R6 auto-downgrade. The v11 (+security) and v12 (+performance) cycles ran 2026-05-06 in `hijack-output/validation-starlette-v{11,12}/` (gitignored); the published example reflects the 4-category v10 baseline.
 
 Representative patterns captured:
 - Locked middleware positions (ServerError outermost / Exception innermost framework-enforced)

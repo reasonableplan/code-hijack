@@ -2,9 +2,42 @@
 
 실제 시니어 오픈소스 레포를 code-hijack 으로 분석한 결과물. Skill 모드 (few-shot + critic) 적용.
 
-## [`werkzeug/`](werkzeug/) — Werkzeug (pallets) — **2026-07-05 (최신, 최고 품질 샘플)**
+## [`pluggy/`](pluggy/) — pluggy (pytest-dev) — **2026-07-06 (최신, 첫 probe 배지 샘플)**
 
-> 📊 현재까지 도구가 낸 최고 품질 세션. cited 94% (starlette v12 50% 대비), exemplar-verbatim 100%, incident evidence 11건 (프로젝트 최다). 결정론 공급 측정으로 후보 4개(uvicorn/attrs/structlog/werkzeug) 중 선정 — werkzeug 가 incident 11 로 압도적.
+> 📊 추출 지표 프로젝트 최고 (cited 100%, exemplar-verbatim 100%, foresight 3/3) + **행동 probe 배지가 실린 첫 공개 샘플** — 규칙 21개 중 3개를 Haiku control/treatment 로 행동 검증, 2개 discriminated (`behavior-confirmed` 배지). 표적 선정은 'incident 수'가 아니라 **지름길-갭 밀도** 기준 (werkzeug R4/R5 교훈).
+
+- **Analyzed**: https://github.com/pytest-dev/pluggy (history depth 30, 216 commits scanned)
+- **Total files scanned**: 30 (전량 순수 Python)
+- **Rules extracted**: 21 (8 architecture + 6 coding_style + 7 api_design)
+- **Quality metrics**:
+  - MUST ratio: 28.6% (전원 cited)
+  - **Rationale tier: cited 21 / speculative 0 (100%)**
+  - **exemplar_verbatim_ratio: 100%**
+  - intent_kind: rejection 2 / satd_citation_ratio 0.2 (SATD `XXX` 주석이 MUST 지탱)
+  - foresight: 3 카드 전원 confirmed (zero-deps 최하부 의존성 / hot-path 성능 / 생태계 하위호환)
+  - **probe: 3 probed, 2 discriminated** (traceback 보존, 비호환 옵션 선언 거부)
+
+### Highlights
+
+1. **저장 예외 재raise 는 원본 traceback 보존** (`with_traceback`) — probe 판별: control 은 tb 4→6→8 프레임 누적, treatment 는 불변 (evidence: commit `93ac1e9`, 1.1.0 회귀)
+2. **양립 불가능한 옵션 조합은 코드로 거부** — probe 판별: control 은 firstresult+historic 무증상 수용, treatment 는 선언 시점 ValueError + pluggy 원문 메시지 verbatim (evidence: SATD `_hooks.py:613`)
+3. **동작 변경은 테스트 동반 MUST** — 메인테이너가 테스트 없는 PR 을 리뷰 없이 닫은 실제 거절 코멘트가 evidence (PR#648 rejection)
+4. **핫 경로(호출)/콜드 경로(등록) 비용 명시적 교환** (evidence: commit `63b7e90`)
+5. **레거시는 깨지 말고 DeprecationWarning + 만료 조건 명시 suppress 목록** (evidence: `dd20a85`, `0258484`)
+
+### 부수 실측 (같은 세션의 A/B)
+
+탐색형 태스크(실존 미수정 버그 #649 수정)에서 규칙 주입 팔이 **툴콜 30→10 (−67%), 시간 −62%** (둘 다 정확한 수정, N=1 directional). 행동 probe 상세는 메인 README Positioning 참조.
+
+### How to use
+
+Copy [`pluggy/integrated/CLAUDE.md`](pluggy/integrated/CLAUDE.md) into your plugin-framework/library project's Claude Code context. Raw 데이터는 `2026-07-06_pluggy/session.json`, 지표는 `measurement.json`.
+
+---
+
+## [`werkzeug/`](werkzeug/) — Werkzeug (pallets) — **2026-07-05 (추출 지표 2위 샘플)**
+
+> 📊 cited 94% (starlette v12 50% 대비), exemplar-verbatim 100%, incident evidence 11건 (프로젝트 최다). 결정론 공급 측정으로 후보 4개(uvicorn/attrs/structlog/werkzeug) 중 선정 — werkzeug 가 incident 11 로 압도적.
 
 - **Analyzed**: https://github.com/pallets/werkzeug (history depth 30, 768 commits scanned)
 - **Total files scanned**: 138

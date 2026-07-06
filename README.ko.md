@@ -65,11 +65,16 @@ AI 에이전트가 짜는 코드는 일반적이고 일관성 없다. code-hijac
 
 3라운드 A/B (6 태스크, starlette + anyio) 후 정밀화: **규칙은 happy path 가 아니라 오용/경계 경로의 행동을 바꾼다.** 판별된 태스크(거절된 버퍼링 패턴, deprecation 수명주기, 컨텍스트 매니저 재진입 가드)는 전부 경계/오용 처리에서 갈렸다 — 시니어가 사고로 배운 부분. 함정이 상식이거나 자연 회피되는 태스크는 판별하지 못했다. 효율(토큰/턴)은 self-contained 생성 태스크에서 일관된 이득 없음.
 
+R4~R6 (werkzeug + pluggy, 2026-07-05/06) 후 2축 확정:
+
+- **행동 축 — 판별 조건은 '지름길-갭'.** 규칙은 약모델의 기본 구현이 *지름길*일 때만 행동을 바꾼다 (naive `raise` 로 traceback 오염, 비호환 옵션 무증상 수용). 기본이 이미 견고 패턴이거나 함정이 보안 상식이면 규칙은 행동적으로 잉여 — werkzeug(하드닝 규칙, probe 0/3)와 pluggy(지름길-갭 규칙, probe 2/3)가 이 기준을 실측으로 갈랐다. **추출 품질과 행동 판별력은 다른 축이다** (werkzeug 는 cited 94% 인데 probe 최악 표적).
+- **효율 축 — 이득은 탐색형 태스크에 한정.** 실존 버그를 레포에서 찾아 고치는 태스크에서 규칙 주입 팔이 툴콜 −67%, 시간 −62% (pluggy #649, N=1 directional) — 2601.20404 의 스코프와 일치. self-contained 생성 태스크에선 규칙 입력 오버헤드(토큰 +20% 안팎)만 남는다.
+
 2026 문헌 대비:
 
 - LLM 이 rationale 을 **생성**하면 precision ~0.27, 오도성 주장 1.6–3.2% ([arxiv 2504.20781](https://arxiv.org/abs/2504.20781)). code-hijack 이 WHY 를 LLM 에게 짓게 하지 않는 이유 — 시니어의 **verbatim** 증거(커밋, 거절 PR, SATD 주석)만 surface 하고, 검증 인용 없는 MUST 는 기계적으로 강등한다.
-- 최근접 접근 Probe-and-Refine ([arxiv 2606.20512](https://arxiv.org/abs/2606.20512)) 은 synthetic probe *행동*으로 레포 가이드를 튜닝 (+7.5pp SWE-bench) 하지만 provenance 가 없다 — *무엇이* 되는지는 말해도 *시니어가 왜 그렇게 골랐는지*는 못 말한다. code-hijack 의 축은 기록된 WHY; 둘은 상보적 (추출 규칙의 probe 검증은 Critic 레이어 후보).
-- 컨텍스트 파일은 동일 완성도에서 에이전트 **비용**을 실측으로 줄인다: runtime −28.6%, 출력 토큰 −16.6% ([arxiv 2601.20404](https://arxiv.org/abs/2601.20404)). 효율은 품질과 독립인 가치 축 — 다음 A/B 사이클의 지표로 예정.
+- 최근접 접근 Probe-and-Refine ([arxiv 2606.20512](https://arxiv.org/abs/2606.20512)) 은 synthetic probe *행동*으로 레포 가이드를 튜닝 (+7.5pp SWE-bench) 하지만 provenance 가 없다 — *무엇이* 되는지는 말해도 *시니어가 왜 그렇게 골랐는지*는 못 말한다. code-hijack 은 이제 둘 다 든다: 기록된 WHY(verbatim evidence) + 규칙 단위 행동 probe 배지 (`behavior-confirmed` — [examples/pluggy](examples/pluggy/) 가 첫 배지 샘플, 3 probed / 2 discriminated).
+- 컨텍스트 파일은 동일 완성도에서 에이전트 **비용**을 실측으로 줄인다: runtime −28.6%, 출력 토큰 −16.6% ([arxiv 2601.20404](https://arxiv.org/abs/2601.20404)) — 단 저 논문의 태스크는 레포 탐색형. 자체 A/B 도 같은 스코프에서만 재현 (탐색형 툴콜 −67% vs self-contained 생성 태스크 이득 없음, 위 2축 참조).
 
 ## Quickstart
 
