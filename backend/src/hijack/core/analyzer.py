@@ -311,13 +311,23 @@ async def _analyze_category(
     sha_to_date: dict[str, str],
     valid_pr_refs: set[str] | None = None,
     valid_comment_refs: set[str] | None = None,
+    pr_decisions_block: str = "",
+    satd_block: str = "",
+    commit_decisions_block: str = "",
 ) -> CategoryResult:
     selected = select_files_for_category(preprocess_result, category)
     summaries = build_file_summary_for_llm(selected)
     repo_context = render_repo_context(preprocess_result.repo_docs)
 
     try:
-        prompt = build_category_prompt(category, summaries, repo_context=repo_context)
+        prompt = build_category_prompt(
+            category,
+            summaries,
+            repo_context=repo_context,
+            pr_decisions_block=pr_decisions_block,
+            satd_block=satd_block,
+            commit_decisions_block=commit_decisions_block,
+        )
     except ValueError as e:
         return _error_result(category, "", str(e))
 
@@ -442,7 +452,11 @@ async def run_full_analysis(
     # via gh CLI. fetch_pr_decisions only accepts a GitHub URL directly, so a
     # local clone target is resolved to its GitHub remote first via
     # resolve_github_target (git remote get-url origin under the hood).
-    from hijack.core.pr_archaeology import fetch_pr_decisions, resolve_github_target
+    from hijack.core.pr_archaeology import (
+        fetch_pr_decisions,
+        render_pr_decisions_for_prompt,
+        resolve_github_target,
+    )
     parsed_gh = None
     try:
         parsed_gh = resolve_github_target(target or repo_root.as_posix(), repo_root)
@@ -457,14 +471,25 @@ async def run_full_analysis(
 
     # Phase C — commit-message decision trails: regex over Commit.body strings
     # already loaded by Phase 0's archaeology fetch. No new I/O.
-    from hijack.core.archaeology import extract_commit_decisions
+    from hijack.core.archaeology import (
+        extract_commit_decisions,
+        render_commit_decisions_for_prompt,
+    )
     commit_decisions = extract_commit_decisions(files)
 
     # W2 — SATD comment mining (TODO/FIXME/XXX/HACK): the senior's own inline
     # WHY. Pure AST-free regex pass over already-fetched files. Each item's
     # "path:line" ref is the truth pool for evidence kind="comment".
-    from hijack.core.satd import extract_satd
+    from hijack.core.satd import extract_satd, render_satd_for_prompt
     satd_items = extract_satd(files)
+
+    # CLI-mode evidence parity: render the three mined pools once as compact
+    # prompt blocks. Skill mode reads the pools from its own working context;
+    # CLI mode must inject them into every category prompt or the LLM can
+    # never cite kind="pr"/"comment" evidence (rejection/incident + SATD).
+    pr_decisions_block = render_pr_decisions_for_prompt(pr_decisions)
+    satd_block = render_satd_for_prompt(satd_items)
+    commit_decisions_block = render_commit_decisions_for_prompt(commit_decisions)
 
     # Evidence truth pools threaded into per-category tier assignment so pr /
     # comment citations survive normalize_rationale_tier (else a valid pr/SATD
@@ -487,6 +512,9 @@ async def run_full_analysis(
             sha_to_date=sha_to_date,
             valid_pr_refs=valid_pr_refs,
             valid_comment_refs=valid_comment_refs,
+            pr_decisions_block=pr_decisions_block,
+            satd_block=satd_block,
+            commit_decisions_block=commit_decisions_block,
         )
         category_results.append(result)
 

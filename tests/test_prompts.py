@@ -145,6 +145,66 @@ class TestRepoContextInjection:
         assert "<repo_context>\n" not in result[:files_idx]
 
 
+class TestEvidencePoolBlocks:
+    """CLI-mode evidence parity: mined pr/satd/commit pools injected as prompt blocks."""
+
+    _PR = "<pr_decisions>\n- PR#123 [rejection] No global cache\n</pr_decisions>"
+    _SATD = "<satd>\n- src/a.py:7 [TODO] drop shim\n</satd>"
+    _COMMITS = (
+        "<commit_decisions>\n- abc123def456 [instead of] use dataclasses\n</commit_decisions>"
+    )
+
+    def test_blocks_appear_when_given(self) -> None:
+        result = build_category_prompt(
+            "architecture", ["sample"],
+            pr_decisions_block=self._PR,
+            satd_block=self._SATD,
+            commit_decisions_block=self._COMMITS,
+        )
+        # Assert on payload unique to the injected blocks — "PR#123" itself
+        # also appears in the _OUTPUT_FORMAT instruction text.
+        assert "No global cache" in result
+        assert "src/a.py:7" in result
+        assert "abc123def456" in result
+
+    def test_blocks_absent_when_empty(self) -> None:
+        # Instruction text mentions the tags as citation sources, but no actual
+        # injected block should appear before <files> (same convention as the
+        # repo_context test above).
+        result = build_category_prompt("architecture", ["sample"])
+        head = result[: result.index("<files>")]
+        assert "<pr_decisions>" not in head
+        assert "<satd>" not in head
+        assert "<commit_decisions>" not in head
+
+    def test_block_order_repo_context_pr_satd_commits_files(self) -> None:
+        ctx = "<repo_context>\n### README.md\nhello\n</repo_context>"
+        result = build_category_prompt(
+            "architecture", ["sample"],
+            repo_context=ctx,
+            pr_decisions_block=self._PR,
+            satd_block=self._SATD,
+            commit_decisions_block=self._COMMITS,
+        )
+        assert (
+            result.index("<repo_context>")
+            < result.index("<pr_decisions>")
+            < result.index("<satd>")
+            < result.index("<commit_decisions>")
+            < result.index("<files>")
+        )
+
+    def test_output_format_documents_pr_and_comment_kinds(self) -> None:
+        result = build_category_prompt("architecture", ["sample"])
+        # Evidence kind enum line covers all five kinds.
+        assert '"commit" or "revert" or "doc" or "pr" or "comment"' in result
+        # Matching rules: verbatim <pr_decisions> refs, exact path:line for <satd>.
+        assert 'kind="pr"' in result
+        assert 'kind="comment"' in result
+        assert "PR#123" in result
+        assert '"path:line"' in result
+
+
 class TestNewCategoryPrompts:
     """7개 신규 카테고리 프롬프트 기본 동작 검증."""
 

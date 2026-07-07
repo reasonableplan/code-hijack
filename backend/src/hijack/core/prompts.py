@@ -94,7 +94,7 @@ Return a JSON object with this exact structure:
       "layer": "frontend" or "backend" or "db" or "devops" or "shared",
       "evidence": [
         {
-          "kind": "commit" or "revert" or "doc",
+          "kind": "commit" or "revert" or "doc" or "pr" or "comment",
           "ref": "<short SHA from <history>, or repo-relative path from <repo_context>>",
           "headline": "<verbatim subject or section heading, ≤120 chars>",
           "quote": "<verbatim body excerpt, ≤500 chars>",
@@ -170,13 +170,20 @@ QUALITY REQUIREMENTS (non-negotiable):
    Your job is to PRESERVE that reasoning verbatim, not paraphrase it.
 
    For each rule, fill `evidence` with one or more entries drawn from the
-   <history> and <repo_context> blocks in the input:
+   <history>, <repo_context>, <pr_decisions>, <satd>, and <commit_decisions>
+   blocks in the input (whichever are present):
 
    - `kind`: "commit" for any commit, "revert" for entries listed under
      `reverts touching this file`, "doc" for README / ARCHITECTURE / ADR /
-     CONTRIBUTING citations.
+     CONTRIBUTING citations, "pr" for PR/issue decisions from <pr_decisions>,
+     "comment" for SATD comments from <satd>.
    - `ref`: short SHA (commit/revert) OR repo-relative path (doc).
      Both MUST appear in the input. NEVER invent SHAs or doc paths.
+   - kind="pr": copy `ref` VERBATIM from a <pr_decisions> entry (e.g. "PR#123"
+     or "issue#456"). These carry the highest-value intent_kinds (rejection /
+     incident) — prefer a pr citation whenever one aligns with the rule.
+   - kind="comment": `ref` is the exact "path:line" string of a <satd> entry.
+     NEVER invent refs for pr or comment evidence.
    - `headline`: copy the actual subject (commit) or section heading (doc)
      VERBATIM. ≤120 chars. Single-quote inside the JSON string is fine.
    - `quote`: copy a substantive sentence from the body (commit body / doc
@@ -354,6 +361,9 @@ def build_category_prompt(
     file_summaries: list[str],
     *,
     repo_context: str = "",
+    pr_decisions_block: str = "",
+    satd_block: str = "",
+    commit_decisions_block: str = "",
 ) -> str:
     """카테고리 분석 프롬프트를 반환한다.
 
@@ -361,6 +371,10 @@ def build_category_prompt(
     repo_context: pre-rendered <repo_context> block from `core.docs`. Empty
     string means no repo-level docs were collected — the block is omitted
     rather than emitted with a placeholder.
+    pr_decisions_block / satd_block / commit_decisions_block: pre-rendered
+    <pr_decisions> / <satd> / <commit_decisions> blocks (render_*_for_prompt
+    in pr_archaeology / satd / archaeology). Empty string omits the block —
+    same convention as repo_context.
     """
     if category not in _CATEGORY_INSTRUCTIONS:
         raise ValueError(
@@ -371,10 +385,16 @@ def build_category_prompt(
     joined = "\n\n".join(file_summaries)
 
     context_section = f"{repo_context}\n\n" if repo_context else ""
+    pr_section = f"{pr_decisions_block}\n\n" if pr_decisions_block else ""
+    satd_section = f"{satd_block}\n\n" if satd_block else ""
+    commit_section = f"{commit_decisions_block}\n\n" if commit_decisions_block else ""
 
     return (
         f"You are an expert code analyst specializing in {category} analysis.\n\n"
         f"{context_section}"
+        f"{pr_section}"
+        f"{satd_section}"
+        f"{commit_section}"
         f"<files>\n{joined}\n</files>\n\n"
         f"{category_instruction}\n\n"
         f"{_OUTPUT_FORMAT}\n\n"

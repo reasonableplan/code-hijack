@@ -136,3 +136,32 @@ def _build_context(lines: list[str], idx: int) -> str:
     parts.extend(code_lines)
 
     return "\n".join(parts)[:_CONTEXT_CHAR_CAP]
+
+
+# Per-item cap on `context` in the prompt block — tighter than the stored
+# _CONTEXT_CHAR_CAP because the block is injected into EVERY category prompt.
+_PROMPT_CONTEXT_CHARS = 300
+
+
+def render_satd_for_prompt(satd_items: SatdItems | None, *, max_items: int = 20) -> str:
+    """Render SatdItems as a compact <satd> block for prompt injection.
+
+    Returns "" when there is nothing to show — caller drops the block entirely.
+    """
+    if satd_items is None or not satd_items.has_signal:
+        return ""
+
+    lines: list[str] = [
+        "<satd>",
+        "# The seniors' own inline WHY comments (self-admitted technical debt)."
+        ' For evidence kind="comment", `ref` must be one of the exact'
+        ' "path:line" ref strings listed below — never invent refs.',
+    ]
+    for item in satd_items.items[:max_items]:
+        lines.append(f"- {item.ref} [{item.tag}] {item.text[:_TEXT_CAP]}")
+        if item.context:
+            lines.append("  context:")
+            for ctx_line in item.context[:_PROMPT_CONTEXT_CHARS].splitlines():
+                lines.append(f"    {ctx_line.rstrip()}" if ctx_line.strip() else "")
+    lines.append("</satd>")
+    return "\n".join(lines)

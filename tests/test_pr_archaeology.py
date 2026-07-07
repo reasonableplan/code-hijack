@@ -20,6 +20,7 @@ from hijack.core.pr_archaeology import (
     _is_bot_pr,
     _strip_pr_template,
     fetch_pr_decisions,
+    render_pr_decisions_for_prompt,
     resolve_github_target,
 )
 
@@ -653,3 +654,121 @@ class TestStripPrTemplate:
     def test_keeps_prose_without_template(self) -> None:
         body = "We switched to X instead of Y because it avoids the race."
         assert _strip_pr_template(body) == body
+
+
+# ---------------------------------------------------------------------------
+# TestRenderPrDecisionsForPrompt
+# ---------------------------------------------------------------------------
+
+def _decision(
+    ref: str = "PR#1",
+    intent_kind: str = "rejection",
+    title: str = "Rejected approach",
+    body_excerpt: str = "decided not to use this",
+    maintainer_comment: str = "",
+    diff_excerpt: str = "",
+) -> PRDecision:
+    return PRDecision(
+        ref=ref,
+        title=title,
+        date="2024-01-01 00:00:00 +0000",
+        body_excerpt=body_excerpt,
+        matched_patterns=["decided not to"],
+        maintainer_comment=maintainer_comment,
+        intent_kind=intent_kind,
+        diff_excerpt=diff_excerpt,
+    )
+
+
+class TestRenderPrDecisionsForPrompt:
+    """CLI-mode evidence parity: compact <pr_decisions> block for prompt injection."""
+
+    def test_none_returns_empty_string(self) -> None:
+        assert render_pr_decisions_for_prompt(None) == ""
+
+    def test_no_signal_returns_empty_string(self) -> None:
+        empty = PRDecisions(items_scanned=0, patterns=[], decisions=[])
+        assert render_pr_decisions_for_prompt(empty) == ""
+
+    def test_block_tags_and_entry_fields(self) -> None:
+        decisions = PRDecisions(
+            items_scanned=1,
+            patterns=[],
+            decisions=[_decision(ref="PR#123", title="No global cache")],
+        )
+        out = render_pr_decisions_for_prompt(decisions)
+        assert out.startswith("<pr_decisions>")
+        assert out.endswith("</pr_decisions>")
+        assert "PR#123" in out
+        assert "[rejection]" in out
+        assert "No global cache" in out
+        assert "decided not to use this" in out
+        # Header comment instructs verbatim ref copying for kind="pr".
+        assert 'kind="pr"' in out
+        assert "VERBATIM" in out
+
+    def test_rejection_and_incident_before_preference(self) -> None:
+        # Refs chosen to not collide with the header's "e.g. PR#123, issue#456".
+        decisions = PRDecisions(
+            items_scanned=3,
+            patterns=[],
+            decisions=[
+                _decision(ref="PR#77", intent_kind="preference"),
+                _decision(ref="PR#88", intent_kind="incident"),
+                _decision(ref="issue#99", intent_kind="rejection"),
+            ],
+        )
+        out = render_pr_decisions_for_prompt(decisions)
+        assert out.index("PR#88") < out.index("PR#77")
+        assert out.index("issue#99") < out.index("PR#77")
+
+    def test_caps_at_max_items(self) -> None:
+        decisions = PRDecisions(
+            items_scanned=5,
+            patterns=[],
+            decisions=[_decision(ref=f"PR#{i + 90}") for i in range(5)],
+        )
+        out = render_pr_decisions_for_prompt(decisions, max_items=2)
+        assert "PR#90" in out and "PR#91" in out
+        assert "PR#92" not in out
+
+    def test_maintainer_comment_preferred_over_body(self) -> None:
+        decisions = PRDecisions(
+            items_scanned=1,
+            patterns=[],
+            decisions=[_decision(
+                body_excerpt="body text here",
+                maintainer_comment="Closing:\nwon't merge this",
+            )],
+        )
+        out = render_pr_decisions_for_prompt(decisions)
+        # Multi-line comment collapses to a single line; body is skipped.
+        assert 'maintainer: "Closing: won\'t merge this"' in out
+        assert "body text here" not in out
+
+    def test_title_truncated_to_120_chars(self) -> None:
+        decisions = PRDecisions(
+            items_scanned=1,
+            patterns=[],
+            decisions=[_decision(title="t" * 200)],
+        )
+        out = render_pr_decisions_for_prompt(decisions)
+        assert "t" * 120 in out
+        assert "t" * 121 not in out
+
+    def test_diff_excerpt_marked_and_trimmed(self) -> None:
+        long_diff = "--- src/foo.py\n" + "\n".join(f"+line {i}" for i in range(100))
+        decisions = PRDecisions(
+            items_scanned=1,
+            patterns=[],
+            decisions=[_decision(diff_excerpt=long_diff)],
+        )
+        out = render_pr_decisions_for_prompt(decisions)
+        assert "Rejected code:" in out
+        assert "--- src/foo.py" in out
+        # Trimmed to 500 chars of diff — the tail lines never appear.
+        assert "+line 99" not in out
+
+    def test_no_diff_no_marker(self) -> None:
+        decisions = PRDecisions(items_scanned=1, patterns=[], decisions=[_decision()])
+        assert "Rejected code:" not in render_pr_decisions_for_prompt(decisions)

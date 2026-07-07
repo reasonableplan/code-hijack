@@ -7,9 +7,12 @@ from hijack.core.satd import (
     _CONTEXT_CHAR_CAP,
     _CONTEXT_CODE_LINES,
     _CONTEXT_COMMENT_LINES,
+    _PROMPT_CONTEXT_CHARS,
     _SATD_TOP_N,
+    SatdItem,
     SatdItems,
     extract_satd,
+    render_satd_for_prompt,
 )
 
 
@@ -136,3 +139,55 @@ class TestSatdContext:
         data = {"items": [{"ref": "a.py:1", "tag": "TODO", "text": "old session"}]}
         restored = SatdItems.from_json(data)
         assert restored.items[0].context == ""
+
+
+class TestRenderSatdForPrompt:
+    """CLI-mode evidence parity: compact <satd> block for prompt injection."""
+
+    def test_none_returns_empty_string(self) -> None:
+        assert render_satd_for_prompt(None) == ""
+
+    def test_no_signal_returns_empty_string(self) -> None:
+        assert render_satd_for_prompt(SatdItems(items=[])) == ""
+
+    def test_block_tags_and_entry_fields(self) -> None:
+        items = SatdItems(items=[SatdItem(
+            ref="src/foo.py:42",
+            tag="FIXME",
+            text="race condition here",
+            context="# FIXME: race condition here\nlock.acquire()",
+        )])
+        out = render_satd_for_prompt(items)
+        assert out.startswith("<satd>")
+        assert out.endswith("</satd>")
+        assert "src/foo.py:42" in out
+        assert "[FIXME]" in out
+        assert "race condition here" in out
+        assert "lock.acquire()" in out
+        # Header comment instructs exact path:line refs for kind="comment".
+        assert 'kind="comment"' in out
+        assert "path:line" in out
+
+    def test_context_omitted_when_empty(self) -> None:
+        items = SatdItems(items=[SatdItem(ref="a.py:1", tag="TODO", text="x")])
+        out = render_satd_for_prompt(items)
+        assert "context:" not in out
+
+    def test_context_trimmed_for_prompt(self) -> None:
+        items = SatdItems(items=[SatdItem(
+            ref="a.py:1", tag="TODO", text="x",
+            context="# TODO: x\n" + "word " * 200,
+        )])
+        out = render_satd_for_prompt(items)
+        # Stored context can run to _CONTEXT_CHAR_CAP; the prompt block trims
+        # to the tighter _PROMPT_CONTEXT_CHARS.
+        context_part = out[out.index("context:"):]
+        assert len(context_part) < _PROMPT_CONTEXT_CHARS + 100
+
+    def test_caps_at_max_items(self) -> None:
+        items = SatdItems(items=[
+            SatdItem(ref=f"a.py:{i}", tag="TODO", text=f"item {i}") for i in range(30)
+        ])
+        out = render_satd_for_prompt(items, max_items=20)
+        assert "a.py:19" in out
+        assert "a.py:20" not in out

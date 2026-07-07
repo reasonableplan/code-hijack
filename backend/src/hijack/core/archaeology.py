@@ -654,3 +654,37 @@ def render_commit_decisions_md(
         lines.append("")
 
     return "\n".join(lines)
+
+
+# Per-entry body cap for the prompt block — terser than _BODY_EXCERPT_CHARS
+# because the block is injected into EVERY category prompt.
+_PROMPT_BODY_CHARS = 300
+
+
+def render_commit_decisions_for_prompt(
+    decisions: CommitDecisions | None,
+    *,
+    max_items: int = 12,
+) -> str:
+    """Render CommitDecisions as a compact <commit_decisions> block for prompt injection.
+
+    Returns "" when there is nothing to show — caller drops the block entirely.
+    Terser than render_commit_decisions_md: one bullet per commit with the
+    short SHA, matched pattern keywords, subject, and a capped body excerpt.
+    """
+    if decisions is None or not decisions.has_signal:
+        return ""
+
+    lines: list[str] = [
+        "<commit_decisions>",
+        "# Decision-pattern commits mined from git history (tried X, switched"
+        ' to Y, rejected because Z). For evidence kind="commit", `ref` must be'
+        " a SHA that appears in <history> or below — never invent SHAs.",
+    ]
+    for cd in decisions.commits[:max_items]:
+        patterns = ", ".join(cd.matched_patterns)
+        lines.append(f"- {cd.sha} [{patterns}] {cd.subject}")
+        if cd.body_excerpt:
+            lines.append(f'  "{cd.body_excerpt[:_PROMPT_BODY_CHARS]}"')
+    lines.append("</commit_decisions>")
+    return "\n".join(lines)

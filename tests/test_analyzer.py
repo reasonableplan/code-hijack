@@ -542,6 +542,52 @@ async def test_run_full_analysis_all_ten_categories() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_full_analysis_injects_evidence_blocks_into_prompt() -> None:
+    """CLI-mode evidence parity: mined SATD/commit pools reach the LLM prompt."""
+    from hijack.core.archaeology import Commit, FileHistory
+
+    captured: list[str] = []
+
+    async def fake_analyze(prompt: str, model: str) -> str:
+        captured.append(prompt)
+        return _make_llm_response("architecture")
+
+    llm = MagicMock()
+    llm.analyze = fake_analyze
+
+    history = FileHistory(commits=[Commit(
+        sha="a1b2c3d4e5f6789012345678901234567890abcd",
+        subject="refactor: use dataclasses",
+        author="Alice",
+        date="2024-08-12 14:30:00 +0900",
+        body="Switched to dataclasses instead of pydantic to avoid runtime cost.",
+    )])
+    files = [
+        SourceFile(
+            path=Path("main.py"),
+            content="# TODO: drop this shim\ndef main(): pass",
+            layer="backend", role="entry_point", history=history,
+        ),
+    ]
+    await run_full_analysis(
+        files, Path("/repo"), categories=["architecture"],
+        llm=llm, target="/local/repo", critic=False,
+    )
+
+    prompt = captured[0]
+    # SATD block: the fixture file carries a TODO comment at line 1.
+    assert "<satd>" in prompt
+    assert "main.py:1" in prompt
+    assert "drop this shim" in prompt
+    # Commit-decisions block: the commit body hits "instead of" / "to avoid".
+    assert "<commit_decisions>" in prompt
+    assert "a1b2c3d4e5f6" in prompt
+    # Blocks are injected before <files>, alongside the other context blocks.
+    assert prompt.index("<satd>") < prompt.index("<files>")
+    assert prompt.index("<commit_decisions>") < prompt.index("<files>")
+
+
+@pytest.mark.asyncio
 async def test_run_full_analysis_calls_critic_by_default() -> None:
     """critic=True 가 기본값 — 카테고리 호출 N 개 + critic 호출 1회 = N+1"""
     import json as _json

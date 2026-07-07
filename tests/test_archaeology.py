@@ -7,8 +7,11 @@ from hijack.core.archaeology import (
     RECORD_SEP,
     UNIT_SEP,
     Commit,
+    CommitDecision,
+    CommitDecisions,
     FileHistory,
     parse_git_log,
+    render_commit_decisions_for_prompt,
     render_history_for_prompt,
 )
 
@@ -160,3 +163,61 @@ class TestRoundTrip:
             reverts=[Commit(sha="bbb", subject="Revert", author="A", date="d", body="")],
         )
         assert FileHistory.from_json(h.to_json()) == h
+
+
+class TestRenderCommitDecisionsForPrompt:
+    """CLI-mode evidence parity: compact <commit_decisions> block for prompt injection."""
+
+    def _decision(self, sha: str = "abc123def456", body_excerpt: str = "body") -> CommitDecision:
+        return CommitDecision(
+            sha=sha,
+            subject="refactor: use dataclasses",
+            date="2024-01-01 00:00:00 +0000",
+            body_excerpt=body_excerpt,
+            matched_patterns=["instead of"],
+            file_paths=["src/a.py"],
+        )
+
+    def test_none_returns_empty_string(self) -> None:
+        assert render_commit_decisions_for_prompt(None) == ""
+
+    def test_no_signal_returns_empty_string(self) -> None:
+        empty = CommitDecisions(commits_scanned=5, patterns=[], commits=[])
+        assert render_commit_decisions_for_prompt(empty) == ""
+
+    def test_block_tags_and_entry_fields(self) -> None:
+        decisions = CommitDecisions(
+            commits_scanned=1,
+            patterns=[],
+            commits=[self._decision(body_excerpt="Switched instead of patching in place.")],
+        )
+        out = render_commit_decisions_for_prompt(decisions)
+        assert out.startswith("<commit_decisions>")
+        assert out.endswith("</commit_decisions>")
+        assert "abc123def456" in out
+        assert "[instead of]" in out
+        assert "refactor: use dataclasses" in out
+        assert "Switched instead of patching in place." in out
+        # Header comment ties kind="commit" refs to <history> / this block.
+        assert 'kind="commit"' in out
+        assert "<history>" in out
+
+    def test_body_excerpt_trimmed_to_300_chars(self) -> None:
+        decisions = CommitDecisions(
+            commits_scanned=1,
+            patterns=[],
+            commits=[self._decision(body_excerpt="y" * 800)],
+        )
+        out = render_commit_decisions_for_prompt(decisions)
+        assert "y" * 300 in out
+        assert "y" * 301 not in out
+
+    def test_caps_at_max_items(self) -> None:
+        decisions = CommitDecisions(
+            commits_scanned=15,
+            patterns=[],
+            commits=[self._decision(sha=f"sha{i:09d}") for i in range(15)],
+        )
+        out = render_commit_decisions_for_prompt(decisions, max_items=12)
+        assert "sha000000011" in out
+        assert "sha000000012" not in out

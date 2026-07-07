@@ -628,3 +628,53 @@ def render_pr_decisions_md(decisions: PRDecisions, *, source_target: str) -> str
         lines.append("")
 
     return "\n".join(lines)
+
+
+# Per-entry caps for the prompt block — terser than the docs renderer above,
+# because this block is injected into EVERY category prompt.
+_PROMPT_TITLE_CHARS = 120
+_PROMPT_EXCERPT_CHARS = 300
+_PROMPT_DIFF_CHARS = 500
+
+
+def render_pr_decisions_for_prompt(
+    decisions: PRDecisions | None,
+    *,
+    max_items: int = 12,
+) -> str:
+    """Render PRDecisions as a compact <pr_decisions> block for prompt injection.
+
+    Returns "" when there is nothing to show — caller drops the block entirely.
+
+    Do NOT reuse render_pr_decisions_md here: that renderer is a standalone
+    docs artifact and far too verbose for per-category prompts. Rejection and
+    incident decisions come first (they are the cited-evidence-grade WHY),
+    then preference, capped at max_items total.
+    """
+    if decisions is None or not decisions.has_signal:
+        return ""
+
+    cited_grade = [d for d in decisions.decisions if d.intent_kind in ("rejection", "incident")]
+    rest = [d for d in decisions.decisions if d.intent_kind not in ("rejection", "incident")]
+
+    lines: list[str] = [
+        "<pr_decisions>",
+        "# Mined PR/issue decision trails (rejection / incident / preference)."
+        ' For evidence kind="pr", copy `ref` VERBATIM from the refs below'
+        " (e.g. PR#123, issue#456) — never invent PR/issue numbers.",
+    ]
+    for d in (cited_grade + rest)[:max_items]:
+        lines.append(f"- {d.ref} [{d.intent_kind}] {d.title[:_PROMPT_TITLE_CHARS]}")
+        # One substantive excerpt: the maintainer's words when we have them
+        # (rejection rationale), else the PR/issue body.
+        comment = " ".join(d.maintainer_comment.split())
+        if comment:
+            lines.append(f'  maintainer: "{comment[:_PROMPT_EXCERPT_CHARS]}"')
+        elif d.body_excerpt:
+            lines.append(f'  body: "{d.body_excerpt[:_PROMPT_EXCERPT_CHARS]}"')
+        if d.diff_excerpt:
+            lines.append("  Rejected code:")
+            for diff_line in d.diff_excerpt[:_PROMPT_DIFF_CHARS].splitlines():
+                lines.append(f"    {diff_line}")
+    lines.append("</pr_decisions>")
+    return "\n".join(lines)
