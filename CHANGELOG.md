@@ -9,6 +9,34 @@ Until 1.0.0, the surface contract is the **rule schema** (`AnalysisRule` /
 analyze` / `diff` / `harness-export`). Adding a field to the schema or a flag
 to a subcommand is a minor bump; breaking either is a major bump.
 
+## [Unreleased]
+
+### Added
+- **CLI-mode evidence parity**: `analyze` prompts now carry compact
+  `<pr_decisions>`, `<satd>`, and `<commit_decisions>` blocks, and the output
+  format documents evidence kinds `pr` / `comment` — CLI sessions can cite
+  rejection/incident PRs and SATD comments with the same fidelity as skill
+  mode (previously the pools were mined and validated but never shown to the
+  CLI-mode LLM).
+
+### Changed
+- All user-facing output is now English: generated artifact templates
+  (generator.py), CLI help/progress/errors (cli.py), prompt few-shot content
+  (prompts.py, including a new OUTPUT LANGUAGE requirement), and the published
+  `examples/` samples. Skill mode gained the same output-language directive in
+  SKILL.md.
+- `--dry-run` cost estimate now uses separate input/output token rates
+  ($3/$15 per MTok for claude-sonnet-5) instead of a flat $3/MTok.
+
+### Removed
+- **Breaking (CLI)**: `--llm-mode local` and `--comms-dir` options plus
+  `llm/local.py` (file-IPC mode). The mode was orphaned — skill mode drives
+  the engine directly via SKILL.md and never used it.
+- Retired Phase-A1 `core/pr_decisions.py`, its tests, and
+  `scripts/check_pr_decisions.py`. The live pipeline moved to
+  `core/pr_archaeology.py` decision-trails in 0.3.x; the dashboard-style A1
+  module had no remaining pipeline callers.
+
 ## [0.3.0] — 2026-06-11
 
 Foresight inference layer (Phase 3) + evidence source expansion & measurement

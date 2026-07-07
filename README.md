@@ -45,7 +45,7 @@ Numbers from the 2026-06-11 measurement cycle on `encode/starlette` (skill mode)
 | intent_kind diversity — after PR/issue mining (2026-06-11) | **32 decisions: rejection 22, incident 10** (100 items scanned, starlette) — first non-zero rejection/incident signal in the project's measurement history | 0.3.0 starlette cycle |
 | Rule honesty grading (2026-06-11, starlette) | 14 rules: cited 7 / corroborated 5 / speculative 2; **MUST 5/14 (35.7%), all 5 cited** | 0.3.0 starlette cycle |
 | Foresight accuracy (2026-06-11, starlette) | 4 cards: **3/4 confirmed** (repo docs + rejection corpus); 1 unconfirmed (honest) | 0.3.0 starlette cycle |
-| Tests | **1020 passed** (884 in 0.2.0) | 0.3.0 |
+| Tests | **1136 passed** (1020 in 0.3.0) | current main |
 | Downstream A/B — rule injection, 3 rounds (2026-07-04) | **Rules rescued the weak model**: Haiku control fell into the buffering anti-pattern the seniors had rejected (PR#1745, full-body buffering measured 9/9 chunks); treatment streamed (1/9) and cited the commit. Frontier (Sonnet) reproduced senior structure with or without rules | first downstream A/B |
 | SATD supply→consumption (W2, 2026-07-05) | typer: 26 SATD supplied → 2 refs cited by 1 rule (`satd_citation_ratio` 7.7%, directional). **SATD sustained a cited MUST** on a squash-merge repo with only 2 decision commits | typer W2 cycle |
 
@@ -75,6 +75,7 @@ Context against the 2026 literature:
 - LLM-**generated** design rationale reaches precision ~0.27 with 1.6–3.2% actively misleading claims ([arxiv 2504.20781](https://arxiv.org/abs/2504.20781)). This is why code-hijack never asks the LLM to author the WHY — it surfaces the senior's **verbatim** evidence (commits, rejected PRs, SATD comments) and mechanically demotes any MUST without a verified citation. The same discipline applies to our own headline metric: `cited` is reported split into **senior-quoted** vs **code-anchored** — a verbatim code observation is not a WHY the seniors wrote down, and we don't count it as one.
 - The nearest-neighbor approach, Probe-and-Refine ([arxiv 2606.20512](https://arxiv.org/abs/2606.20512)), tunes repo guidance from synthetic-probe *behavior* (+7.5pp SWE-bench) but carries no provenance — it can say *what* works, not *why the seniors chose it*. code-hijack now carries both: the recorded WHY (verbatim evidence) plus per-rule behavioral probe badges (`behavior-confirmed` — [examples/pluggy](examples/pluggy/) is the first badged sample, 3 probed / 2 discriminated).
 - Context files measurably cut agent **cost** at equal completion: −28.6% runtime, −16.6% output tokens ([arxiv 2601.20404](https://arxiv.org/abs/2601.20404)) — but that paper's tasks are repo-exploration shaped. Our own A/B reproduces the gain only in that same scope (−67% tool calls on exploration vs no gain on self-contained generation; see the two axes above).
+- The 2026 reassessment of that line of work ([2601.20404v2](https://arxiv.org/html/2601.20404v2) and the [ETH study coverage](https://www.infoq.com/news/2026/03/agents-context-file-value-review/)) found that **LLM-generated context files are on average redundant** — agents rediscover the same information from the repo, so auto-generated files cost ~20% more inference for a ~3% *lower* success rate; only content the agent **cannot discover independently** pays off. That criterion is exactly what code-hijack extracts: verbatim decision history (rejected PRs, incidents, SATD, commit rationale) lives outside the working tree, and agents do not mine git/PR archives mid-task. It also matches our own probe data — rules restating discoverable patterns are behaviorally redundant; the rules that changed behavior encode non-discoverable incident/rejection knowledge (the "shortcut gap"). Commit-rationale extraction is an active research axis (cf. [CoMRAT, arxiv 2506.10986](https://arxiv.org/pdf/2506.10986)).
 
 ## Example outputs
 
@@ -202,7 +203,6 @@ input (GitHub URL or local path)
   ↓ Test decisions (B)   — senior defense catalog from test code (parametrize edges, raises blocks)
   ↓ PR/issue mining      — closed-unmerged PRs (rejection) + wontfix issues + maintainer comments
                            via gh CLI; graceful skip if gh unavailable (core/pr_archaeology.py)
-  ↓ PR decisions (A1)    — GitHub PR signals (vocabulary, notable PRs, rejected PRs, labels)
   ↓ Commit decisions (C) — decision trails from commit bodies (tried/decided/instead/reverted)
   ↓ Analyzer       — per-category LLM calls with evidence prompts
                      + rationale_tier assignment (cited/corroborated/speculative)
@@ -273,7 +273,6 @@ backend/
       exemplars.py                     # G1: senior code sample catalog
       style_fingerprint.py             # G2: statistical style fingerprint
       test_decisions.py                # B: senior defense catalog from tests
-      pr_decisions.py                  # A1: GitHub PR judgment signals
       pr_archaeology.py                # PR/issue mining via gh CLI (rejection + wontfix + maintainer comments)
       negative_space.py                # deterministic negative-space signals (dep_count, public_ratio, …)
       measure.py                       # calc_session_metrics / diff_sessions / score_foresight / write_measurement
@@ -281,10 +280,9 @@ backend/
     llm/
       base.py                          # BaseLLM ABC
       api.py                           # ClaudeAPIClient (anthropic SDK)
-tests/                                 # pytest — 1020 tests, ruff clean
+tests/                                 # pytest — 1136 tests, ruff clean
   fixtures/senior_wisdom/              # mini repo for layer-detection tests
-examples/                              # real analysis outputs
-  fastapi/                             # latest fastapi analysis (17 rules)
+examples/                              # real analysis outputs (pluggy / werkzeug / starlette / fastapi)
 ```
 
 ## Honest limitations
@@ -330,4 +328,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Background
 
-Built using the harnessai + gstack workflow (plan → build → verify → review loop). Incremental commits, 1020 passing tests, dogfooded on 5 repos with documented quality progression (httpx, fastapi, starlette OSS + HarnessAI + code-hijack self). Phase 4b added selector hardening, cargo-cult guards, MUST calibration auto-lint, and persistent fetch cache. Phase 4c (2026-05-06) lifted starlette evidence-chain matching from 17% to 50% via category expansion + skill-mode parity. 0.3.0 (2026-06-11) added foresight inference layer, 3-tier rationale grading with cited-only MUST enforcement, PR/issue mining (first non-zero rejection/incident signals), and numeric measurement loop. Full design documents: [`backend/docs/skeleton.md`](backend/docs/skeleton.md), [`backend/docs/r7_pipeline_reversal.md`](backend/docs/r7_pipeline_reversal.md).
+Built using the harnessai + gstack workflow (plan → build → verify → review loop). Incremental commits, 1136 passing tests, dogfooded on 5 repos with documented quality progression (httpx, fastapi, starlette OSS + HarnessAI + code-hijack self). Phase 4b added selector hardening, cargo-cult guards, MUST calibration auto-lint, and persistent fetch cache. Phase 4c (2026-05-06) lifted starlette evidence-chain matching from 17% to 50% via category expansion + skill-mode parity. 0.3.0 (2026-06-11) added foresight inference layer, 3-tier rationale grading with cited-only MUST enforcement, PR/issue mining (first non-zero rejection/incident signals), and numeric measurement loop. Full design documents: [`backend/docs/skeleton.md`](backend/docs/skeleton.md), [`backend/docs/r7_pipeline_reversal.md`](backend/docs/r7_pipeline_reversal.md).
