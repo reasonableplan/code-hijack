@@ -109,22 +109,16 @@ def _block_pr_mining(monkeypatch: pytest.MonkeyPatch) -> None:
     environments, those calls either fail or trigger Python 3.13 reader-thread
     exceptions that surface as PytestUnhandledThreadExceptionWarning. Tests
     that exercise PR mining explicitly use the injectable `gh_runner`
-    parameter, mock subprocess directly, or import `extract_pr_decisions` /
-    `fetch_pr_decisions` at module scope before this per-test patch applies —
-    none of those need this guard.
+    parameter, mock subprocess directly, or import `fetch_pr_decisions` at
+    module scope before this per-test patch applies — none of those need
+    this guard.
 
-    Two entry points are patched because analyzer.py's `run_full_analysis`
-    resolves a local clone target to its GitHub remote (via
-    `pr_archaeology.resolve_github_target` — harmless local `git remote` call,
-    left unmocked) and then calls `pr_archaeology.fetch_pr_decisions` (0.3.0,
-    the live pipeline's PR source) with the resolved URL; `pr_decisions.
-    extract_pr_decisions` (Phase A1) is retained standalone and unused by the
-    pipeline but still worth blocking for anything that calls it directly.
+    analyzer.py's `run_full_analysis` resolves a local clone target to its
+    GitHub remote (via `pr_archaeology.resolve_github_target` — harmless local
+    `git remote` call, left unmocked) and then calls
+    `pr_archaeology.fetch_pr_decisions` (0.3.0, the live pipeline's PR source)
+    with the resolved URL.
     """
-    monkeypatch.setattr(
-        "hijack.core.pr_decisions.extract_pr_decisions",
-        lambda *args, **kwargs: None,
-    )
     from hijack.core.pr_archaeology import PRDecisions as _PRDecisions
     monkeypatch.setattr(
         "hijack.core.pr_archaeology.fetch_pr_decisions",

@@ -26,9 +26,10 @@ from hijack.core.session import SessionDiff
 from hijack.core.target_stack import TargetStack, normalize_pkg_name
 from hijack.errors import LLM_001, OUTPUT_001, LLMError, OutputError
 from hijack.llm.base import DEFAULT_MODEL, BaseLLM
-from hijack.llm.local import LocalLLM
 
-_COST_PER_TOKEN = 3e-6
+# claude-sonnet-5 sticker pricing: $3/MTok input, $15/MTok output.
+_COST_PER_INPUT_TOKEN = 3e-6
+_COST_PER_OUTPUT_TOKEN = 15e-6
 _AVG_TOKENS_PER_FILE = 600
 _TOKENS_PER_ANALYSIS_CALL = 4000
 
@@ -36,7 +37,7 @@ _TOKENS_PER_ANALYSIS_CALL = 4000
 def _estimate_cost(file_count: int, category_count: int) -> float:
     input_tokens = file_count * _AVG_TOKENS_PER_FILE + category_count * _TOKENS_PER_ANALYSIS_CALL
     output_tokens = category_count * 2000
-    return (input_tokens + output_tokens) * _COST_PER_TOKEN
+    return input_tokens * _COST_PER_INPUT_TOKEN + output_tokens * _COST_PER_OUTPUT_TOKEN
 
 
 def _load_session_json(path_str: str) -> SessionResult:
@@ -91,21 +92,6 @@ def cli() -> None:
 @click.option("--critic/--no-critic", default=True,
               help="Re-evaluate duplicates/MUST inflation with the critic layer "
                    "(default on, +1 LLM call)")
-@click.option(
-    "--llm-mode",
-    type=click.Choice(["api", "local"]),
-    default="api",
-    show_default=True,
-    help="api: Anthropic API (requires ANTHROPIC_API_KEY). "
-         "local: file-IPC — an external responder reads the prompt and writes "
-         "the response (skill mode).",
-)
-@click.option(
-    "--comms-dir",
-    default=None,
-    metavar="DIR",
-    help="Prompt/response directory for --llm-mode local (default: <output>/comms/).",
-)
 @click.option("--refresh-prs", is_flag=True,
               help="Clear the PR cache and re-fetch (Phase A1)")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose logging")
@@ -119,8 +105,6 @@ def analyze(
     resume: str | None,
     dry_run: bool,
     critic: bool,
-    llm_mode: str,
-    comms_dir: str | None,
     refresh_prs: bool,
     verbose: bool,
     quiet: bool,
@@ -157,8 +141,6 @@ def analyze(
         output_dir=output_dir,
         dry_run=dry_run,
         critic=critic,
-        llm_mode=llm_mode,
-        comms_dir=comms_dir,
         refresh_prs=refresh_prs,
         quiet=quiet,
     )
@@ -389,8 +371,6 @@ def _run(
     output_dir: str | None,
     dry_run: bool,
     critic: bool,
-    llm_mode: str = "api",
-    comms_dir: str | None = None,
     refresh_prs: bool = False,
     quiet: bool,
 ) -> None:
@@ -408,19 +388,14 @@ def _run(
     cost = _estimate_cost(len(files), len(category_list))
     if not quiet:
         click.echo("\n[2/4] Cost estimate")
-        if llm_mode == "local":
-            click.echo("  → LLM mode: local (file-IPC, $0)")
-        else:
-            click.echo(f"  → Estimated cost: ~${cost:.2f} ({model})")
+        click.echo(f"  → Estimated cost: ~${cost:.2f} ({model})")
         click.echo(f"  → Categories: {', '.join(category_list)}")
 
     if dry_run:
         click.echo("\n[dry-run] Exiting without LLM calls.")
         return
 
-    # Local mode is always non-interactive — the responding agent doesn't have
-    # a TTY to confirm to. API mode keeps the safety prompt.
-    if not quiet and llm_mode == "api":
+    if not quiet:
         confirmed = click.confirm("\nStart the analysis?", default=True)
         if not confirmed:
             click.echo("Cancelled.")
@@ -428,20 +403,13 @@ def _run(
 
     base = Path(output_dir) if output_dir else repo_root / "docs" / "hijacked"
     llm: BaseLLM
-    if llm_mode == "local":
-        comms_path = Path(comms_dir) if comms_dir else base / "comms"
-        comms_path.mkdir(parents=True, exist_ok=True)
-        llm = LocalLLM(comms_path)
-        if not quiet:
-            click.echo(f"  → comms directory: {comms_path.as_posix()}")
-    else:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise LLMError(LLM_001, "ANTHROPIC_API_KEY is not set.")
-        # lazy import: measure/diff 등 API 불필요 커맨드가 anthropic 없이 돌도록
-        from hijack.llm.api import ClaudeAPIClient
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise LLMError(LLM_001, "ANTHROPIC_API_KEY is not set.")
+    # lazy import: measure/diff 등 API 불필요 커맨드가 anthropic 없이 돌도록
+    from hijack.llm.api import ClaudeAPIClient
 
-        llm = ClaudeAPIClient(api_key=api_key)
+    llm = ClaudeAPIClient(api_key=api_key)
 
     if not quiet:
         click.echo("\n[3/4] Running LLM analysis...")
