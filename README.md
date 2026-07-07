@@ -168,7 +168,6 @@ The MUST-ratio calibration runs automatically on `write_output` and prints a `[W
 │   ├── coding_style.md
 │   ├── api_design.md
 │   ├── foresight.md            # inferred design hypotheses (hypothesis + signals + falsification + tier); never MUST
-│   ├── pr_decisions.json       # raw PR/issue mining output (rejection + incident decisions)
 │   ├── measurement.json        # cited_ratio, must_ratio, tier/intent distributions per session
 │   └── session.json            # structured data, reused for diff / harness-export / measure
 ├── integrated/                 # agent-ready combined view

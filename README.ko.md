@@ -45,7 +45,7 @@ AI 에이전트가 짜는 코드는 일반적이고 일관성 없다. code-hijac
 | intent_kind 다양성 — PR/이슈 마이닝 후 (2026-06-11) | **32 decisions: rejection 22, incident 10** (starlette, 100건 스캔) — 프로젝트 측정 역사상 최초의 비-제로 rejection/incident | 0.3.0 starlette 사이클 |
 | 규칙 honesty 등급 (2026-06-11, starlette) | 14개 규칙: cited 7 / corroborated 5 / speculative 2; **MUST 5/14 (35.7%), 전원 cited** | 0.3.0 starlette 사이클 |
 | Foresight 정확도 (2026-06-11, starlette) | 4개 카드: **3/4 confirmed** (repo docs + rejection corpus 대조); 1개 미확인 (정직 유지) | 0.3.0 starlette 사이클 |
-| 테스트 | **1020 passed** (0.2.0 에서 884) | 0.3.0 |
+| 테스트 | **1136 passed** (0.3.0 에서 1020) | 현재 main |
 | Downstream A/B — 규칙 주입 3라운드 (2026-07-04) | **규칙이 약한 모델을 구조**: Haiku control 은 시니어가 거절한 버퍼링 안티패턴(PR#1745)에 그대로 빠짐(9/9 청크 전체 버퍼 실측); treatment 은 스트리밍(1/9) + 커밋 인용. frontier(Sonnet)는 규칙 유무 무관 시니어 구조 재현 | 첫 downstream A/B |
 | SATD 공급→소비 (W2, 2026-07-05) | typer: 공급 26 → 2 ref 가 1 규칙에 인용 (`satd_citation_ratio` 7.7%, directional). **SATD 가 cited MUST 를 지탱** — 결정 커밋 2개뿐인 squash-merge 레포에서 | typer W2 사이클 |
 
@@ -75,6 +75,7 @@ R4~R6 (werkzeug + pluggy, 2026-07-05/06) 후 2축 확정:
 - LLM 이 rationale 을 **생성**하면 precision ~0.27, 오도성 주장 1.6–3.2% ([arxiv 2504.20781](https://arxiv.org/abs/2504.20781)). code-hijack 이 WHY 를 LLM 에게 짓게 하지 않는 이유 — 시니어의 **verbatim** 증거(커밋, 거절 PR, SATD 주석)만 surface 하고, 검증 인용 없는 MUST 는 기계적으로 강등한다. 같은 기준을 자기 headline 지표에도 적용한다: `cited` 는 **시니어 인용** vs **코드 앵커**로 분리 보고 — 코드의 verbatim 관찰은 시니어가 남긴 WHY 가 아니므로 그걸로 세지 않는다.
 - 최근접 접근 Probe-and-Refine ([arxiv 2606.20512](https://arxiv.org/abs/2606.20512)) 은 synthetic probe *행동*으로 레포 가이드를 튜닝 (+7.5pp SWE-bench) 하지만 provenance 가 없다 — *무엇이* 되는지는 말해도 *시니어가 왜 그렇게 골랐는지*는 못 말한다. code-hijack 은 이제 둘 다 든다: 기록된 WHY(verbatim evidence) + 규칙 단위 행동 probe 배지 (`behavior-confirmed` — [examples/pluggy](examples/pluggy/) 가 첫 배지 샘플, 3 probed / 2 discriminated).
 - 컨텍스트 파일은 동일 완성도에서 에이전트 **비용**을 실측으로 줄인다: runtime −28.6%, 출력 토큰 −16.6% ([arxiv 2601.20404](https://arxiv.org/abs/2601.20404)) — 단 저 논문의 태스크는 레포 탐색형. 자체 A/B 도 같은 스코프에서만 재현 (탐색형 툴콜 −67% vs self-contained 생성 태스크 이득 없음, 위 2축 참조).
+- 같은 계열의 2026 재평가([2601.20404v2](https://arxiv.org/html/2601.20404v2), [ETH 연구 보도](https://www.infoq.com/news/2026/03/agents-context-file-value-review/))는 **LLM 이 자동 생성한 컨텍스트 파일이 평균적으로 중복**임을 밝혔다 — 에이전트가 레포에서 같은 정보를 어차피 재발견하므로, 자동 생성 파일은 추론 비용 +20% 에 성공률은 오히려 -3%. **에이전트가 스스로 발견할 수 없는 내용만 효과가 있다.** 그 기준이 정확히 code-hijack 이 추출하는 것이다: 거절된 PR·인시던트·SATD·커밋 rationale 같은 verbatim 결정 이력은 워킹 트리 밖에 있고, 에이전트는 태스크 중에 git/PR 아카이브를 마이닝하지 않는다. 자체 probe 데이터와도 정합 — 발견 가능한 패턴을 재진술한 규칙은 행동적으로 잉여였고, 행동을 바꾼 규칙은 발견 불가능한 인시던트/거절 지식(지름길-갭)을 담고 있었다. 커밋 rationale 추출은 활발한 연구 축이다 (cf. [CoMRAT, arxiv 2506.10986](https://arxiv.org/pdf/2506.10986)).
 
 ## Quickstart
 
@@ -145,7 +146,6 @@ MUST 비율 캘리브레이션은 `write_output` 시점에 자동 실행되며, 
 │   ├── coding_style.md
 │   ├── api_design.md
 │   ├── foresight.md            # 추론된 설계 가설 (가설 + 신호 + 반증 조건 + tier); MUST 절대 불가
-│   ├── pr_decisions.json       # PR/이슈 마이닝 원시 출력 (rejection + incident decisions)
 │   ├── measurement.json        # cited_ratio, must_ratio, tier/intent 분포 (세션별)
 │   └── session.json            # 구조화 데이터 (diff / harness-export / measure 재사용)
 ├── integrated/                 # 통합 — AI 에이전트용
@@ -180,7 +180,6 @@ MUST 비율 캘리브레이션은 `write_output` 시점에 자동 실행되며, 
   ↓ Test decisions (B)   — 테스트 코드에서 시니어 방어 카탈로그 (parametrize edges, raises blocks)
   ↓ PR/이슈 마이닝       — closed-unmerged PR (rejection) + wontfix 이슈 + maintainer 코멘트
                            gh CLI 사용; gh 없으면 graceful skip (core/pr_archaeology.py)
-  ↓ PR decisions (A1)    — GitHub PR 신호 (어휘, 주요 PR, 거절된 PR, 레이블)
   ↓ Commit decisions (C) — commit body 에서 결정 흔적 (tried/decided/instead/reverted)
   ↓ Analyzer       — evidence 프롬프트 포함 카테고리별 LLM 호출
                      + rationale_tier 부여 (cited/corroborated/speculative)
@@ -251,7 +250,6 @@ backend/
       exemplars.py                     # G1: 시니어 코드 sample 카탈로그
       style_fingerprint.py             # G2: 통계 스타일 fingerprint
       test_decisions.py                # B: 테스트 코드에서 시니어 방어 카탈로그
-      pr_decisions.py                  # A1: GitHub PR 판단 신호
       pr_archaeology.py                # PR/이슈 마이닝 via gh CLI (rejection + wontfix + maintainer 코멘트)
       negative_space.py                # 결정론적 negative-space 신호 (dep_count, public_ratio 등)
       measure.py                       # calc_session_metrics / diff_sessions / score_foresight / write_measurement
@@ -259,10 +257,9 @@ backend/
     llm/
       base.py                          # BaseLLM ABC
       api.py                           # ClaudeAPIClient (anthropic SDK)
-tests/                                 # pytest — 1020 tests, ruff clean
+tests/                                 # pytest — 1136 tests, ruff clean
   fixtures/senior_wisdom/              # 레이어 감지 검증용 미니 레포
-examples/                              # 실제 분석 출력
-  fastapi/                             # 최신 fastapi 분석 결과
+examples/                              # 실제 분석 출력 (pluggy / werkzeug / starlette / fastapi)
 ```
 
 ## 정직한 한계
@@ -307,4 +304,4 @@ MIT — [LICENSE](LICENSE) 참조.
 
 ## 배경
 
-harnessai + gstack 워크플로우 (계획 → 구현 → 검증 → 리뷰 루프) 로 개발. 점진적 커밋, 1020 passing tests, 5 레포에 도그푸딩 + 품질 진화 기록 (httpx, fastapi, starlette OSS + HarnessAI + code-hijack self). Phase 4b 에서 selector 강화, cargo-cult 가드, MUST 자동 캘리브레이션 lint, persistent fetch 캐시 추가. Phase 4c (2026-05-06) 가 카테고리 확장 + skill-mode parity 로 starlette evidence-chain 매칭율을 17% → 50% 로 끌어올림. 0.3.0 (2026-06-11) 에서 foresight 추론 레이어, 3-tier rationale 등급 + cited-only MUST 기계적 강제, PR/이슈 마이닝 (최초 비-제로 rejection/incident), 수치 측정 루프 추가. 상세 설계 문서: [`backend/docs/skeleton.md`](backend/docs/skeleton.md), [`backend/docs/r7_pipeline_reversal.md`](backend/docs/r7_pipeline_reversal.md).
+harnessai + gstack 워크플로우 (계획 → 구현 → 검증 → 리뷰 루프) 로 개발. 점진적 커밋, 1136 passing tests, 5 레포에 도그푸딩 + 품질 진화 기록 (httpx, fastapi, starlette OSS + HarnessAI + code-hijack self). Phase 4b 에서 selector 강화, cargo-cult 가드, MUST 자동 캘리브레이션 lint, persistent fetch 캐시 추가. Phase 4c (2026-05-06) 가 카테고리 확장 + skill-mode parity 로 starlette evidence-chain 매칭율을 17% → 50% 로 끌어올림. 0.3.0 (2026-06-11) 에서 foresight 추론 레이어, 3-tier rationale 등급 + cited-only MUST 기계적 강제, PR/이슈 마이닝 (최초 비-제로 rejection/incident), 수치 측정 루프 추가. 상세 설계 문서: [`backend/docs/skeleton.md`](backend/docs/skeleton.md), [`backend/docs/r7_pipeline_reversal.md`](backend/docs/r7_pipeline_reversal.md).
