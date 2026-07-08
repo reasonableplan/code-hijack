@@ -20,7 +20,6 @@ Tags: ✅ validated with measurable data, ⚠️ partial / has known limits, ❓
 - ✅ **Two execution modes**:
   - **CLI mode** (`code-hijack analyze`) — direct Anthropic API, fully automatable
   - **Skill mode** (`/code-hijack`) — uses the current Claude Code session, no API key needed
-- ❓ **HarnessAI integration** — `harness-export` subcommand converts a session into [HarnessAI](https://github.com/reasonableplan/harnessai)-shaped docs. Only `cross_project` rules auto-apply; the rest become reviewable candidates. (Implemented; downstream HarnessAI consumption not yet dogfooded.)
 - ❓ **Session management** — `--resume` to skip completed categories, `diff` subcommand to compare rule changes across sessions. (Implemented; usage data thin.)
 - ✅ **PR/issue mining** — `core/pr_archaeology.py` mines closed-unmerged PRs (rejection), wontfix/discussion issues, and maintainer comments via `gh` CLI. Same decision-pattern set as commit mining. Graceful skip when `gh` is unavailable. First unlocked rejection/incident signals on starlette (32 decisions: 22 rejection + 10 incident from 100 items scanned).
 - ⚠️ **Decision mining from Git** — extracts senior reasoning from PR descriptions, review comments, commit bodies, and reverts; rule `evidence` field carries verbatim quotes with intent classification (rejection/constraint/incident/preference). **Effective when target repo has decision-pattern keywords ("instead of", "rather than", etc.); a typical busy-developer repo may yield close to zero from commit mining alone — PR/issue mining now supplements this gap.**
@@ -54,7 +53,7 @@ Numbers from the 2026-06-11 measurement cycle on `encode/starlette` (skill mode)
 
 Direction status (2026-06-11):
 - **G (more categories)** — verified: +5%p evidence per added category, ceiling now 50% on starlette. Diminishing returns past 5 categories; commit-pool richness, not category count, is the real lever.
-- **R7 (commit-corpus-first rule derivation)** — phase 1 complete (`backend/docs/r7_pipeline_reversal.md`). Hypothesis viable on multi-commit clusters (CORS preflight: 3 commits → 1 cluster) but **only 21% of starlette clusters are multi-commit** — single-commit clusters get no advantage over forward pipeline. **Phase 2 shelved (2026-07-03)**: a follow-up probe on the PR axis (`cluster_pr_decisions`) found only 4% multi-item clusters — inversion leverage unsupported on both axes, and the forward pipeline already consumes the PR-sourced rejection/incident value. Revisit only if a repo class with dense multi-commit clusters shows up.
+- **R7 (commit-corpus-first rule derivation)** — phase 1 complete (`backend/docs/r7_pipeline_reversal.md`). Hypothesis viable on multi-commit clusters (CORS preflight: 3 commits → 1 cluster) but **only 21% of starlette clusters are multi-commit** — single-commit clusters get no advantage over forward pipeline. **Phase 2 shelved (2026-07-03)**: a follow-up probe on the PR axis found only 4% multi-item clusters — inversion leverage unsupported on both axes, and the forward pipeline already consumes the PR-sourced rejection/incident value. Revisit only if a repo class with dense multi-commit clusters shows up.
 - **D (dogfooding)** — settled 2026-07-06. Compliance dogfooding produced no signal (agents complied ~100% without ever consulting the rules), but re-extraction caught a real convention drift (`class TestXxx` 55%→7%), so the loop pivoted to drift monitoring: re-extract + diff + LLM interpretation of the contradictions.
 
 ## Positioning (measured, 2026-07)
@@ -92,8 +91,6 @@ Representative patterns captured:
 - `_CachedRequest` body cache vs stream split (memory-regression incident encoded as evidence)
 - TestClient backend as constructor arg, not ClassVar
 - `tests/types.py` for shared fixture Protocols
-
-Older — [`examples/fastapi/`](examples/fastapi/) (2026-04-17, **stale** — predates 5 tool improvements): tiangolo/fastapi, 17 rules, 35% MUST. Re-run with current tool to refresh.
 
 ## Quickstart
 
@@ -143,15 +140,6 @@ code-hijack apply ./docs/hijacked/2026-04-10_my-repo/session.json ./my-app
 
 Workflow defined in [`.claude/skills/code-hijack/SKILL.md`](.claude/skills/code-hijack/SKILL.md). No API key consumed — the current Claude Code session acts as the LLM.
 
-### HarnessAI export (any session)
-
-```bash
-# Convert an existing session into HarnessAI conventions/guidelines/lesson-candidate format
-code-hijack harness-export ./docs/hijacked/2026-04-17_fastapi --output ./harness-form
-```
-
-Output goes to `<output>/conventions.md`, `<output>/guidelines/<area>/<aspect>.md`, and (if any) `<output>/shared-lessons-candidates.md`. Drop these into a new project's `docs/` and a HarnessAI-style agent will pick up the rules.
-
 ## Configuration
 
 Environment variables:
@@ -169,14 +157,14 @@ A doc-size lint runs alongside it: per the ETH context-file study (arxiv 2602.11
 
 ```
 <target>/docs/hijacked/
-├── 2026-04-17_fastapi/         # per-session raw analysis
+├── 2026-07-06_pluggy/          # per-session raw analysis
 │   ├── meta.md                 # metadata: session ID, selected files, layer distribution, scope distribution
 │   ├── architecture.md         # rules per category (rule + ✅/❌ + scope + reason + rationale_tier)
 │   ├── coding_style.md
 │   ├── api_design.md
 │   ├── foresight.md            # inferred design hypotheses (hypothesis + signals + falsification + tier); never MUST
 │   ├── measurement.json        # cited_ratio, must_ratio, tier/intent distributions per session
-│   └── session.json            # structured data, reused for diff / harness-export / measure
+│   └── session.json            # structured data, reused for diff / measure
 ├── integrated/                 # agent-ready combined view
 │   ├── CLAUDE.md               # entry point + layer guide + top MUST rules
 │   ├── backend.md              # backend-layer rules across all categories (layers with 0 rules are not written)
@@ -186,13 +174,9 @@ A doc-size lint runs alongside it: per the ETH context-file study (arxiv 2602.11
 │   ├── shared.md               # cross-cutting rules
 │   ├── foresight.md            # integrated foresight cards across categories
 │   └── system-prompt.md        # agent system prompt (rule + ✅/❌/ref inline; context-conditional tone)
-└── (harness-form/)             # optional: produced by `harness-export`
-    ├── conventions.md          # HarnessAI-style decision tables (cross_project + dependencies)
-    ├── guidelines/<area>/*.md  # per-area guides (✅/❌ + design intent)
-    └── shared-lessons-candidates.md  # anti-patterns + domain-specific rules (review-only)
 ```
 
-Copy `integrated/CLAUDE.md` into your own project's Claude Code context, and your agent will follow the extracted style. For HarnessAI projects, copy `harness-form/` contents into the project's `docs/` directly.
+Copy `integrated/CLAUDE.md` into your own project's Claude Code context, and your agent will follow the extracted style.
 
 ## Pipeline
 
@@ -271,7 +255,6 @@ backend/
       scope_critic.py                  # scope tagging refinement
       session.py                       # session_id, SessionDiff
       generator.py                     # rendering + MUST calibration lint
-      harness_export.py                # HarnessAI conventions/guidelines/lesson-candidate adapter
       archaeology.py                   # git history mining (file ages, reverts, commit bodies)
       apply.py                         # senior session → target-repo CLAUDE.md translator
       docs.py                          # repo-level doc ingestion (README/ARCHITECTURE/ADRs)
@@ -288,7 +271,7 @@ backend/
       api.py                           # ClaudeAPIClient (anthropic SDK)
 tests/                                 # pytest — 1136 tests, ruff clean
   fixtures/senior_wisdom/              # mini repo for layer-detection tests
-examples/                              # real analysis outputs (pluggy / werkzeug / starlette / fastapi)
+examples/                              # real analysis outputs (pluggy / werkzeug / starlette)
 ```
 
 ## Honest limitations

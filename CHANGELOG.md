@@ -6,7 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning via
 
 Until 1.0.0, the surface contract is the **rule schema** (`AnalysisRule` /
 `CategoryResult` / `SessionResult` JSON shape) and the **CLI** (`code-hijack
-analyze` / `diff` / `measure` / `harness-export` / `apply`). Adding a field to the schema or a flag
+analyze` / `diff` / `measure` / `apply`). Adding a field to the schema or a flag
 to a subcommand is a minor bump; breaking either is a major bump.
 
 ## [Unreleased]
@@ -51,10 +51,27 @@ to a subcommand is a minor bump; breaking either is a major bump.
 - **Breaking (CLI)**: `--llm-mode local` and `--comms-dir` options plus
   `llm/local.py` (file-IPC mode). The mode was orphaned — skill mode drives
   the engine directly via SKILL.md and never used it.
+- **Breaking (CLI)**: `harness-export` subcommand + `core/harness_export.py`
+  + its tests. The downstream HarnessAI consumption path was terminated
+  after dogfooding concluded (2026-07-06); restore from git history if ever
+  needed.
 - Retired Phase-A1 `core/pr_decisions.py`, its tests, and
   `scripts/check_pr_decisions.py`. The live pipeline moved to
   `core/pr_archaeology.py` decision-trails in 0.3.x; the dashboard-style A1
   module had no remaining pipeline callers.
+- Retired `core/intent_clusterer.py` and its tests — an internal R7 phase-1
+  probe module never wired into the analysis pipeline; R7 Phase 2 is
+  shelved (`backend/docs/r7_pipeline_reversal.md`). Restore from git
+  history (`dd51957`/`498b9aa`) if re-measurement is ever needed.
+- Stale `examples/fastapi/` sample (2026-04-17) — predates PR/issue mining,
+  probe badges, and the cited-anchor split; superseded by
+  `examples/{starlette,werkzeug,pluggy}`.
+- One-off Phase B/C/G diagnostic and retrofit scripts
+  (`scripts/check_commit_decisions.py`, `scripts/check_test_decisions.py`,
+  `scripts/diagnose_exemplar_scores.py`, `scripts/fresh_g1g2_retrofit.py`,
+  `scripts/retrofit_g1_exemplars.py`), superseded by the `measure`
+  subcommand, plus the unused `backend/docs/skeleton-v2.md` placeholder
+  scaffold (`skeleton.md` is the maintained design doc).
 
 ## [0.3.0] — 2026-06-11
 

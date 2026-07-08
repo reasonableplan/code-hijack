@@ -20,7 +20,6 @@ AI 에이전트가 짜는 코드는 일반적이고 일관성 없다. code-hijac
 - ✅ **2가지 실행 모드**:
   - **CLI 모드** (`code-hijack analyze`) — Anthropic API 직접 호출, 자동화 가능
   - **Skill 모드** (`/code-hijack`) — Claude Code 세션이 LLM 역할, API key 불필요
-- ❓ **HarnessAI 통합** — `harness-export` 서브커맨드로 세션을 [HarnessAI](https://github.com/reasonableplan/harnessai) 형식 으로 변환. `cross_project` 규칙만 자동 적용. (구현됨; 다운스트림 HarnessAI 소비 dogfooding 미완.)
 - ❓ **세션 관리** — `--resume` 재시작, `diff` 세션 간 비교. (구현됨; 사용 데이터 부족.)
 - ✅ **PR/이슈 마이닝** — `core/pr_archaeology.py` 가 `gh` CLI 로 closed-unmerged PR (rejection) + wontfix 이슈 + maintainer 코멘트를 채굴. commit 마이닝과 같은 decision-pattern 세트 사용. `gh` 없으면 graceful skip. starlette 최초 비-제로 rejection/incident 신호 달성 (100건 스캔 → 32 decisions: rejection 22, incident 10).
 - ⚠️ **Git commit 결정 마이닝** — PR description, 리뷰 코멘트, commit body, revert 에서 시니어 판단 흔적 추출. rule `evidence` 필드 verbatim 인용 + intent 분류 (rejection/constraint/incident/preference). **decision-pattern 키워드 ("instead of", "rather than" 등) 가 commit 에 있을 때만 작동; 일반 바쁜 개발자 repo 에선 거의 0 — PR/이슈 마이닝이 이 격차를 보완.**
@@ -54,7 +53,7 @@ AI 에이전트가 짜는 코드는 일반적이고 일관성 없다. code-hijac
 
 방향성 현황 (2026-06-11):
 - **G (카테고리 확장)** — 검증 완료: +5%p evidence per 카테고리, starlette 천장 50% 도달. 5 카테고리 이상은 diminishing returns; commit-pool 풍부함이 진짜 lever 임 (카테고리 수 아님).
-- **R7 (commit corpus → rule 역도출)** — Phase 1 완료 (`backend/docs/r7_pipeline_reversal.md`). multi-commit cluster (CORS preflight: 3 commits → 1 cluster) 에서 가설 viable, 그러나 **starlette cluster 의 21% 만 multi-commit** — 단일-commit cluster 는 forward pipeline 대비 advantage 없음. **Phase 2 보류 (2026-07-03)**: PR 축 후속 프로브 (`cluster_pr_decisions`) 에서 multi-item cluster 4% — 두 축 모두 inversion leverage 미지지, PR 발 rejection/incident 가치는 forward pipeline 이 이미 소비. multi-commit cluster 가 촘촘한 repo class 가 나타날 때만 재검토.
+- **R7 (commit corpus → rule 역도출)** — Phase 1 완료 (`backend/docs/r7_pipeline_reversal.md`). multi-commit cluster (CORS preflight: 3 commits → 1 cluster) 에서 가설 viable, 그러나 **starlette cluster 의 21% 만 multi-commit** — 단일-commit cluster 는 forward pipeline 대비 advantage 없음. **Phase 2 보류 (2026-07-03)**: PR 축 후속 프로브에서 multi-item cluster 4% — 두 축 모두 inversion leverage 미지지, PR 발 rejection/incident 가치는 forward pipeline 이 이미 소비. multi-commit cluster 가 촘촘한 repo class 가 나타날 때만 재검토.
 - **D dogfooding** — 2026-07-06 종결. 준수 dogfooding 은 무신호 (에이전트가 규칙 참조 없이 ~100% 준수), 대신 재추출이 실제 컨벤션 드리프트 (`class TestXxx` 55%→7%) 를 포착 — 루프는 드리프트 모니터링 (재추출 + diff + LLM 해석) 으로 전환.
 
 ## Positioning (실측 기반, 2026-07)
@@ -121,15 +120,6 @@ code-hijack apply ./docs/hijacked/2026-04-10_my-repo/session.json ./my-app
 ```
 워크플로우는 [`.claude/skills/code-hijack/SKILL.md`](.claude/skills/code-hijack/SKILL.md) 에 정의. Claude Code 세션이 LLM 역할 — 추가 API 비용 없음.
 
-### HarnessAI export (모든 세션)
-
-```bash
-# 기존 세션을 HarnessAI conventions/guidelines/lesson-candidate 형식으로 변환
-code-hijack harness-export ./docs/hijacked/2026-04-17_fastapi --output ./harness-form
-```
-
-산출: `<output>/conventions.md`, `<output>/guidelines/<area>/<aspect>.md`, (있을 때) `<output>/shared-lessons-candidates.md`. 새 프로젝트의 `docs/` 에 복사하면 HarnessAI-식 에이전트가 그대로 사용.
-
 ## 설정
 
 환경 변수:
@@ -147,14 +137,14 @@ doc-size lint 도 함께 실행된다: ETH context-file 연구 (arxiv 2602.11988
 
 ```
 <target>/docs/hijacked/
-├── 2026-04-17_fastapi/         # 세션별 raw 분석
+├── 2026-07-06_pluggy/          # 세션별 raw 분석
 │   ├── meta.md                 # 메타데이터 (세션 ID, 선별 파일, 레이어 분포, scope 분포)
 │   ├── architecture.md         # 카테고리별 규칙 (rule + ✅/❌ + scope + reason + rationale_tier)
 │   ├── coding_style.md
 │   ├── api_design.md
 │   ├── foresight.md            # 추론된 설계 가설 (가설 + 신호 + 반증 조건 + tier); MUST 절대 불가
 │   ├── measurement.json        # cited_ratio, must_ratio, tier/intent 분포 (세션별)
-│   └── session.json            # 구조화 데이터 (diff / harness-export / measure 재사용)
+│   └── session.json            # 구조화 데이터 (diff / measure 재사용)
 ├── integrated/                 # 통합 — AI 에이전트용
 │   ├── CLAUDE.md               # 진입점 + 레이어 가이드 + Top MUST 규칙
 │   ├── backend.md              # backend 레이어 규칙 (카테고리별 모음; 규칙 0개 레이어는 파일 미생성)
@@ -164,13 +154,9 @@ doc-size lint 도 함께 실행된다: ETH context-file 연구 (arxiv 2602.11988
 │   ├── shared.md               # 레이어 무관 공통 규칙
 │   ├── foresight.md            # 카테고리 전체 통합 foresight 카드
 │   └── system-prompt.md        # 에이전트 시스템 프롬프트 (rule + ✅/❌/ref 인라인; 컨텍스트 조건부 톤)
-└── (harness-form/)             # 선택적: harness-export 가 생성
-    ├── conventions.md          # HarnessAI 식 결정 표 (cross_project + dependencies)
-    ├── guidelines/<area>/*.md  # 영역별 가이드 (✅/❌ + design intent)
-    └── shared-lessons-candidates.md  # 안티패턴 + domain-specific 규칙 (검토용)
 ```
 
-`integrated/CLAUDE.md` 를 해당 프로젝트의 Claude Code 컨텍스트로 복사하면 에이전트가 그 스타일로 코딩. HarnessAI 프로젝트는 `harness-form/` 내용을 `docs/` 에 직접 복사.
+`integrated/CLAUDE.md` 를 해당 프로젝트의 Claude Code 컨텍스트로 복사하면 에이전트가 그 스타일로 코딩.
 
 ## 파이프라인
 
@@ -197,7 +183,7 @@ doc-size lint 도 함께 실행된다: ETH context-file 연구 (arxiv 2602.11988
   ↓ Generator      — 레이어별 .md + CLAUDE.md + system-prompt.md + foresight.md 렌더링
                      + MUST 자동 캘리브레이션 lint (>40% 시 stderr 경고)
   ↓ Measure        — measurement.json (cited_ratio, must_ratio, tier/intent 분포)
-출력 (docs/hijacked/<세션>/ + integrated/ + 선택적 harness-form/)
+출력 (docs/hijacked/<세션>/ + integrated/)
 ```
 
 ## 검증
@@ -236,7 +222,7 @@ backend/
   pyproject.toml                       # setuptools, Python 3.12+
   docs/skeleton.md                     # 상세 설계 문서
   src/hijack/
-    cli.py                             # click 그룹 (analyze / diff / harness-export)
+    cli.py                             # click 그룹 (analyze / diff)
     skill.py                           # skill 모드 stub (실 로직은 SKILL.md)
     errors.py                          # HijackError(ClickException) 계층
     core/
@@ -249,7 +235,6 @@ backend/
       scope_critic.py                  # scope 태깅 정제
       session.py                       # session_id, SessionDiff
       generator.py                     # 렌더링 + MUST 캘리브레이션 lint
-      harness_export.py                # HarnessAI conventions/guidelines/lesson-candidate 어댑터
       archaeology.py                   # git 히스토리 마이닝 (파일 나이, revert, commit body)
       apply.py                         # 시니어 세션 → 타깃 레포 CLAUDE.md 번역기
       docs.py                          # 레포 문서 수집 (README/ARCHITECTURE/ADR)
@@ -266,7 +251,7 @@ backend/
       api.py                           # ClaudeAPIClient (anthropic SDK)
 tests/                                 # pytest — 1136 tests, ruff clean
   fixtures/senior_wisdom/              # 레이어 감지 검증용 미니 레포
-examples/                              # 실제 분석 출력 (pluggy / werkzeug / starlette / fastapi)
+examples/                              # 실제 분석 출력 (pluggy / werkzeug / starlette)
 ```
 
 ## 정직한 한계

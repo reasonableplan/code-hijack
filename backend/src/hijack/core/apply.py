@@ -253,7 +253,7 @@ def _render_applied_rule(applied: AppliedRule) -> list[str]:
 
     Rationale for post-processing rather than extending _render_rule's
     signature: the generator is a stable internal module used by multiple
-    callers (write_output, render_layer_md, system-prompt, harness_export).
+    callers (write_output, render_layer_md, system-prompt).
     Adding an optional `adaptation_note` parameter would leak apply-layer
     concerns into core rendering. Post-processing keeps both modules
     independently clean — apply.py owns the injection site logic.

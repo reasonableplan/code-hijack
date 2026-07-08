@@ -218,7 +218,7 @@ HijackError (baseclass, ClickException 상속)
 ```
 
 ### 서브커맨드 그룹
-`analyze`, `diff`, `measure`, `apply`, `harness-export` 서브커맨드 그룹으로 운영.
+`analyze`, `diff`, `measure`, `apply` 서브커맨드 그룹으로 운영.
 
 ### 출력 형식
 - 기본: 사람이 읽는 텍스트 (click.echo, 필요 시 색상). 진행률은 stderr에 짧게.

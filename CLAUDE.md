@@ -47,7 +47,6 @@ tests/                 # pytest 테스트 (루트에 위치)
   - **measure**: `code-hijack measure <session.json> [session2.json]` — 지표 산출 + measurement.json (`[api]` extra 불필요 — anthropic lazy import, d751aa3)
   - **resume**: `code-hijack analyze ... --resume <session.json>` — 이전 세션 완료 카테고리 스킵
   - **apply**: `code-hijack apply <session> <target_repo>` — 시니어 세션 규칙을 타깃 레포 스택에 맞춰 CLAUDE.md 로 번역 (스택 감지, reference_only 표기, `--strict` 제외)
-  - **harness-export**: `code-hijack harness-export <session> -o <dir>` — HarnessAI 형식 (conventions/guidelines/lesson-candidates) 어댑터
 - 상세 내용은 `backend/docs/skeleton.md` 참조
 
 ## 개발 워크플로우

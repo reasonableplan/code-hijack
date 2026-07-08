@@ -13,7 +13,6 @@ from hijack.core.analyzer import run_full_analysis
 from hijack.core.apply import apply_session_to_target, render_applied_md
 from hijack.core.fetcher import fetch_source
 from hijack.core.generator import write_output
-from hijack.core.harness_export import export_session
 from hijack.core.measure import (
     calc_session_metrics,
     diff_sessions,
@@ -210,45 +209,6 @@ def measure_cmd(session1: str, session2: str | None) -> None:
         for kind, count in delta["intent_kind_distribution_delta"].items():
             click.echo(f"  {kind}: {count:+d}")
         click.echo(f"satd_citation_ratio_delta: {delta['satd_citation_ratio_delta']:+.4f}")
-
-
-@cli.command("harness-export")
-@click.argument("session")
-@click.option("--output", "-o", "output_dir", required=True,
-              metavar="DIR",
-              help="HarnessAI docs directory (output root for conventions.md / guidelines/)")
-def harness_export_cmd(session: str, output_dir: str) -> None:
-    """Convert a code-hijack session into HarnessAI conventions/guidelines format.
-
-    SESSION: session.json or session directory (raw analysis output)
-
-    Only cross_project rules are auto-applied. framework_internal is excluded;
-    domain_specific goes to shared-lessons-candidates.md for review.
-    """
-    session_result = _load_session_json(session)
-    output_path = Path(output_dir)
-    summary = export_session(session_result, output_path)
-
-    click.echo(f"\n[harness-export] done → {summary.output_dir.as_posix()}")
-    click.echo(f"  conventions.md: {summary.conventions_path.relative_to(output_path).as_posix()}")
-    click.echo(f"  guidelines: {len(summary.guideline_paths)} files")
-    if summary.lesson_candidates_path:
-        click.echo(
-            f"  lessons (candidate): "
-            f"{summary.lesson_candidates_path.relative_to(output_path).as_posix()}"
-        )
-    click.echo("")
-    click.echo(
-        f"  scope — cross_project: {summary.cross_project_count}, "
-        f"framework_internal: {summary.framework_internal_count} (excluded), "
-        f"domain_specific: {summary.domain_specific_count} (lesson candidates)"
-    )
-    click.echo(f"  anti-patterns: {summary.anti_pattern_count}")
-    click.echo("")
-    click.echo(
-        "Next step: review the output files, then copy them into your "
-        "HarnessAI project's docs/."
-    )
 
 
 @cli.command("apply")
