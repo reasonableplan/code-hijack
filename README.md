@@ -45,7 +45,7 @@ Numbers from the 2026-06-11 measurement cycle on `encode/starlette` (skill mode)
 | intent_kind diversity — after PR/issue mining (2026-06-11) | **32 decisions: rejection 22, incident 10** (100 items scanned, starlette) — first non-zero rejection/incident signal in the project's measurement history | 0.3.0 starlette cycle |
 | Rule honesty grading (2026-06-11, starlette) | 14 rules: cited 7 / corroborated 5 / speculative 2; **MUST 5/14 (35.7%), all 5 cited** | 0.3.0 starlette cycle |
 | Foresight accuracy (2026-06-11, starlette) | 4 cards: **3/4 confirmed** (repo docs + rejection corpus); 1 unconfirmed (honest) | 0.3.0 starlette cycle |
-| Tests | **1154 passed** (1020 in 0.3.0) | current main |
+| Tests | **1105 passed** (1020 in 0.3.0) | current main |
 | Downstream A/B — rule injection, 3 rounds (2026-07-04) | **Rules rescued the weak model**: Haiku control fell into the buffering anti-pattern the seniors had rejected (PR#1745, full-body buffering measured 9/9 chunks); treatment streamed (1/9) and cited the commit. Frontier (Sonnet) reproduced senior structure with or without rules | first downstream A/B |
 | SATD supply→consumption (W2, 2026-07-05) | typer: 26 SATD supplied → 2 refs cited by 1 rule (`satd_citation_ratio` 7.7%, directional). **SATD sustained a cited MUST** on a squash-merge repo with only 2 decision commits | typer W2 cycle |
 

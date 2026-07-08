@@ -45,7 +45,7 @@ AI 에이전트가 짜는 코드는 일반적이고 일관성 없다. code-hijac
 | intent_kind 다양성 — PR/이슈 마이닝 후 (2026-06-11) | **32 decisions: rejection 22, incident 10** (starlette, 100건 스캔) — 프로젝트 측정 역사상 최초의 비-제로 rejection/incident | 0.3.0 starlette 사이클 |
 | 규칙 honesty 등급 (2026-06-11, starlette) | 14개 규칙: cited 7 / corroborated 5 / speculative 2; **MUST 5/14 (35.7%), 전원 cited** | 0.3.0 starlette 사이클 |
 | Foresight 정확도 (2026-06-11, starlette) | 4개 카드: **3/4 confirmed** (repo docs + rejection corpus 대조); 1개 미확인 (정직 유지) | 0.3.0 starlette 사이클 |
-| 테스트 | **1154 passed** (0.3.0 에서 1020) | 현재 main |
+| 테스트 | **1105 passed** (0.3.0 에서 1020) | 현재 main |
 | Downstream A/B — 규칙 주입 3라운드 (2026-07-04) | **규칙이 약한 모델을 구조**: Haiku control 은 시니어가 거절한 버퍼링 안티패턴(PR#1745)에 그대로 빠짐(9/9 청크 전체 버퍼 실측); treatment 은 스트리밍(1/9) + 커밋 인용. frontier(Sonnet)는 규칙 유무 무관 시니어 구조 재현 | 첫 downstream A/B |
 | SATD 공급→소비 (W2, 2026-07-05) | typer: 공급 26 → 2 ref 가 1 규칙에 인용 (`satd_citation_ratio` 7.7%, directional). **SATD 가 cited MUST 를 지탱** — 결정 커밋 2개뿐인 squash-merge 레포에서 | typer W2 사이클 |
 
