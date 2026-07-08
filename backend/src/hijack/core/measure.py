@@ -50,6 +50,13 @@ class MeasurementResult:
     # many of those verdicts are "discriminated".
     probed_rule_count: int = 0
     probe_discriminated_count: int = 0
+    # Doc-size metrics — always-loaded surface (entry CLAUDE.md + per-layer
+    # rule files), per the ETH context-file study (arxiv 2602.11988). Only
+    # populated when calc_session_metrics receives integrated_dir; otherwise
+    # left at the defaults below.
+    doc_entry_lines: int = 0
+    doc_max_layer_lines: int = 0
+    doc_max_layer_file: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -69,6 +76,9 @@ class MeasurementResult:
             "exemplar_verbatim_ratio": self.exemplar_verbatim_ratio,
             "probed_rule_count": self.probed_rule_count,
             "probe_discriminated_count": self.probe_discriminated_count,
+            "doc_entry_lines": self.doc_entry_lines,
+            "doc_max_layer_lines": self.doc_max_layer_lines,
+            "doc_max_layer_file": self.doc_max_layer_file,
         }
 
     @classmethod
@@ -90,6 +100,9 @@ class MeasurementResult:
             exemplar_verbatim_ratio=data.get("exemplar_verbatim_ratio", 0.0),
             probed_rule_count=data.get("probed_rule_count", 0),
             probe_discriminated_count=data.get("probe_discriminated_count", 0),
+            doc_entry_lines=data.get("doc_entry_lines", 0),
+            doc_max_layer_lines=data.get("doc_max_layer_lines", 0),
+            doc_max_layer_file=data.get("doc_max_layer_file", ""),
         )
 
 
@@ -97,14 +110,22 @@ class MeasurementResult:
 # Pure functions
 # ---------------------------------------------------------------------------
 
+_LAYER_MD_FILENAMES = ("frontend.md", "backend.md", "database.md", "devops.md", "shared.md")
+
+
 def calc_session_metrics(
     session: SessionResult,
     pr_decisions: Any | None = None,
+    *,
+    integrated_dir: Path | None = None,
 ) -> MeasurementResult:
     """SessionResult 에서 지표를 산출한다. pr_decisions 는 선택적 보강 소스.
 
     pr_decisions 는 pr_archaeology.PRDecisions 와 duck-type 호환.
     (decisions: list[...] where each item has .intent_kind: str)
+
+    integrated_dir 이 주어지고 존재하면 doc-size 지표(entry/max layer 라인 수)를
+    실제 파일에서 산출한다 — 없으면 기본값(0/"") 유지.
     """
     rules = [rule for cat in session.categories for rule in cat.rules]
     total = len(rules)
@@ -187,6 +208,22 @@ def calc_session_metrics(
 
     anchor = compute_evidence_metrics(session).overall
 
+    doc_entry_lines = 0
+    doc_max_layer_lines = 0
+    doc_max_layer_file = ""
+    if integrated_dir is not None and integrated_dir.exists():
+        entry_path = integrated_dir / "CLAUDE.md"
+        if entry_path.exists():
+            doc_entry_lines = len(entry_path.read_text(encoding="utf-8").splitlines())
+        for fname in _LAYER_MD_FILENAMES:
+            layer_path = integrated_dir / fname
+            if not layer_path.exists():
+                continue
+            n = len(layer_path.read_text(encoding="utf-8").splitlines())
+            if n > doc_max_layer_lines:
+                doc_max_layer_lines = n
+                doc_max_layer_file = fname
+
     return MeasurementResult(
         session_id=session.session_id,
         cited_ratio=cited_ratio,
@@ -204,6 +241,9 @@ def calc_session_metrics(
         exemplar_verbatim_ratio=exemplar_verbatim_ratio,
         probed_rule_count=probed_rule_count,
         probe_discriminated_count=probe_discriminated_count,
+        doc_entry_lines=doc_entry_lines,
+        doc_max_layer_lines=doc_max_layer_lines,
+        doc_max_layer_file=doc_max_layer_file,
     )
 
 
@@ -366,6 +406,11 @@ def format_measurement_summary(result: MeasurementResult) -> str:
     lines.append(
         f"  probes: {result.probe_discriminated_count}/{result.probed_rule_count} discriminated"
     )
+    if result.doc_entry_lines > 0:
+        lines.append(
+            f"  doc size: entry {result.doc_entry_lines} lines, "
+            f"max layer {result.doc_max_layer_lines} lines ({result.doc_max_layer_file})"
+        )
     if result.foresight_scores:
         lines.append(f"  foresight scores: {len(result.foresight_scores)} cards")
         for score in result.foresight_scores:

@@ -334,10 +334,12 @@ class TestRenderLayerMd:
 
 class TestRenderClaudeMdEntrypoint:
     def test_contains_layer_guide(self) -> None:
+        # _session() only has rules tagged backend/shared — frontend has 0
+        # rules and is omitted from the Layer Guide (Feature 1).
         md = render_claude_md_entrypoint(_session())
-        assert "frontend" in md
         assert "backend" in md
         assert "shared" in md
+        assert "frontend" not in md
 
     def test_contains_must_rules(self) -> None:
         md = render_claude_md_entrypoint(_session())
@@ -385,16 +387,18 @@ class TestWriteOutput:
         assert (session_dir / "coding_style.md").exists()
 
     def test_integrated_files_created(self, tmp_path: Path) -> None:
+        # _session() only tags rules backend/shared — frontend/database/devops
+        # have 0 rules and are not written (Feature 1).
         write_output(_session(), tmp_path)
 
         integrated = tmp_path / "integrated"
         assert (integrated / "CLAUDE.md").exists()
         assert (integrated / "system-prompt.md").exists()
         assert (integrated / "backend.md").exists()
-        assert (integrated / "frontend.md").exists()
-        assert (integrated / "database.md").exists()
-        assert (integrated / "devops.md").exists()
         assert (integrated / "shared.md").exists()
+        assert not (integrated / "frontend.md").exists()
+        assert not (integrated / "database.md").exists()
+        assert not (integrated / "devops.md").exists()
 
     def test_session_json_parseable(self, tmp_path: Path) -> None:
         write_output(_session(), tmp_path)
@@ -406,6 +410,96 @@ class TestWriteOutput:
     def test_multiple_writes_do_not_error(self, tmp_path: Path) -> None:
         write_output(_session(), tmp_path)
         write_output(_session(), tmp_path)  # second write should not raise
+
+
+# ---------------------------------------------------------------------------
+# Feature 1 — skip empty layer files
+# ---------------------------------------------------------------------------
+
+class TestSkipEmptyLayerFiles:
+    def test_zero_rule_layer_not_written(self, tmp_path: Path) -> None:
+        write_output(_session(), tmp_path)
+        assert not (tmp_path / "integrated" / "devops.md").exists()
+
+    def test_zero_rule_layer_omitted_from_layer_guide(self) -> None:
+        md = render_claude_md_entrypoint(_session())
+        assert "devops" not in md
+
+    def test_layer_with_rules_still_written_unchanged(self, tmp_path: Path) -> None:
+        write_output(_session(), tmp_path)
+        content = (tmp_path / "integrated" / "backend.md").read_text(encoding="utf-8")
+        assert "Use type hints" in content
+        assert "**Total rules**: 1" in content
+
+    def test_all_layers_zero_rules_gives_fallback_line(self) -> None:
+        s = _session()
+        for cat in s.categories:
+            cat.rules = []
+        md = render_claude_md_entrypoint(s)
+        assert "## Layer Guide" in md
+        assert "*No rules in this session.*" in md
+
+    def test_all_layers_zero_rules_writes_no_layer_files(self, tmp_path: Path) -> None:
+        s = _session()
+        for cat in s.categories:
+            cat.rules = []
+        write_output(s, tmp_path)
+        integrated = tmp_path / "integrated"
+        for fname in ("frontend.md", "backend.md", "database.md", "devops.md", "shared.md"):
+            assert not (integrated / fname).exists()
+        assert (integrated / "CLAUDE.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# Feature 2 — doc-size lint (ETH context-file study, arxiv 2602.11988)
+# ---------------------------------------------------------------------------
+
+class TestDocSizeLint:
+    def test_no_warn_when_files_under_threshold(self, tmp_path: Path, capsys) -> None:
+        write_output(_session(), tmp_path)
+        err = capsys.readouterr().err
+        assert "doc size" not in err
+
+    def test_warn_when_layer_file_exceeds_300_lines(self, tmp_path: Path, capsys) -> None:
+        # 20 fully-populated rules render ~369 lines in one layer file.
+        rules = [_rule(layer="backend", priority="SHOULD") for _ in range(20)]
+        cat = CategoryResult(
+            category="architecture", design_intent="x", rules=rules,
+            anti_patterns=[], file_type_guides={}, checklist=[], raw_llm_output="{}",
+        )
+        s = SessionResult(
+            session_id="2026-06-01_biglayer", target="https://github.com/x/y", model="m",
+            timestamp="2026-06-01T00:00:00+00:00", selected_files=[], categories=[cat],
+            analysis_duration_seconds=0.0, project_structure="x",
+        )
+        write_output(s, tmp_path)
+        err = capsys.readouterr().err
+        assert "doc size" in err
+        assert "backend.md" in err
+        assert "300" in err
+
+    def test_warn_when_entry_file_exceeds_60_lines(self, tmp_path: Path, capsys) -> None:
+        # must_rules is capped at 10 in render_claude_md_entrypoint, so inflate
+        # a single rule's text with embedded newlines instead — the lint
+        # counts actual file lines, not rendered list entries.
+        long_rule_text = "\n".join(f"detail line {i}" for i in range(70))
+        rule = _rule(priority="MUST")
+        rule.rule = long_rule_text
+        rule.reason = "commit a1b2c3d (cited)"  # avoid speculative-MUST downgrade
+        cat = CategoryResult(
+            category="architecture", design_intent="x", rules=[rule],
+            anti_patterns=[], file_type_guides={}, checklist=[], raw_llm_output="{}",
+        )
+        s = SessionResult(
+            session_id="2026-06-01_bigentry", target="https://github.com/x/y", model="m",
+            timestamp="2026-06-01T00:00:00+00:00", selected_files=[], categories=[cat],
+            analysis_duration_seconds=0.0, project_structure="x",
+        )
+        write_output(s, tmp_path)
+        err = capsys.readouterr().err
+        assert "doc size" in err
+        assert "CLAUDE.md" in err
+        assert "60" in err
 
 
 # ---------------------------------------------------------------------------

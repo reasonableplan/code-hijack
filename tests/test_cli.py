@@ -701,6 +701,33 @@ class TestMeasureCommand:
         assert "cited_ratio" in data
         assert "must_ratio" in data
 
+    def test_measure_picks_up_sibling_integrated_dir(self, tmp_path: Path) -> None:
+        # session.json lives at <session_dir>/session.json; the integrated
+        # dir is a sibling of <session_dir> — <session_dir>/../integrated.
+        session_json = self._session_json(tmp_path / "session")
+        integrated = tmp_path / "integrated"
+        integrated.mkdir()
+        (integrated / "CLAUDE.md").write_text(
+            "\n".join(f"l{i}" for i in range(15)), encoding="utf-8"
+        )
+        runner = CliRunner()
+        result = runner.invoke(cli, ["measure", str(session_json)])
+        assert result.exit_code == 0, result.output
+        data = json.loads(
+            (tmp_path / "session" / "measurement.json").read_text(encoding="utf-8")
+        )
+        assert data["doc_entry_lines"] == 15
+
+    def test_measure_no_sibling_integrated_dir_leaves_defaults(self, tmp_path: Path) -> None:
+        session_json = self._session_json(tmp_path / "session")
+        runner = CliRunner()
+        result = runner.invoke(cli, ["measure", str(session_json)])
+        assert result.exit_code == 0, result.output
+        data = json.loads(
+            (tmp_path / "session" / "measurement.json").read_text(encoding="utf-8")
+        )
+        assert data["doc_entry_lines"] == 0
+
     def test_measure_two_sessions_shows_diff(self, tmp_path: Path) -> None:
         s1 = self._session_json(tmp_path / "s1", "2026-01-01_before")
         s2 = self._session_json(tmp_path / "s2", "2026-01-02_after")

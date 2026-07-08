@@ -179,17 +179,25 @@ def measure_cmd(session1: str, session2: str | None) -> None:
     SESSION2: (optional) session.json or session directory — compared against SESSION1
     """
     s1 = _load_session_json(session1)
-    m1 = calc_session_metrics(s1)
-
     p1 = Path(session1)
     session_dir1 = p1 if p1.is_dir() else p1.parent
+    integrated_dir1 = session_dir1.parent / "integrated"
+    m1 = calc_session_metrics(
+        s1, integrated_dir=integrated_dir1 if integrated_dir1.exists() else None
+    )
+
     write_measurement(m1, session_dir1)
 
     if session2 is None:
         click.echo(format_measurement_summary(m1))
     else:
         s2 = _load_session_json(session2)
-        m2 = calc_session_metrics(s2)
+        p2 = Path(session2)
+        session_dir2 = p2 if p2.is_dir() else p2.parent
+        integrated_dir2 = session_dir2.parent / "integrated"
+        m2 = calc_session_metrics(
+            s2, integrated_dir=integrated_dir2 if integrated_dir2.exists() else None
+        )
         delta = diff_sessions(m1, m2)
         click.echo(f"session_id_before : {delta['session_id_before']}")
         click.echo(f"session_id_after  : {delta['session_id_after']}")

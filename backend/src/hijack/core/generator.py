@@ -165,6 +165,16 @@ def render_category_md(cat: CategoryResult) -> str:
     return "\n".join(lines)
 
 
+def _rules_for_layer(layer: str, categories: list[CategoryResult]) -> list[AnalysisRule]:
+    """Rules tagged with `layer`, across every category.
+
+    The single attribution rule reused by render_layer_md, the write_output
+    skip-empty-layer check, and the Layer Guide's non-empty-layer filter —
+    keeping all three in agreement about what counts as "this layer has rules".
+    """
+    return [r for cat in categories for r in cat.rules if r.layer == layer]
+
+
 def render_layer_md(
     layer: str,
     categories: list[CategoryResult],
@@ -178,7 +188,7 @@ def render_layer_md(
     (negative space, symbol substitutions) that the rule extractor doesn't
     capture textually.
     """
-    rules = [r for cat in categories for r in cat.rules if r.layer == layer]
+    rules = _rules_for_layer(layer, categories)
     lines = [
         f"# {layer.title()} Layer Rules",
         "",
@@ -236,12 +246,18 @@ def render_claude_md_entrypoint(result: SessionResult) -> str:
         "",
         "## Layer Guide",
         "",
-        "Load the relevant layer file based on what you're working on:",
-        "",
     ]
+    layer_guide_lines = []
     for layer, ctx in _LAYER_CONTEXT.items():
+        if not _rules_for_layer(layer, result.categories):
+            continue
         fname = _LAYER_FILE_NAMES.get(layer, f"{layer}.md")
-        lines.append(f"- **{layer}**: {ctx} ([{fname}]({fname}))")
+        layer_guide_lines.append(f"- **{layer}**: {ctx} ([{fname}]({fname}))")
+    if layer_guide_lines:
+        lines += ["Load the relevant layer file based on what you're working on:", ""]
+        lines += layer_guide_lines
+    else:
+        lines.append("*No rules in this session.*")
 
     lines += [
         "",
@@ -525,6 +541,47 @@ def _check_must_calibration(result: SessionResult) -> None:
     print("\n".join(lines), file=sys.stderr)
 
 
+# Doc-size thresholds — ETH context-file study (arxiv 2602.11988): entry file
+# ideally <60 lines, always-loaded files <300 lines. The always-loaded surface
+# here is integrated/CLAUDE.md (entry) plus the per-layer rule files; appendix
+# files (exemplars.md, pr-decisions.md, foresight.md, system-prompt.md) load
+# on demand and are out of scope for this lint.
+_DOC_ENTRY_MAX_LINES = 60
+_DOC_LAYER_MAX_LINES = 300
+
+
+def _check_doc_size(integrated_dir: Path) -> None:
+    """Doc-size lint — stderr warn when the always-loaded surface is oversized.
+
+    Checks integrated/CLAUDE.md against `_DOC_ENTRY_MAX_LINES` and each
+    written layer .md against `_DOC_LAYER_MAX_LINES`. Missing files are
+    skipped (Feature 1 omits rule-0 layers).
+    """
+    offenders: list[str] = []
+
+    claude_md = integrated_dir / "CLAUDE.md"
+    if claude_md.exists():
+        n = len(claude_md.read_text(encoding="utf-8").splitlines())
+        if n > _DOC_ENTRY_MAX_LINES:
+            offenders.append(f"CLAUDE.md: {n} lines (entry file, threshold {_DOC_ENTRY_MAX_LINES})")
+
+    for fname in _LAYER_FILE_NAMES.values():
+        fp = integrated_dir / fname
+        if not fp.exists():
+            continue
+        n = len(fp.read_text(encoding="utf-8").splitlines())
+        if n > _DOC_LAYER_MAX_LINES:
+            offenders.append(f"{fname}: {n} lines (layer file, threshold {_DOC_LAYER_MAX_LINES})")
+
+    if not offenders:
+        return
+
+    lines = ["[WARN] doc size — always-loaded surface exceeds ETH context-file study thresholds"]
+    for o in offenders:
+        lines.append(f"  {o}")
+    print("\n".join(lines), file=sys.stderr)
+
+
 def write_output(result: SessionResult, output_base: Path) -> None:
     """세션별 raw 파일 + integrated 통합 파일을 모두 작성한다.
 
@@ -545,6 +602,7 @@ def write_output(result: SessionResult, output_base: Path) -> None:
     _write_session_files(result, session_dir)
     _write_integrated_files(result, output_base / "integrated")
     _check_must_calibration(result)
+    _check_doc_size(output_base / "integrated")
 
 
 def _write_session_files(result: SessionResult, session_dir: Path) -> None:
@@ -568,6 +626,8 @@ def _write_integrated_files(result: SessionResult, integrated_dir: Path) -> None
     integrated_dir.mkdir(parents=True, exist_ok=True)
 
     for layer in _LAYERS:
+        if not _rules_for_layer(layer, result.categories):
+            continue
         fname = _LAYER_FILE_NAMES[layer]
         fp = result.style_fingerprints.get(layer) if result.style_fingerprints else None
         (integrated_dir / fname).write_text(

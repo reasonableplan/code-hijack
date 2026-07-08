@@ -117,6 +117,9 @@ class TestMeasurementResultSerialization:
             comment_cited_rule_count=2,
             comment_cited_ref_count=3,
             satd_citation_ratio=0.75,
+            doc_entry_lines=42,
+            doc_max_layer_lines=120,
+            doc_max_layer_file="backend.md",
         )
         data = m.to_json()
         restored = MeasurementResult.from_json(data)
@@ -130,6 +133,9 @@ class TestMeasurementResultSerialization:
         assert restored.comment_cited_rule_count == m.comment_cited_rule_count
         assert restored.comment_cited_ref_count == m.comment_cited_ref_count
         assert restored.satd_citation_ratio == m.satd_citation_ratio
+        assert restored.doc_entry_lines == m.doc_entry_lines
+        assert restored.doc_max_layer_lines == m.doc_max_layer_lines
+        assert restored.doc_max_layer_file == m.doc_max_layer_file
 
     def test_to_json_keys(self) -> None:
         m = MeasurementResult(
@@ -149,6 +155,7 @@ class TestMeasurementResultSerialization:
             "comment_cited_ref_count", "satd_citation_ratio",
             "exemplar_checked_count", "exemplar_verbatim_ratio",
             "probed_rule_count", "probe_discriminated_count",
+            "doc_entry_lines", "doc_max_layer_lines", "doc_max_layer_file",
         }
 
     def test_from_json_backward_compat_missing_satd_fields(self) -> None:
@@ -209,6 +216,21 @@ class TestMeasurementResultSerialization:
         assert restored.probed_rule_count == 0
         assert restored.probe_discriminated_count == 0
 
+    def test_from_json_backward_compat_missing_doc_size_fields(self) -> None:
+        # Pre-doc-size-lint measurement.json lacks the new keys.
+        data = {
+            "session_id": "old",
+            "cited_ratio": 0.5,
+            "must_ratio": 0.5,
+            "tier_distribution": {},
+            "intent_kind_distribution": {},
+            "foresight_scores": [],
+        }
+        restored = MeasurementResult.from_json(data)
+        assert restored.doc_entry_lines == 0
+        assert restored.doc_max_layer_lines == 0
+        assert restored.doc_max_layer_file == ""
+
     def test_probe_fields_roundtrip(self) -> None:
         m = MeasurementResult(
             session_id="s",
@@ -238,6 +260,23 @@ class TestMeasurementResultSerialization:
         restored = MeasurementResult.from_json(m.to_json())
         assert restored.exemplar_checked_count == 4
         assert restored.exemplar_verbatim_ratio == pytest.approx(0.75)
+
+    def test_doc_size_fields_roundtrip(self) -> None:
+        m = MeasurementResult(
+            session_id="s",
+            cited_ratio=0.0,
+            must_ratio=0.0,
+            tier_distribution={},
+            intent_kind_distribution={},
+            foresight_scores=[],
+            doc_entry_lines=42,
+            doc_max_layer_lines=120,
+            doc_max_layer_file="backend.md",
+        )
+        restored = MeasurementResult.from_json(m.to_json())
+        assert restored.doc_entry_lines == 42
+        assert restored.doc_max_layer_lines == 120
+        assert restored.doc_max_layer_file == "backend.md"
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +577,54 @@ class TestProbeMetrics:
         m = calc_session_metrics(session)
         assert m.probed_rule_count == 2
         assert m.probe_discriminated_count == 2
+
+
+# ---------------------------------------------------------------------------
+# calc_session_metrics — doc-size metrics (Feature 2, integrated_dir)
+# ---------------------------------------------------------------------------
+
+class TestDocSizeMetrics:
+    def test_without_integrated_dir_leaves_defaults(self) -> None:
+        session = _make_session("d0", [])
+        m = calc_session_metrics(session)
+        assert m.doc_entry_lines == 0
+        assert m.doc_max_layer_lines == 0
+        assert m.doc_max_layer_file == ""
+
+    def test_nonexistent_integrated_dir_leaves_defaults(self, tmp_path: Path) -> None:
+        session = _make_session("d1", [])
+        m = calc_session_metrics(session, integrated_dir=tmp_path / "does_not_exist")
+        assert m.doc_entry_lines == 0
+        assert m.doc_max_layer_lines == 0
+        assert m.doc_max_layer_file == ""
+
+    def test_populates_entry_and_max_layer_from_files(self, tmp_path: Path) -> None:
+        integrated = tmp_path / "integrated"
+        integrated.mkdir()
+        (integrated / "CLAUDE.md").write_text("\n".join(f"l{i}" for i in range(10)),
+                                                encoding="utf-8")
+        (integrated / "backend.md").write_text("\n".join(f"l{i}" for i in range(50)),
+                                                 encoding="utf-8")
+        (integrated / "shared.md").write_text("\n".join(f"l{i}" for i in range(120)),
+                                                encoding="utf-8")
+        session = _make_session("d2", [])
+        m = calc_session_metrics(session, integrated_dir=integrated)
+        assert m.doc_entry_lines == 10
+        assert m.doc_max_layer_lines == 120
+        assert m.doc_max_layer_file == "shared.md"
+
+    def test_missing_layer_files_are_skipped(self, tmp_path: Path) -> None:
+        # Feature 1 omits rule-0 layers — only some of the five files exist.
+        integrated = tmp_path / "integrated"
+        integrated.mkdir()
+        (integrated / "CLAUDE.md").write_text("l0\nl1", encoding="utf-8")
+        (integrated / "backend.md").write_text("\n".join(f"l{i}" for i in range(30)),
+                                                 encoding="utf-8")
+        session = _make_session("d3", [])
+        m = calc_session_metrics(session, integrated_dir=integrated)
+        assert m.doc_entry_lines == 2
+        assert m.doc_max_layer_lines == 30
+        assert m.doc_max_layer_file == "backend.md"
 
 
 # ---------------------------------------------------------------------------
@@ -930,6 +1017,35 @@ class TestFormatMeasurementSummary:
         )
         result = format_measurement_summary(m)
         assert "2/3 discriminated" in result
+
+    def test_includes_doc_size_when_populated(self) -> None:
+        m = MeasurementResult(
+            session_id="s",
+            cited_ratio=0.0,
+            must_ratio=0.0,
+            tier_distribution={"cited": 0, "corroborated": 0, "speculative": 0},
+            intent_kind_distribution={"rejection": 0, "incident": 0, "preference": 0},
+            foresight_scores=[],
+            doc_entry_lines=42,
+            doc_max_layer_lines=120,
+            doc_max_layer_file="backend.md",
+        )
+        result = format_measurement_summary(m)
+        assert "42" in result
+        assert "120" in result
+        assert "backend.md" in result
+
+    def test_omits_doc_size_when_zero(self) -> None:
+        m = MeasurementResult(
+            session_id="s",
+            cited_ratio=0.0,
+            must_ratio=0.0,
+            tier_distribution={"cited": 0, "corroborated": 0, "speculative": 0},
+            intent_kind_distribution={"rejection": 0, "incident": 0, "preference": 0},
+            foresight_scores=[],
+        )
+        result = format_measurement_summary(m)
+        assert "doc size" not in result
 
 
 class TestIntentKindFromSessionPrDecisions:
