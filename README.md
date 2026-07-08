@@ -14,6 +14,7 @@ Tags: ✅ validated with measurable data, ⚠️ partial / has known limits, ❓
 - ✅ **5-layer deterministic classification** — frontend / backend / db / devops / shared (path + extension + dep-file heuristics, no LLM guessing). Calibration regression caught and fixed (e117c4c).
 - ⚠️ **Evidence-based rules with 3-tier rationale grading** — every rule carries `rationale_tier`: `cited` (verbatim senior evidence), `corroborated` (2+ independent code signals), or `speculative` (LLM inference). **Only `cited` rules can be MUST** — corroborated/speculative are mechanically demoted to SHOULD at parse time. Evidence-chain ceiling: ~50% cited on senior OSS (starlette v12, 5 categories); ~0% on individual repos with terse commit messages. Quality-gap with no-evidence rules measured ~2x by external reviewer.
 - ❓ **Scope-tagged rules** — every rule is classified `cross_project`, `framework_internal`, or `domain_specific`. Lets a downstream tool auto-apply the safe ones and quarantine the rest. (Code present, end-to-end downstream usage not yet measured.)
+- ❓ **Target-repo apply** — `apply` subcommand translates a session into a target repo's `CLAUDE.md`: detects the target stack from `pyproject.toml`/`package.json`, keeps stack-relevant rules, and marks the rest reference-only (`--strict` excludes them). (Implemented; downstream effect not yet measured end-to-end.)
 - ✅ **Critic layer** — second LLM pass that drops duplicates, downgrades inflated MUST, tags scope. Plus mechanical safeguards: MUST ratio auto-lint (`write_output` stderr warn if >40%), and **R6 auto-downgrade** of speculative MUSTs (no verified citation → SHOULD).
 - ✅ **Foresight inference layer** — `ForesightCard` artifact (hypothesis + verified signals + falsification conditions + tier) rendered per session into `foresight.md`. Never MUST-eligible. Hypotheses are triangulated against 2+ independent repo signals. `core/negative_space.py` feeds deterministic signals (dep_count, stdlib-only hints, public_ratio, deprecation patterns, layer import violations).
 - ✅ **Two execution modes**:
@@ -45,7 +46,7 @@ Numbers from the 2026-06-11 measurement cycle on `encode/starlette` (skill mode)
 | intent_kind diversity — after PR/issue mining (2026-06-11) | **32 decisions: rejection 22, incident 10** (100 items scanned, starlette) — first non-zero rejection/incident signal in the project's measurement history | 0.3.0 starlette cycle |
 | Rule honesty grading (2026-06-11, starlette) | 14 rules: cited 7 / corroborated 5 / speculative 2; **MUST 5/14 (35.7%), all 5 cited** | 0.3.0 starlette cycle |
 | Foresight accuracy (2026-06-11, starlette) | 4 cards: **3/4 confirmed** (repo docs + rejection corpus); 1 unconfirmed (honest) | 0.3.0 starlette cycle |
-| Tests | **1136 passed** (1020 in 0.3.0) | current main |
+| Tests | **1154 passed** (1020 in 0.3.0) | current main |
 | Downstream A/B — rule injection, 3 rounds (2026-07-04) | **Rules rescued the weak model**: Haiku control fell into the buffering anti-pattern the seniors had rejected (PR#1745, full-body buffering measured 9/9 chunks); treatment streamed (1/9) and cited the commit. Frontier (Sonnet) reproduced senior structure with or without rules | first downstream A/B |
 | SATD supply→consumption (W2, 2026-07-05) | typer: 26 SATD supplied → 2 refs cited by 1 rule (`satd_citation_ratio` 7.7%, directional). **SATD sustained a cited MUST** on a squash-merge repo with only 2 decision commits | typer W2 cycle |
 
@@ -53,8 +54,8 @@ Numbers from the 2026-06-11 measurement cycle on `encode/starlette` (skill mode)
 
 Direction status (2026-06-11):
 - **G (more categories)** — verified: +5%p evidence per added category, ceiling now 50% on starlette. Diminishing returns past 5 categories; commit-pool richness, not category count, is the real lever.
-- **R7 (commit-corpus-first rule derivation)** — phase 1 complete (`backend/docs/r7_pipeline_reversal.md`). Hypothesis viable on multi-commit clusters (CORS preflight: 3 commits → 1 cluster) but **only 21% of starlette clusters are multi-commit** — single-commit clusters get no advantage over forward pipeline. Phase 2-4 (LLM derivation + verify + external eval) still ungated; will likely become a hybrid forward+inversion mode.
-- **D (dogfooding)** — the ceiling-vs-good-enough question. Started on HarnessAI 2026-05-06 (1-week horizon); resolution comes from "did the agent code measurably better with `.code-hijack/CLAUDE.md` than without".
+- **R7 (commit-corpus-first rule derivation)** — phase 1 complete (`backend/docs/r7_pipeline_reversal.md`). Hypothesis viable on multi-commit clusters (CORS preflight: 3 commits → 1 cluster) but **only 21% of starlette clusters are multi-commit** — single-commit clusters get no advantage over forward pipeline. **Phase 2 shelved (2026-07-03)**: a follow-up probe on the PR axis (`cluster_pr_decisions`) found only 4% multi-item clusters — inversion leverage unsupported on both axes, and the forward pipeline already consumes the PR-sourced rejection/incident value. Revisit only if a repo class with dense multi-commit clusters shows up.
+- **D (dogfooding)** — settled 2026-07-06. Compliance dogfooding produced no signal (agents complied ~100% without ever consulting the rules), but re-extraction caught a real convention drift (`class TestXxx` 55%→7%), so the loop pivoted to drift monitoring: re-extract + diff + LLM interpretation of the contradictions.
 
 ## Positioning (measured, 2026-07)
 
@@ -74,8 +75,9 @@ Context against the 2026 literature:
 
 - LLM-**generated** design rationale reaches precision ~0.27 with 1.6–3.2% actively misleading claims ([arxiv 2504.20781](https://arxiv.org/abs/2504.20781)). This is why code-hijack never asks the LLM to author the WHY — it surfaces the senior's **verbatim** evidence (commits, rejected PRs, SATD comments) and mechanically demotes any MUST without a verified citation. The same discipline applies to our own headline metric: `cited` is reported split into **senior-quoted** vs **code-anchored** — a verbatim code observation is not a WHY the seniors wrote down, and we don't count it as one.
 - The nearest-neighbor approach, Probe-and-Refine ([arxiv 2606.20512](https://arxiv.org/abs/2606.20512)), tunes repo guidance from synthetic-probe *behavior* (+7.5pp SWE-bench) but carries no provenance — it can say *what* works, not *why the seniors chose it*. code-hijack now carries both: the recorded WHY (verbatim evidence) plus per-rule behavioral probe badges (`behavior-confirmed` — [examples/pluggy](examples/pluggy/) is the first badged sample, 3 probed / 2 discriminated).
-- Context files measurably cut agent **cost** at equal completion: −28.6% runtime, −16.6% output tokens ([arxiv 2601.20404](https://arxiv.org/abs/2601.20404)) — but that paper's tasks are repo-exploration shaped. Our own A/B reproduces the gain only in that same scope (−67% tool calls on exploration vs no gain on self-contained generation; see the two axes above).
-- The 2026 reassessment of that line of work ([2601.20404v2](https://arxiv.org/html/2601.20404v2) and the [ETH study coverage](https://www.infoq.com/news/2026/03/agents-context-file-value-review/)) found that **LLM-generated context files are on average redundant** — agents rediscover the same information from the repo, so auto-generated files cost ~20% more inference for a ~3% *lower* success rate; only content the agent **cannot discover independently** pays off. That criterion is exactly what code-hijack extracts: verbatim decision history (rejected PRs, incidents, SATD, commit rationale) lives outside the working tree, and agents do not mine git/PR archives mid-task. It also matches our own probe data — rules restating discoverable patterns are behaviorally redundant; the rules that changed behavior encode non-discoverable incident/rejection knowledge (the "shortcut gap"). Commit-rationale extraction is an active research axis (cf. [CoMRAT, arxiv 2506.10986](https://arxiv.org/pdf/2506.10986)).
+- Context files measurably cut agent **cost** at equal completion: −28.6% runtime, −16.6% output tokens ([arxiv 2601.20404](https://arxiv.org/abs/2601.20404)) — but that paper's tasks are repo-exploration shaped. Our own A/B reproduces the gain only in that same scope (−67% tool calls on exploration vs no gain on self-contained generation; see the two axes above). Independent replications are appearing: distilling conventions from commit history cut tool calls 21% ([Learning to Commit, arxiv 2603.26664](https://arxiv.org/abs/2603.26664)), and Meta's pre-computed context files cut tool calls/tokens ~40% on six pipeline tasks ([preliminary](https://engineering.fb.com/2026/04/06/developer-tools/how-meta-used-ai-to-map-tribal-knowledge-in-large-scale-data-pipelines/)) — both exploration-shaped, consistent with our −67% (N=1) direction.
+- The 2026 reassessment of that line of work ([2601.20404v2](https://arxiv.org/html/2601.20404v2) and the ETH study, [arxiv 2602.11988](https://arxiv.org/abs/2602.11988) / [coverage](https://www.infoq.com/news/2026/03/agents-context-file-value-review/)) found that **LLM-generated context files are on average redundant** — agents rediscover the same information from the repo, so auto-generated files cost ~20% more inference for a ~3% *lower* success rate; only content the agent **cannot discover independently** pays off. That criterion is exactly what code-hijack extracts: verbatim decision history (rejected PRs, incidents, SATD, commit rationale) lives outside the working tree, and agents do not mine git/PR archives mid-task. It also matches our own probe data — rules restating discoverable patterns are behaviorally redundant; the rules that changed behavior encode non-discoverable incident/rejection knowledge (the "shortcut gap"). Commit-rationale extraction is an active research axis (cf. [CoMRAT, arxiv 2506.10986](https://arxiv.org/pdf/2506.10986)).
+- Deterministic-only mining is not enough either: CommitDistill ([arxiv 2605.18284](https://arxiv.org/abs/2605.18284)) extracts typed knowledge units from commit messages via regex + TF-IDF, and its paired LLM-judge evaluation found **no detectable lift over a bare prompt** (all CIs include zero) — worse, retrieved context *lowered* scores on already-easy tasks. Both halves corroborate this design: code-hijack pairs deterministic mining with LLM interpretation rather than shipping raw pattern hits, and every behavioral gain we measured sits on boundary/misuse paths — exactly where context isn't redundant.
 
 ## Example outputs
 
@@ -128,6 +130,9 @@ code-hijack diff old_session/ new_session/
 
 # Score a session: cited_ratio, must_ratio, tier/intent distributions → measurement.json
 code-hijack measure ./docs/hijacked/2026-04-10_my-repo/session.json
+
+# Translate a session's rules into a target repo's CLAUDE.md (stack-aware)
+code-hijack apply ./docs/hijacked/2026-04-10_my-repo/session.json ./my-app
 ```
 
 ### Skill mode (inside Claude Code)
@@ -158,6 +163,8 @@ Environment variables:
 
 The MUST-ratio calibration runs automatically on `write_output` and prints a `[WARN]` line to stderr when overall MUST > 40% or any category > 50%. Sample sizes below 5 rules total or 3 per category are skipped to avoid noise.
 
+A doc-size lint runs alongside it: per the ETH context-file study (arxiv 2602.11988), a `[WARN]` prints to stderr when `integrated/CLAUDE.md` exceeds 60 lines or any written layer file exceeds 300 lines.
+
 ## Output structure
 
 ```
@@ -172,7 +179,7 @@ The MUST-ratio calibration runs automatically on `write_output` and prints a `[W
 │   └── session.json            # structured data, reused for diff / harness-export / measure
 ├── integrated/                 # agent-ready combined view
 │   ├── CLAUDE.md               # entry point + layer guide + top MUST rules
-│   ├── backend.md              # backend-layer rules across all categories
+│   ├── backend.md              # backend-layer rules across all categories (layers with 0 rules are not written)
 │   ├── frontend.md
 │   ├── database.md
 │   ├── devops.md
@@ -266,7 +273,7 @@ backend/
       generator.py                     # rendering + MUST calibration lint
       harness_export.py                # HarnessAI conventions/guidelines/lesson-candidate adapter
       archaeology.py                   # git history mining (file ages, reverts, commit bodies)
-      apply.py                         # render integrated CLAUDE.md
+      apply.py                         # senior session → target-repo CLAUDE.md translator
       docs.py                          # repo-level doc ingestion (README/ARCHITECTURE/ADRs)
       evidence.py                      # evidence chain rendering + metrics
       exemplars.py                     # G1: senior code sample catalog
@@ -314,7 +321,7 @@ Remaining gap: **incident-kind evidence** (the most valuable for hallucination p
 - ✅ **Phase 4b (validation hardening, 2026-05-05)** — Layer detection false-positive guards, file selector docs_src demote + truncate-aware ranking, cargo-cult guard in rule extraction, MUST calibration auto-lint, persistent fetch cache.
 - ✅ **Phase 4c (skill-mode parity + calibration, 2026-05-06)** — A2.1 commit_decisions injection (skill-mode evidence chains now match CLI mode), R6 auto-downgrade of speculative MUSTs, E1 body-excerpt 800 chars, D pattern set 6→18, G7 cited-MUST self-check guidance, G8 feature-doc noise filter, G9 top-level dotted-py demote.
 - ✅ **Phase 3 foresight + Phase 4 evidence expansion (0.3.0, 2026-06-11)** — 3-tier rationale grading (cited/corroborated/speculative), cited-only MUST enforced at parse time, ForesightCard + foresight.md, `core/negative_space.py` deterministic signals, `repo_nature` detection (library/app/app-cli), PR/issue mining via gh CLI (`core/pr_archaeology.py`: first non-zero rejection/incident signals), measurement loop (`core/measure.py` + `code-hijack measure` subcommand, measurement.json). 1020 tests.
-- **Phase 5a (planned)** — R7 phase 2-4 (commit-corpus-first rule derivation, hybrid forward+inversion mode).
+- ⏸️ **Phase 5a (shelved, 2026-07-03)** — R7 phase 2-4 (commit-corpus-first rule derivation). PR-decision probe found no multi-item leverage on either axis (commit 21% / PR 4% multi-item clusters); revisit only on a repo class with dense multi-commit clusters.
 - **Phase 5b (planned)** — ORM-aware layer detection, additional language support (Go/Rust), incident-kind cross-repo reference mining with improved precision (dependabot noise filter).
 
 ## Development

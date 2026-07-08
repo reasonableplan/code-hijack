@@ -6,7 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioning via
 
 Until 1.0.0, the surface contract is the **rule schema** (`AnalysisRule` /
 `CategoryResult` / `SessionResult` JSON shape) and the **CLI** (`code-hijack
-analyze` / `diff` / `harness-export`). Adding a field to the schema or a flag
+analyze` / `diff` / `measure` / `harness-export` / `apply`). Adding a field to the schema or a flag
 to a subcommand is a minor bump; breaking either is a major bump.
 
 ## [Unreleased]
@@ -18,8 +18,18 @@ to a subcommand is a minor bump; breaking either is a major bump.
   rejection/incident PRs and SATD comments with the same fidelity as skill
   mode (previously the pools were mined and validated but never shown to the
   CLI-mode LLM).
+- **Doc-size metrics + lint**: `measurement.json` gains `doc_entry_lines`,
+  `doc_max_layer_lines`, `doc_max_layer_file` (populated via `calc_session_metrics(...,
+  integrated_dir=...)`, wired through `code-hijack measure`'s `<session_dir>/../integrated`
+  lookup), and `write_output` prints a `[WARN] doc size` block to stderr when
+  `integrated/CLAUDE.md` exceeds 60 lines or any written layer file exceeds
+  300 lines — thresholds from the ETH context-file study (arxiv 2602.11988).
 
 ### Changed
+- Rule-0 layer `.md` files are no longer written under `integrated/`, and the
+  `CLAUDE.md` Layer Guide lists only layers with ≥1 rule (falls back to a
+  single "No rules in this session." line when every layer is empty) —
+  removes the 9-line "Total rules: 0" noise files.
 - All user-facing output is now English: generated artifact templates
   (generator.py), CLI help/progress/errors (cli.py), prompt few-shot content
   (prompts.py, including a new OUTPUT LANGUAGE requirement), and the published
@@ -27,6 +37,15 @@ to a subcommand is a minor bump; breaking either is a major bump.
   SKILL.md.
 - `--dry-run` cost estimate now uses separate input/output token rates
   ($3/$15 per MTok for claude-sonnet-5) instead of a flat $3/MTok.
+- Docs: the `apply` subcommand is now documented (README features/usage/tree,
+  CLAUDE.md interface list, CLI contract line above); R7 and dogfooding
+  direction status synced to their July 2026 verdicts (R7 Phase 2 shelved
+  after the PR-axis probe; dogfooding pivoted to drift monitoring).
+- Docs: positioning literature updated — direct link to the ETH context-file
+  study (arxiv 2602.11988), CommitDistill's deterministic-only null result
+  (arxiv 2605.18284) as hybrid-design corroboration, and Learning to
+  Commit / Meta tool-call reductions as independent replications of the
+  exploration-efficiency axis.
 
 ### Removed
 - **Breaking (CLI)**: `--llm-mode local` and `--comms-dir` options plus
